@@ -1,0 +1,916 @@
+if getgenv().Shrapnel then
+    return
+end
+getgenv().Shrapnel = true
+
+-- SERVICES
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+Mouse = LocalPlayer:GetMouse()
+
+-- this is mostly pointless except for maybe waiting for us to spawn in lol
+repeat task.wait()
+until game:IsLoaded() and LocalPlayer.Character
+
+-- VARIABLES
+FLINGING = false
+playeresp = nil
+oldPlayer = nil
+REMOTEHOOK = false
+PREDICTIONMETHOD = 1 -- 1 = V1 / 2 = ORBIT / 3 = HOVER -- hi guys ignore this system i wasnt awake properly when writing it
+FLYING = false
+QEfly = true
+iyflyspeed = 1.4
+HeartbeatCon = nil
+RenderSteppedCon = nil
+mousebutton1clickCon = nil
+flyKeyDown = nil
+flyKeyUp = nil
+LocalPlrDied = nil
+FlyPart = nil
+highlight = nil
+targetHighlightColor = Color3.fromRGB(255,255,255)
+originalHRPCframe = nil
+ANTIFALL = nil
+ClickFling = true
+flingBusy = false
+flingallBusy = false
+foundPlayer = ""
+ClockTimeEnabled = false
+NoFogEnabled = false
+WalkSpeedEnabled = false
+WalkSpeedValue = 16
+ClockTimeValue = 12
+VelocityMode = true
+PredMax = 8
+PredIncrease = 0.08
+PredWait = 0.08
+
+getgenv().limbs = { -- LIMB OFFSETS FOR OUR getgenv().limbs FROM THE FLY PART
+    ["Head"] = Vector3.new(0,40000,0),
+    ["Left Arm"] = Vector3.new(0.5,0,0.5),
+    ["Right Arm"] = Vector3.new(-0.5,0,-0.5),
+    ["Left Leg"] = Vector3.new(0.5,0,-0.5),
+    ["Right Leg"] = Vector3.new(-0.5,0,0.5)
+} -- LOOKS REALY DIRTY BUT IT WORKS SO WHO CARES LOL
+
+-- anticheat bypass
+for Index, Data in next, getgc(true) do
+    if typeof(Data) == "table" and typeof(rawget(Data, "CX1")) == "function" then
+        Data.CX1 = function() end
+
+		continue
+    end
+
+    if typeof(Data) == "table" and rawget(Data, "Detected") and typeof(rawget(Data, "Detected")) == "function" then    
+		hookfunction(Data["Detected"], function(Action, Info, NoCrash)
+            if rawequal(Action, "_") then return true end
+            if rawequal(Info, "_") then return true end
+
+            return task.wait(9e9)
+        end)
+
+		continue
+    end
+end
+
+getgenv().ACBYPASS = true
+
+if not getgenv().ACBYPASS then
+    LocalPlayer:Kick("Anti-Cheat bypass failed to load")
+end -- js extra security ig
+
+-- LOAD UI LIB
+getgenv().SecureMode = true
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- OUR METAMETHOD HOOKS !!
+if not getgenv().NameCallHook then
+    local Namecall; Namecall                                        = hookmetamethod(game, "__namecall", function(Self, ...)
+        local Arguments                                             = {...}
+        local Name                                                  = tostring(Self)
+        local Method                                                = getnamecallmethod()
+
+        if Method == "FireServer" and not checkcaller() and REMOTEHOOK then
+            if Name == "TK_DGM" and Arguments[2] == "Drown" then return end
+            if Name == "__DFfDD" and Arguments[1] == "G_Gh" then return end
+            if Name == "__DFfDD" and Arguments[1] == "BHHh" then return end
+            if Name == "__DFfDD" and Arguments[1] == "FlllD" or Arguments[1] == "FllH" then return end
+            if Name == "PV87128" then return wait(9e9) end
+            if Arguments[1] == "SSsH" then return end
+        end
+
+        return Namecall(Self, unpack(Arguments))
+    end)
+    getgenv().NameCallHook = true
+end
+
+if not getgenv().NewIndex then
+    local NewIndex; NewIndex                                        = hookmetamethod(game, "__newindex", function(Self, Index, Value)
+        local Name                                                  = tostring(Self)
+        local Method                                                = tostring(Index)
+        local Result                                                = tostring(Value)
+
+        if (Name == "Lighting") and (Method == "ClockTime") and (Self == Lighting) and (ClockTimeEnabled) then
+            return NewIndex(Self, Index, ClockTimeValue)
+        end
+
+        if (Name == "Atmosphere") and (Method == "Density") and (Self == Lighting:FindFirstChildOfClass("Atmosphere")) and (NoFogEnabled) then
+            return NewIndex(Self, Index, 0)
+        end
+
+        if (Name == "Humanoid") and (Method == "WalkSpeed") and (Self == LocalPlayer.Character.Humanoid) and (WalkSpeedEnabled) then
+            return NewIndex(Self, Index, WalkSpeedValue)
+        end
+
+        return NewIndex(Self, Index, Value)
+    end)
+    getgenv().NewIndex = true
+end
+
+-- FUNCTIONS AND MISC
+
+function GetRoot(char) -- I wonder what this does!
+	local rootPart = char:FindFirstChild('HumanoidRootPart') or char:FindFirstChild('Torso') or char:FindFirstChild('UpperTorso')
+	return rootPart
+end
+
+-- CARPET ANIMATION TO HELP HIDE OUR TORSO UNDER THE GROUND ~ NO ONE CAN FIND U :3
+local Anim = Instance.new("Animation", workspace.CurrentCamera)
+Anim.AnimationId = "rbxassetid://282574440"
+local LoadedAnimation = LocalPlayer.Character.Humanoid:LoadAnimation(Anim)
+
+LocalPlayer.CharacterAdded:Connect(function(character)
+    if Anim then
+        Anim:Destroy()
+    end
+    Anim = Instance.new("Animation", workspace.CurrentCamera)
+    Anim.AnimationId = "rbxassetid://282574440"
+    LoadedAnimation = LocalPlayer.Character:WaitForChild("Humanoid", 9e9):LoadAnimation(Anim)
+end)
+
+function SecureGet(Link, Custom)
+    local Success, Result               = pcall(request, Custom or {
+        Url                             = Link,
+        Method                          = "GET"
+    })
+
+    if not Success then writefile("Freakinality/Logs/Freakinality-[" .. os.time() .. "]-.log", Result) return game:Shutdown() end
+    if not typeof(Result) == "table" then writefile("Freakinality/Logs/Freakinality-[" .. os.time() .. "]-.log", Result) return game:Shutdown() end
+    
+    return Result.Body
+end
+
+function Download(Path, Link)
+    local Path = string.format("Freakinality/%s", Path)
+    local Directorys = {}
+
+    Path:gsub("([^/]+)", function(Directory)
+        table.insert(Directorys, Directory)
+    end)
+
+    table.remove(Directorys, #Directorys)
+    
+    for _, Directory in next, Directorys do
+        local Directory = table.concat(Directorys, "/", 1, _)
+
+        if isfolder(Directory) then continue end
+
+        makefolder(Directory)
+    end
+
+    if (not isfile(Path)) then
+        writefile(Path, SecureGet(Link))
+    end
+
+    return true
+end
+
+function Notification(Content : string, Duration)
+    Rayfield:Notify({
+        Title = "Shrapnel",
+        Content = Content,
+        Duration = Duration or 6.5,
+        Image = 4483362458,
+    })
+
+    rconsoleprint(string.format("SHRAPNEL['%s']", Content))
+end
+
+function HideCharacter(char, toggled) -- HIDES OUR CHARACTER UNDER THE GROUND
+	local Hrp = GetRoot(char)
+	local Humanoid = char.Humanoid
+
+	if toggled then
+		Hrp.CFrame = Hrp.CFrame * CFrame.new(0, -1.5, 0)
+		Humanoid.HipHeight = -1.975
+
+        -- for i,v in pairs(char:GetChildren()) do
+        --     if getgenv().limbs[v.Name] then
+        --         v.Transparency = 1
+        --     end
+        -- end
+	
+		LoadedAnimation:Play(0.01, 1, 0.01)
+	else
+        -- for i,v in pairs(char:GetChildren()) do
+        --     if getgenv().limbs[v.Name] then
+        --         v.Transparency = 0
+        --     end
+        -- end
+
+		Humanoid.HipHeight = 0
+		LoadedAnimation:Stop()
+
+        wait(0.5) -- idk crim handles fall damage weird and i cba to do this shit another way lol
+        if not FLINGING then
+            REMOTEHOOK = false
+        end
+	end
+end
+
+function DisableFling() -- DISABLES FLING???
+    if not FLINGING then return end
+    flingBusy = false
+    FLYING = false
+    workspace.CurrentCamera.CameraSubject = LocalPlayer.Character.Humanoid
+    FlyPart:Destroy()
+    HeartbeatCon:Disconnect()
+    RenderSteppedCon:Disconnect()
+	flyKeyDown:Disconnect()
+	flyKeyUp:Disconnect()
+
+	for i,v in pairs(LocalPlayer.Character:GetChildren()) do
+        if v:IsA("BasePart") then
+			v.Velocity = Vector3.new(0, 0, 0)
+		end
+    end
+
+	HideCharacter(LocalPlayer.Character, false)
+
+    local timer = tick()
+    local con;
+    con = RunService.Heartbeat:Connect(function(deltaTime)
+        if tick() - timer > 0.8 then con:Disconnect() end
+        GetRoot(LocalPlayer.Character).CFrame = originalHRPCframe
+    end)
+
+    local sc = (debug and debug.setconstant) or setconstant
+    local gc = (debug and debug.getconstants) or getconstants
+    local pop = LocalPlayer.PlayerScripts.PlayerModule.CameraModule.ZoomController.Popper
+    for _, v in pairs(getgc()) do
+        if type(v) == 'function' and getfenv(v).script == pop then
+            for i, v1 in pairs(gc(v)) do
+                if tonumber(v1) == 0 then
+                    sc(v, i, .25)
+                end
+            end
+        end
+    end
+
+    FLINGING = false
+end
+
+function Highlight(Target) -- CREATES A HIGHLIGHT FOR OUR FLY PART
+    FlyHighlight = Instance.new("Highlight")
+    -- FlyHighlight.FillColor = Color3.fromRGB(Rayfield.Flags.ColorPicker1.R,Rayfield.Flags.ColorPicker1.G,Rayfield.Flags.ColorPicker1.B)
+    FlyHighlight.OutlineColor = Color3.new(1, 1, 1)
+    FlyHighlight.FillTransparency = 1
+    FlyHighlight.OutlineTransparency = 0
+    FlyHighlight.DepthMode = Enum.HighlightDepthMode.Occluded
+    FlyHighlight.Parent = Target
+    highlight = FlyHighlight
+end
+
+function EspTarget(Target : Player) -- aaaa
+    if not Target.Character then return end
+
+    if (Target.Name ~= oldPlayer and not Target.Character:FindFirstChild("Highlight")) and (oldPlayer ~= nil) then
+        playeresp:Destroy()
+    elseif Target.Character:FindFirstChild("Highlight") then
+        return
+    end
+
+    local Highlight = Instance.new("Highlight")
+    Highlight.FillColor = Color3.new(1,1,1)
+    Highlight.OutlineColor = Color3.new(1,0,0)
+    Highlight.FillTransparency = 0.9
+    Highlight.OutlineTransparency = 0.3
+    Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    Highlight.Parent = Target.Character
+    playeresp = Highlight
+
+    return Highlight
+end
+
+function CreateFlyPart() -- CREATES OUR FLY PART
+    local FlyPart = Instance.new("Part", LocalPlayer.Character)
+    FlyPart.Position = GetRoot(LocalPlayer.Character).Position
+    FlyPart.Size = Vector3.new(2,2,2)
+    FlyPart.Transparency = 1
+    FlyPart.CanCollide = false
+    FlyPart.CanTouch = false
+    FlyPart.TopSurface = Enum.SurfaceType.Smooth
+    FlyPart.RightSurface = Enum.SurfaceType.Smooth
+    FlyPart.LeftSurface = Enum.SurfaceType.Smooth
+    FlyPart.BottomSurface = Enum.SurfaceType.Smooth
+    FlyPart.FrontSurface = Enum.SurfaceType.Smooth
+    FlyPart.BackSurface = Enum.SurfaceType.Smooth
+
+    return FlyPart
+end
+
+function SmoothOscillation(Minimum, Maximum, Speed)
+    local Time = tick()
+    local Speed = Speed
+    local Range = Maximum - Minimum
+    local Oscillation = (math.sin((Time * math.pi / Speed) + 0) + 1) / 2
+
+    return Minimum + Oscillation * Range
+end
+
+-- THE MAIN JUICY PART ~ SOURCE INITIALLY BASED OFF OF INFINITE YIELD FLY AND MODIFIED TO FIT OUR NEEDS
+function EnableFling()
+    if FLINGING and not LocalPlayer.Character then return end
+	repeat wait() until LocalPlayer and LocalPlayer.Character and GetRoot(LocalPlayer.Character) and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+	if flyKeyDown or flyKeyUp then flyKeyDown:Disconnect() flyKeyUp:Disconnect() end
+
+    local sc = (debug and debug.setconstant) or setconstant
+    local gc = (debug and debug.getconstants) or getconstants
+    local pop = LocalPlayer.PlayerScripts.PlayerModule.CameraModule.ZoomController.Popper
+    for _, v in pairs(getgc()) do
+        if type(v) == 'function' and getfenv(v).script == pop then
+            for i, v1 in pairs(gc(v)) do
+                if tonumber(v1) == .25 then
+                    sc(v, i, 0)
+                end
+            end
+        end
+    end
+
+    originalHRPCframe = GetRoot(LocalPlayer.Character).CFrame
+    FlyPart = CreateFlyPart()
+    Highlight(FlyPart)
+	
+    workspace.CurrentCamera.CameraSubject = FlyPart
+	local CONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
+	local lCONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
+	local SPEED = 0
+
+    LocalPlrDied = LocalPlayer.Character.Humanoid.Died:Connect(function()
+        DisableFling()
+        LocalPlrDied:Disconnect()
+    end) -- DISABLES FLING WHEN WE DIE ~ DOESNT TRIGGER IF WE GET VOIDED IN RARE INSTANCES
+
+	local function FLY()
+		FLYING = true
+        local BG = Instance.new('BodyGyro')
+		local BodyVelocity = Instance.new('BodyVelocity')
+        local oldniggafart = FlyPart.CFrame
+        BG.P = 8000
+		BG.Parent = FlyPart
+		BG.maxTorque = Vector3.new(1300, 1300, 1300)
+		BG.cframe = FlyPart.CFrame
+		BodyVelocity.Parent = FlyPart
+		BodyVelocity.velocity = Vector3.new(0, 0, 0)
+		BodyVelocity.P = 1250 -- what even is a P
+		BodyVelocity.maxForce = Vector3.new(9e9, 9e9, 9e9)
+
+        HeartbeatCon = RunService.Heartbeat:Connect(function(deltaTime) -- HANDLES THE CONTROLS OF OUR getgenv().limbs
+            for i,v in pairs(LocalPlayer.Character:GetChildren()) do
+                if getgenv().limbs[v.Name] then
+                    v.CFrame = FlyPart.CFrame:ToWorldSpace(CFrame.new(getgenv().limbs[v.Name]))
+                    v.CanCollide = false
+                end
+            end
+            
+            GetRoot(LocalPlayer.Character).CFrame = originalHRPCframe
+			HideCharacter(LocalPlayer.Character, true)
+            ReplicatedStorage.Events.__DFfDD:FireServer("-r__r2")
+        end)
+
+        RenderSteppedCon = RunService.RenderStepped:Connect(function(deltaTime) -- HANDLES THE VELOCITY OF OUR getgenv().limbs / render stepped cos idk this shit works more consistant
+            for i,v in pairs(LocalPlayer.Character:GetChildren()) do
+                if getgenv().limbs[v.Name] then
+                    if VelocityMode then
+                        v.Velocity = Vector3.new(math.random(-50000, 50000), 100000, math.random(-50000, 50000))
+                    else
+                        v.Velocity = Vector3.new(0, 5000000, 0)
+                    end
+                end
+            end
+        end)
+
+		task.spawn(function()
+			repeat wait()
+				if CONTROL.L + CONTROL.R ~= 0 or CONTROL.F + CONTROL.B ~= 0 or CONTROL.Q + CONTROL.E ~= 0 then
+					SPEED = 50
+				elseif not (CONTROL.L + CONTROL.R ~= 0 or CONTROL.F + CONTROL.B ~= 0 or CONTROL.Q + CONTROL.E ~= 0) and SPEED ~= 0 then
+					SPEED = 0
+				end
+				if (CONTROL.L + CONTROL.R) ~= 0 or (CONTROL.F + CONTROL.B) ~= 0 or (CONTROL.Q + CONTROL.E) ~= 0 then
+					BodyVelocity.velocity = ((workspace.CurrentCamera.CoordinateFrame.lookVector * (CONTROL.F + CONTROL.B)) + ((workspace.CurrentCamera.CoordinateFrame * CFrame.new(CONTROL.L + CONTROL.R, (CONTROL.F + CONTROL.B + CONTROL.Q + CONTROL.E) * 0.2, 0).p) - workspace.CurrentCamera.CoordinateFrame.p)) * SPEED
+					lCONTROL = {F = CONTROL.F, B = CONTROL.B, L = CONTROL.L, R = CONTROL.R}
+				elseif (CONTROL.L + CONTROL.R) == 0 and (CONTROL.F + CONTROL.B) == 0 and (CONTROL.Q + CONTROL.E) == 0 and SPEED ~= 0 then
+					BodyVelocity.velocity = ((workspace.CurrentCamera.CoordinateFrame.lookVector * (lCONTROL.F + lCONTROL.B)) + ((workspace.CurrentCamera.CoordinateFrame * CFrame.new(lCONTROL.L + lCONTROL.R, (lCONTROL.F + lCONTROL.B + CONTROL.Q + CONTROL.E) * 0.2, 0).p) - workspace.CurrentCamera.CoordinateFrame.p)) * SPEED
+				else
+					BodyVelocity.velocity = Vector3.new(0, 0, 0)
+				end
+                if not flingBusy then
+                    BG.cframe = workspace.CurrentCamera.CoordinateFrame
+                else
+                    BG.cframe = oldniggafart
+                end
+			until not FLYING
+			CONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
+			lCONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
+			SPEED = 0
+			BodyVelocity:Destroy()
+		end)
+	end
+	flyKeyDown = Mouse.KeyDown:Connect(function(KEY)
+        if flingBusy then return end
+		if KEY:lower() == 'w' then
+			CONTROL.F = (iyflyspeed)
+		elseif KEY:lower() == 's' then
+			CONTROL.B = - (iyflyspeed)
+		elseif KEY:lower() == 'a' then
+			CONTROL.L = - (iyflyspeed)
+		elseif KEY:lower() == 'd' then 
+			CONTROL.R = (iyflyspeed)
+		elseif QEfly and KEY:lower() == 'e' then
+			CONTROL.Q = (iyflyspeed)*2
+		elseif QEfly and KEY:lower() == 'q' then
+			CONTROL.E = -(iyflyspeed)*2
+		end
+		pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Track end)
+	end)
+	flyKeyUp = Mouse.KeyUp:Connect(function(KEY)
+		if KEY:lower() == 'w' then
+			CONTROL.F = 0
+		elseif KEY:lower() == 's' then
+			CONTROL.B = 0
+		elseif KEY:lower() == 'a' then
+			CONTROL.L = 0
+		elseif KEY:lower() == 'd' then
+			CONTROL.R = 0
+		elseif KEY:lower() == 'e' then
+			CONTROL.Q = 0
+		elseif KEY:lower() == 'q' then
+			CONTROL.E = 0
+		end
+	end)
+    FLINGING = true
+    REMOTEHOOK = true
+	FLY()
+end
+
+Pred4Val = 1
+function PredictionAlgorithm(Character : Model) -- i dont know what an algorithm is but it sounds cool
+    local Vector;
+
+    local HRP = Character.HumanoidRootPart
+
+    if PREDICTIONMETHOD == 1 then
+        Vector = HRP.Position + (Vector3.new(HRP.Velocity.X, 0, HRP.Velocity.Z) / SmoothOscillation(1, 8, 0.37)) --1.1, 6, 0.45
+    elseif PREDICTIONMETHOD == 2 then -- off dev forum and edited lol
+        local r = 8
+        local rps = math.pi
+
+        local angle = 0
+        angle = (angle + tick() * rps) % (2 * math.pi)
+        Vector = HRP.Position + Vector3.new(math.cos(angle) * r, 0, math.sin(angle) * r);
+    elseif PREDICTIONMETHOD == 3 then
+        Vector = HRP.Position + Vector3.new(0, 5, 0)
+    elseif PREDICTIONMETHOD == 4 then
+        if Pred4Val >= PredMax then
+            Pred4Val = 0
+        end
+        Pred4Val += PredIncrease
+        task.wait(PredWait)
+
+        Vector = HRP.Position + (Vector3.new(HRP.Velocity.X, HRP.Velocity.Y / 1.5, HRP.Velocity.Z) * Pred4Val)
+    end
+
+    return Vector
+end -- i wrote this shit fancy asf i cant lie // i really like yandere code
+
+function FlingTarget(Char, timeout)
+    if flingBusy then
+        return
+    end -- OH MY LORD THIS IS DISGUSTING...
+    
+    flingBusy = true
+    local timer = tick() 
+    local oldPosition
+    local Targetname = Char.Name
+    
+    if not Char then
+        Rayfield:Notify({
+            Title = "Shrapnel",
+            Content = "player doesnt exist retard",
+            Duration = 6.5,
+            Image = 4483362458,
+        })
+
+        flingBusy = false
+        return
+    end
+
+    local Hum = Char:FindFirstChildOfClass("Humanoid")
+    if Hum then
+        if Hum.Health == 0 then
+            Rayfield:Notify({
+                Title = "Shrapnel",
+                Content = "player is dead LOL",
+                Duration = 6.5,
+                Image = 4483362458,
+            })
+
+            flingBusy = false
+            return
+        end
+    else
+        flingBusy = false
+        return
+    end
+
+    oldPosition = FlyPart.Position
+
+    -- holy moly! im only doing this cos idk if these connections actually do get destroyed but better safe than sorry we might as well lose a single milisecond of time
+    local charrem; charrem = Players:GetPlayerFromCharacter(Char).CharacterRemoving:Connect(function()
+        flingBusy = false
+    end)
+
+    local chardel; chardel = Char.Destroying:Connect(function()
+        flingBusy = false
+    end)
+    
+    local humdied; humdied = Hum.Died:Connect(function()
+        flingBusy = false
+    end)
+
+    while flingBusy and FLINGING and Char do
+        task.wait()
+
+        if not Char:FindFirstChild("HumanoidRootPart") then break end
+
+        if timeout then
+            if tick() - timer > 20 then
+                flingBusy = false
+            end
+        end
+
+        workspace.CurrentCamera.CameraSubject = Char.Humanoid
+        FlyPart.Position = PredictionAlgorithm(Char)
+    end
+
+    workspace.CurrentCamera.CameraSubject = FlyPart
+
+    Rayfield:Notify({
+        Title = "Shrapnel",
+        Content = "Succesfully killed: "..Targetname,
+        Duration = 6.5,
+        Image = 4483362458,
+    })
+
+    FlyPart.Position = oldPosition
+    flingBusy = false
+    charrem:Disconnect()
+    chardel:Disconnect()
+    humdied:Disconnect()
+end
+
+mousebutton1clickCon = Mouse.Button1Down:Connect(function()
+    if Mouse.Target and (ClickFling and FLINGING) then
+        local Plr = Players:GetPlayerFromCharacter(Mouse.Target.Parent)
+
+        if Plr and Plr ~= LocalPlayer then
+            Rayfield:Notify({
+                Title = "Shrapnel",
+                Content = "Flinging user: "..Plr.name,
+                Duration = 6.5,
+                Image = 4483362458,
+             })
+             
+            FlingTarget(Plr.Character)
+        end
+    end
+end)
+
+-- USER INTERFACE
+
+local Window = Rayfield:CreateWindow({
+    Name = "Shrapnel",
+    LoadingTitle = "Shrapnel",
+    LoadingSubtitle = "by pveye and .notcheese2",
+    ConfigurationSaving = {
+       Enabled = true,
+       FolderName = "Shrapnel",
+       FileName = "AAAAAA"
+    },
+})
+
+local FlingTab = Window:CreateTab("Main", 4483362458)
+local VisualTab = Window:CreateTab("Visual", 4483362458)
+local MiscTab = Window:CreateTab("Misc", 4483362458)
+local CreditsTab = Window:CreateTab("Credits", 4483362458)
+
+local FlingToggle = FlingTab:CreateToggle({
+    Name = "Toggle Fling",
+    CurrentValue = false,
+    Flag = "FlingToggle",
+    Callback = function(value)
+        if value then
+            EnableFling()
+        else
+            DisableFling()
+        end
+    end
+})
+
+local Keybind = FlingTab:CreateKeybind({
+    Name = "Fling Keybind",
+    CurrentKeybind = "L",
+    HoldToInteract = false,
+    Flag = "FlingKeybind",
+    Callback = function(Keybind)
+        FlingToggle:Set(not FlingToggle.CurrentValue)
+    end,
+})
+
+local PlayerInput; PlayerInput = FlingTab:CreateInput({
+    Name = "Player",
+    PlaceholderText = "player",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(Text)
+        local PartialName = Text
+        local PlayersList = Players:GetPlayers()
+        for i = 1, #PlayersList do
+            local CurrentPlayer = PlayersList[i]
+            if string.lower(CurrentPlayer.Name):sub(1, #PartialName) == string.lower(PartialName) then
+                foundPlayer = CurrentPlayer.Name
+
+                -- esp people who we have on target js for QoL
+                EspTarget(Players:FindFirstChild(foundPlayer))
+                local con
+                con = Players:FindFirstChild(foundPlayer).CharacterAdded:Connect(function(char)
+                    if foundPlayer == char.Name then
+                        local NIGGAFUCKINGWORK = EspTarget(Players:FindFirstChild(foundPlayer))
+                        task.wait(1.5)
+                        NIGGAFUCKINGWORK.Adornee = char
+                    else
+                        con:Disconnect()
+                    end
+                end)
+
+                PlayerInput:Set(CurrentPlayer.Name)
+                oldPlayer = foundPlayer
+                break
+            end
+        end
+    end,
+})
+
+local FlingButton = FlingTab:CreateButton({
+    Name = "Fling Player",
+    Callback = function()
+        local player = Players:FindFirstChild(foundPlayer)
+        if player and FLINGING then
+            FlingTarget(player.Character)
+        end
+    end,
+ })
+
+local FlingAllButton = FlingTab:CreateButton({
+    Name = "Fling All",
+    Callback = function()
+        if flingallBusy or not FLINGING then return end
+        Rayfield:Notify({
+            Title = "Shrapnel",
+            Content = "TOTAL NIGGER DESTRUCTION!",
+            Duration = 6.5,
+            Image = 4483362458,
+        })
+
+        flingallBusy = true
+        local oldPos = FlyPart.Position
+        for i,v in pairs(Players:GetPlayers()) do
+            local PlrChar = v.Character
+            if not PlrChar then continue end
+            if PlrChar == LocalPlayer.Character then continue end
+            if not flingallBusy then break end
+
+            repeat
+                wait()
+            until flingBusy ~= true
+            
+            if PlrChar then
+                local FF = PlrChar:FindFirstChildOfClass("ForceField")
+                if not FF then
+                    if LocalPlayer:IsFriendsWith(v.UserId) then continue end
+
+                    FlingTarget(PlrChar, true)
+                end
+            end
+        end
+        flingallBusy = false
+        
+        FlyPart.Position = oldPos
+    end,
+})
+
+local CancelFlingButton = FlingTab:CreateButton({
+Name = "Cancel Fling",
+Callback = function()
+    flingBusy = false
+    flingallBusy = false
+    Rayfield:Notify({
+        Title = "Shrapnel",
+        Content = "Cancelled ongoing fling attempts",
+        Duration = 6.5,
+        Image = 4483362458,
+        })
+end,
+})
+
+local SpeedSlider = FlingTab:CreateSlider({
+    Name = "Fling Speed",
+    Range = {0, 4},
+    Increment = 0.05,
+    Suffix = "",
+    CurrentValue = 1.3,
+    Flag = "SpeedSlider", 
+    Callback = function(value)
+        iyflyspeed = value
+    end
+})
+
+local CloCkEnabled = VisualTab:CreateToggle({
+    Name = "Toggle Time",
+    CurrentValue = false,
+    Flag = "TimeToggle",
+    Callback = function(value)
+        ClockTimeEnabled = value
+    end
+})
+
+local ClockTime = VisualTab:CreateSlider({
+    Name = "Force Time",
+    Range = {0, 24},
+    Increment = 1,
+    Suffix = "H",
+    CurrentValue = 12,
+    Flag = "ForceTime",
+    Callback = function(Value)
+        ClockTimeValue = Value
+    end,
+})
+
+local NoFog = VisualTab:CreateToggle({
+    Name = "No Fog",
+    CurrentValue = false,
+    Flag = "NoFog",
+    Callback = function(value)
+        NoFogEnabled = value
+    end
+})
+
+local MaxZoom = VisualTab:CreateSlider({
+    Name = "Max Zoom",
+    Range = {10, 500},
+    Increment = 1,
+    Suffix = "",
+    CurrentValue = 10,
+    Flag = "maxZoom",
+    Callback = function(Value)
+        LocalPlayer.CameraMaxZoomDistance = Value
+    end,
+})
+
+MiscTab:CreateLabel("pls dm @pveye for help")
+
+local Prediction = MiscTab:CreateDropdown({
+    Name = "Prediction Method",
+    Options = {"V1", "Orbit", "Hover", "V2"},
+    CurrentOption = {"V2"},
+    MultipleOptions = false,
+    Flag = "PredMethod", -- A flag is the identifier for the configuration file, make sure every element has a different flag if you're using configuration saving to ensure no overlaps
+    Callback = function(Option)
+        local OptionUnpack = table.unpack(Option) -- why the fuck is this shit a table is rayfield retarded
+        PREDICTIONMETHOD = (OptionUnpack == "V1" and 1) or (OptionUnpack == "Orbit" and 2) or (OptionUnpack == "Hover" and 3) or (OptionUnpack == "V2" and 4)
+    end,
+})
+
+local ChatLogs = MiscTab:CreateToggle({
+    Name = "Chat Logs",
+    CurrentValue = false,
+    Flag = "ChatLogs",
+    Callback = function(value)
+        if value then
+            local ChatFrame = Players.LocalPlayer.PlayerGui.Chat.Frame
+            ChatFrame.ChatChannelParentFrame.Visible = true
+            ChatFrame.ChatBarParentFrame.Position = ChatFrame.ChatChannelParentFrame.Position + UDim2.new(UDim.new(), ChatFrame.ChatChannelParentFrame.Size.Y)
+        else
+            local ChatFrame = Players.LocalPlayer.PlayerGui.Chat.Frame
+            ChatFrame.ChatChannelParentFrame.Visible = false
+            ChatFrame.ChatBarParentFrame.Position = ChatFrame.ChatChannelParentFrame.Position + UDim2.new(0, 0, 0, 0)
+        end
+    end
+})
+
+local SpecButton = MiscTab:CreateButton({
+    Name = "Spectate Player",
+    Callback = function()
+        local player = Players:FindFirstChild(foundPlayer)
+        if player and not flingBusy then
+            workspace.CurrentCamera.CameraSubject = player.Character.Humanoid
+        end
+    end,
+})
+
+local UnspecButton = MiscTab:CreateButton({
+    Name = "Unspectate",
+    Callback = function()
+        if FLINGING then
+            workspace.CurrentCamera.CameraSubject = FlyPart
+        else
+            workspace.CurrentCamera.CameraSubject = LocalPlayer.Character.Humanoid
+        end
+    end,
+})
+
+local WalkSpeed = MiscTab:CreateToggle({
+    Name = "Walkspeed",
+    CurrentValue = false,
+    Flag = "Walkspeed",
+    Callback = function(value)
+        WalkSpeedEnabled = value
+    end
+})
+
+local WalkSpeedSlider = MiscTab:CreateSlider({
+    Name = "WalkSpeed",
+    Range = {1, 80},
+    Increment = 1,
+    Suffix = "",
+    CurrentValue = 16,
+    Flag = "walkspeedsplider",
+    Callback = function(Value)
+        WalkSpeedValue = Value
+    end,
+})
+
+local PredInc = MiscTab:CreateSlider({
+    Name = "PredInc",
+    Range = {0, 12},
+    Increment = 0.05,
+    Suffix = "",
+    CurrentValue = 0.08,
+    Flag = "PredInc",
+    Callback = function(Value)
+        PredIncrease = Value
+    end,
+})
+
+local PredMax = MiscTab:CreateSlider({
+    Name = "PredMax",
+    Range = {0, 12},
+    Increment = 0.1,
+    Suffix = "",
+    CurrentValue = 7,
+    Flag = "PredMax",
+    Callback = function(Value)
+        PredMax = Value
+    end,
+})
+
+local PredWait = MiscTab:CreateSlider({
+    Name = "PredWait",
+    Range = {0, 1},
+    Increment = 0.01,
+    Suffix = "",
+    CurrentValue = 0.08,
+    Flag = "PredWait",
+    Callback = function(Value)
+        PredWait = Value
+    end,
+})
+
+local OldVelocity = FlingTab:CreateToggle({
+    Name = "Old Velocity",
+    CurrentValue = true,
+    Flag = "OldVelocity",
+    Callback = function(value)
+        VelocityMode = value
+    end
+})
+
+CreditsTab:CreateLabel("CREDITS")
+CreditsTab:CreateLabel("pveye - Did everything and maybe pasted a thing or two off dev forum")
+CreditsTab:CreateLabel(".notcheese2 - Did some of the UI and changed a number")
