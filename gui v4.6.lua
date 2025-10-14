@@ -597,7 +597,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/VapeVoidware/VW-Add/m
         ]]
     },
     {
-        name = "fluxu z",
+        name = "自定义代码",
         desc = "请输入你自己的代码",
         code = [[
 print("请在此输入你的自定义代码")
