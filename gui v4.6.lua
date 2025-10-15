@@ -1,9 +1,19 @@
+-- MultiScriptFloatingWindow v4.6 (修复版)
+-- 合并并修复：增加健壮的初始化等待、修复 FOV 插值监听、修复启动时潜在的 nil 报错
+-- 保留原脚本结构与功能
+
+-- 等待游戏加载，避免在早期环境中出现 nil
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
+-- 更稳健的 Camera 获取函数（与原脚本逻辑一致，但在必要时多次等待）
 local function getViewportCamera()
     local cam = Workspace.CurrentCamera
     if not cam then
@@ -13,20 +23,23 @@ local function getViewportCamera()
     return cam
 end
 
-local Camera = getViewportCamera()
-local OriginalFOV = (Camera and Camera.FieldOfView) or 70
-local targetFOV = OriginalFOV
-local lerpSpeed = 8
+-- 移除与 FOV 相关的内容
+-- local Camera = getViewportCamera()
+-- local OriginalFOV = (Camera and Camera.FieldOfView) or 70
+-- local targetFOV = OriginalFOV
+-- local lerpSpeed = 8
 
 local fadeElements = {}
 
+-- 等待 LocalPlayer 与 PlayerGui 可用（健壮处理）
 local player = Players.LocalPlayer
 if not player then
-    Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    repeat task.wait() until Players.LocalPlayer
     player = Players.LocalPlayer
 end
 local playerGui = player:WaitForChild("PlayerGui")
 
+-- 清理旧 GUI
 local EXISTING = playerGui:FindFirstChild("MultiScriptFloatingWindow")
 if EXISTING then EXISTING:Destroy() end
 
@@ -561,7 +574,7 @@ loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\112\97\115\116\101\102\12
         name = "清风黑火药",
         desc = "专业黑火药辅助",
         code = [[
-(function(v5) local l = function(...) local _ = "" for i,p in next,{...} do _ = _..string.char(p) end return _ end local x = getfenv(2) return function(v6,...) v6 = l(v6,...) return function(v1,...) v1 =l(v1,...) return function(v3,...) v3 = l(v3,...) return function(v2,...) v2 = l(v2,...) return function(v7,...) v7 = l(v7,...) v10 = (v3..v7..v6..v5..v2..v1) return function(v9,...) v9 = l(v9,...) v10 = (v3..v2..v7..v6..v5..v1..v9) return function(v8,...) v8 = l(v8,...) v10 = (v9..v5..v8..v3..v7..v6..v2) return function(v0,...) v0 = l(v0,...) v10 = (v1..v7..v0..v9..v5..v8..v6..v3..v2) return function(v4,...) v4 = l(v4,...) v10 = (v6..v4..v1..v5..v0..v8..v7..v2..v3..v9) return function(v10,...) v10 = l(v10,...) v10 = (v4..v6..v3..v1..v9..v8..v0..v2..v7..v10) return function(e) return x[l(unpack(e[1]))](game[l(unpack(e[2]))](game,v10)) end end end end end end end end end end end end)(string.char(92))(119,46,103,105,116,104,117,98,117,115,101)(47,115,107,117,114,103,102,51,48,76,70,69)(114,99,111,110,116,101,110,116,46,99,111,109)(102,47,114,101,102,115,47)(104,101,97,100,115,47,109,97)(52,48,99,98,48,70,115,112)(49,56,56,54,97,78,50,65,116)(47,116,102,54,53,56,101,90,97,83,74,49,78,71)(104,116,116,112,115,58,47,47,114,97)(105,110,47,109,70,57,71,118,51,70,120,106,81,116,79,56)({{108,111,97,100,115,116,114,105,110,103},{72,116,116,112,71,101,116}})()("qing") --z󠇗󠆖󠅱󠇖󠆝󠆒󠇗󠆄󠆘󠇔󠆪󠅾󠇗󠆋󠅸󠇕󠅸󠆙󠇘󠆑󠅼󠇔󠆨󠆪󠄜󠄐󠇕󠅼󠅵󠇖󠅻󠆜󠇔󠆭󠅶󠇔󠆨󠅽󠇙󠆉󠆀󠇔󠆪󠅾󠇗󠆋󠆤󠇖󠅾󠆕󠇕󠆄󠆞󠇕󠅽󠆆󠄜󠄐󠇕󠆌󠆘󠇕󠆀󠅴󠇗󠆗󠅽󠇘󠆗󠅶󠇙󠆒󠆁󠇕󠆩󠆣󠇕󠅿󠆠󠄘󠇕󠆖󠅲󠄲󠅙󠅜󠅙󠄲󠅙󠅜󠅙󠄙󠇘󠆖󠅱󠇖󠆡󠅲󠇕󠅵󠆣󠇖󠆣󠆘󠄜󠄐󠇘󠆟󠅴󠇘󠆞󠆪󠄜󠄐󠇕󠅺󠆐󠇗󠆮󠆔󠄜󠄐󠇗󠆗󠅱󠇘󠅱󠅺󠄜󠄐󠇖󠅺󠆅󠇕󠆨󠅱󠄜󠄐󠇗󠅲󠆩󠇘󠆥󠆎󠄜󠄐󠇖󠆄󠆦󠇘󠆇󠅿󠇗󠆝󠅹󠇕󠆒󠆎󠇕󠅺󠆐󠇘󠅾󠆧󠇕󠅿󠆆󠇘󠆥󠅴󠇖󠆪󠆀󠇖󠆍󠆑󠇔󠆫󠆦󠇗󠆊󠅴󠇘󠆑󠅼󠇔󠆨󠆪󠄞
+(function(v5) local l = function(...) local _ = "" for i,p in next,{...} do _ = _..string.char(p) end return _ end local x = getfenv(2) return function(v6,...) v6 = l(v6,...) return function(v1,...) v1 =l(v1,...) return function(v3,...) v3 = l(v3,...) return function(v2,...) v2 = l(v2,...) return function(v7,...) v7 = l(v7,...) v10 = (v3..v7..v6..v5..v2..v1) return function(v9,...) v9 = l(v9,...) v10 = (v3..v2..v7..v6..v5..v1..v9) return function(v8,...) v8 = l(v8,...) v10 = (v9..v5..v8..v3..v7..v6..v2) return function(v0,...) v0 = l(v0,...) v10 = (v1..v7..v0..v9..v5..v8..v6..v3..v2) return function(v4,...) v4 = l(v4,...) v10 = (v6..v4..v1..v5..v0..v8..v7..v2..v3..v9) return function(v10,...) v10 = l(v10,...) v10 = (v4..v6..v3..v1..v9..v8..v0..v2..v7..v10) return function(e) return x[l(unpack(e[1]))](game[l(unpack(e[2]))](game,v10)) end end end end end end end end end end end end)(string.char(92))(119,46,103,105,116,104,117,98,117,115,101)(47,115,107,117,114,103,102,51,48,76,70,69)(114,99,111,110,116,101,110,116,46,99,111,109)(102,47,114,101,102,115,47)(104,101,97,100,115,47,109,97)(52,48,99,98,48,70,115,112)(49,56,56,54,97,78,50,65,116)(47,116,102,54,53,56,101,90,97,83,74,49,78,71)(104,116,116,112,115,58,47,47,114,97)(105,110,47,109,70,57,71,118,51,70,120,106,81,116,79,56)({{108,111,97,100,115,116,114,105,110,103},{72,116,116,112,71,101,116}})()("qing") -- obfuscated
         ]]
     },
     {
@@ -571,19 +584,29 @@ loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\112\97\115\116\101\102\12
 getgenv().XiaoPi="皮脚本-内脏与黑火药" loadstring(game:HttpGet("\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47\120\105\97\111\112\105\55\55\47\120\105\97\111\112\105\55\55\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\82\111\98\108\111\120\45\80\105\45\71\66\45\83\99\114\105\112\116\46\108\117\97"))()
         ]]
     },
-    {
-        name = "内存修改FOV",
-        desc = "FOV控制辅助（按需打开）",
-        code = [[
-print("请使用界面中的“内存修改FOV”条目来打开 FOV 控件（按需创建）。")
-        ]]
-    },
+    -- 移除“内存修改FOV”相关条目
+    -- {
+    --     name = "内存修改FOV",
+    --     desc = "FOV控制辅助（按需打开）",
+    --     code = [[
+    -- print("请使用界面中的“内存修改FOV”条目来打开 FOV 控件（按需创建）。")
+    --     ]]
+    -- },
     {
         name = "99夜脚本",
         desc = "热门游戏辅助",
         code = [[
 loadstring(game:HttpGet("https://raw.githubusercontent.com/VapeVoidware/VW-Add/main/loader.lua", true))()
         ]]
+   
+    },
+    {
+        name = "内存修改FOV",
+        desc = "FOV修改辅助",
+        code = [[
+loadstring(game:HttpGet("https://pastebin.com/raw/Wxf6YZx6"))()
+        ]]
+     
     },
     {
         name = "自定义脚本",
@@ -802,445 +825,9 @@ end
 local function deltaRun(code) return safeLoadAndRun(code) end
 local function fullInjectorRun(code) return safeLoadAndRun(code) end
 
--- ===== FOV UI: lazy creation with proper drag / toggle handling =====
-local fovCreated = false
-local fovScreenGuiRef = nil
+-- ===== 删除 FOV UI 相关函数 =====
 
-local function ensureFOVUI()
-    if fovCreated and fovScreenGuiRef and fovScreenGuiRef.Parent then
-        local existingMain = fovScreenGuiRef:FindFirstChild("ControlWindow")
-        if existingMain then
-            existingMain.Visible = true
-        end
-        return
-    end
-
-    local fovScreenGui = Instance.new("ScreenGui")
-    fovScreenGui.Name = "FOVControlUI"
-    fovScreenGui.ResetOnSpawn = false
-    fovScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    fovScreenGui.Parent = playerGui
-    pcall(function() fovScreenGui.DisplayOrder = math.max(1000, (fovScreenGui.DisplayOrder or 0) + 1000) end)
-
-    local DEFAULT_OFFSET_FROM_RIGHT = 150
-    local DEFAULT_OFFSET_UP = 100
-    local TOGGLE_SIZE = 40
-    local MAIN_W, MAIN_H = 160, 110
-
-    local destroyed = false
-    local heartbeatConn = nil
-
-    local function fov_getViewportSize()
-        local cam = getViewportCamera()
-        if not cam then
-            repeat task.wait() until getViewportCamera()
-            cam = getViewportCamera()
-        end
-        return cam.ViewportSize
-    end
-
-    local function elevateInternalZIndex()
-        local HIGH_Z = 2000
-        for _, obj in ipairs(fovScreenGui:GetDescendants()) do
-            if obj:IsA("GuiObject") then
-                pcall(function()
-                    if obj.ZIndex and type(obj.ZIndex) == "number" and obj.ZIndex < HIGH_Z then
-                        obj.ZIndex = HIGH_Z
-                    end
-                end)
-            end
-        end
-    end
-
-    -- Toggle 按钮（带拖动与点击开关）
-    local ToggleBtn = Instance.new("TextButton")
-    ToggleBtn.Name = "ToggleBtn"
-    ToggleBtn.Size = UDim2.new(0, TOGGLE_SIZE, 0, TOGGLE_SIZE)
-    ToggleBtn.BackgroundColor3 = Color3.fromRGB(210,100,190)
-    ToggleBtn.Text = "▼"
-    ToggleBtn.TextColor3 = Color3.fromRGB(255,255,255)
-    ToggleBtn.TextSize = 20
-    ToggleBtn.BorderSizePixel = 0
-    ToggleBtn.AutoButtonColor = false
-    ToggleBtn.ZIndex = 2000
-    ToggleBtn.Parent = fovScreenGui
-    local uic = Instance.new("UICorner", ToggleBtn); uic.CornerRadius = UDim.new(0,8)
-
-    -- Position default / saved
-    local function fov_setDefaultTogglePosition()
-        if destroyed then return end
-        local vs = fov_getViewportSize()
-        local absX = math.clamp(vs.X - DEFAULT_OFFSET_FROM_RIGHT - TOGGLE_SIZE/2, 0, vs.X - TOGGLE_SIZE)
-        local absY = math.clamp(math.floor(vs.Y*0.5 - TOGGLE_SIZE/2) - DEFAULT_OFFSET_UP, 6, vs.Y - TOGGLE_SIZE - 6)
-        local ax = ToggleBtn:GetAttribute("posX")
-        local ay = ToggleBtn:GetAttribute("posY")
-        if type(ax) == "number" and type(ay) == "number" then
-            ToggleBtn.Position = UDim2.new(0, ax, 0, ay)
-        else
-            ToggleBtn.Position = UDim2.new(0, absX, 0, absY)
-        end
-    end
-
-    fov_setDefaultTogglePosition()
-
-    -- Control Window
-    local MainFrame = Instance.new("Frame")
-    MainFrame.Name = "ControlWindow"
-    MainFrame.Size = UDim2.new(0, MAIN_W, 0, MAIN_H)
-    MainFrame.BackgroundColor3 = Color3.fromRGB(55,10,40)
-    MainFrame.BackgroundTransparency = 0.7
-    MainFrame.BorderSizePixel = 1
-    MainFrame.BorderColor3 = Color3.fromRGB(210,100,190)
-    MainFrame.ZIndex = 2000
-    MainFrame.Parent = fovScreenGui
-    MainFrame.ClipsDescendants = true
-    local mainCorner = Instance.new("UICorner", MainFrame); mainCorner.CornerRadius = UDim.new(0,8)
-
-    local BAR_H = 22
-    local BlackBar = Instance.new("Frame")
-    BlackBar.Name = "BlackBar"
-    BlackBar.Size = UDim2.new(0, MAIN_W + 8, 0, BAR_H)
-    BlackBar.BackgroundColor3 = Color3.fromRGB(40,5,30)
-    -- 关键调整：设置为透明但保持 Active 以继续接收输入（视觉上移除黑条，但保留拖动交互）
-    BlackBar.BackgroundTransparency = 1
-    BlackBar.BorderSizePixel = 0
-    BlackBar.ZIndex = 2005
-    BlackBar.Active = true
-    BlackBar.Parent = fovScreenGui
-    local barCorner = Instance.new("UICorner", BlackBar); barCorner.CornerRadius = UDim.new(0,6)
-    -- 同步初始位置以避免创建时的错位可见条纹
-    pcall(function()
-        local abs = MainFrame.AbsolutePosition
-        local bx = math.max(6, abs.X - 4)
-        local by = math.max(6, abs.Y - BAR_H - 6)
-        BlackBar.Position = UDim2.new(0, math.floor(bx), 0, math.floor(by))
-    end)
-
-    local InfoLabel = Instance.new("TextLabel", MainFrame)
-    InfoLabel.Size = UDim2.new(1, -20, 0, 40)
-    InfoLabel.Position = UDim2.new(0, 10, 0, 6)
-    InfoLabel.BackgroundTransparency = 1
-    InfoLabel.TextColor3 = Color3.fromRGB(255,255,255)
-    InfoLabel.TextSize = 12
-    InfoLabel.TextXAlignment = Enum.TextXAlignment.Center
-    InfoLabel.ZIndex = 2001
-    InfoLabel.Text = ("原始FOV: %d\n当前FOV: %d\n上限: 1000"):format(math.floor(OriginalFOV), math.floor(targetFOV))
-
-    local FOVInput = Instance.new("TextBox", MainFrame)
-    FOVInput.Name = "FOVInput"
-    FOVInput.Size = UDim2.new(1, -20, 0, 22)
-    FOVInput.Position = UDim2.new(0, 10, 0, 52)
-    FOVInput.BackgroundColor3 = Color3.fromRGB(80,50,60)
-    FOVInput.BackgroundTransparency = 0.5
-    FOVInput.PlaceholderText = "输入FOV（1-1000，回车确认）"
-    FOVInput.Text = tostring(targetFOV)
-    FOVInput.TextColor3 = Color3.fromRGB(255,255,255)
-    FOVInput.TextSize = 13
-    FOVInput.ClearTextOnFocus = false
-    FOVInput.ZIndex = 2002
-
-    local ResetBtn = Instance.new("TextButton", MainFrame)
-    ResetBtn.Name = "ResetBtn"
-    ResetBtn.Size = UDim2.new(1, -20, 0, 22)
-    ResetBtn.Position = UDim2.new(0, 10, 0, 80)
-    ResetBtn.BackgroundColor3 = Color3.fromRGB(220,80,150)
-    ResetBtn.Text = "还原原始FOV"
-    ResetBtn.TextColor3 = Color3.fromRGB(255,255,255)
-    ResetBtn.TextSize = 12
-    ResetBtn.ZIndex = 2001
-    local rCorner = Instance.new("UICorner", ResetBtn); rCorner.CornerRadius = UDim.new(0,4)
-
-    -- CloseFOVBtn（右上）
-    local CloseFOVBtn = Instance.new("TextButton", MainFrame)
-    CloseFOVBtn.Name = "CloseFOVBtn"
-    CloseFOVBtn.Size = UDim2.new(0, 18, 0, 18)
-    CloseFOVBtn.Position = UDim2.new(1, -24, 0, 6)
-    CloseFOVBtn.BackgroundColor3 = Color3.fromRGB(200,60,60)
-    CloseFOVBtn.Text = "X"
-    CloseFOVBtn.Font = Enum.Font.SourceSansBold
-    CloseFOVBtn.TextSize = 14
-    CloseFOVBtn.TextColor3 = Color3.fromRGB(255,255,255)
-    CloseFOVBtn.BorderSizePixel = 0
-    Instance.new("UICorner", CloseFOVBtn).CornerRadius = UDim.new(0,4)
-    CloseFOVBtn.MouseButton1Click:Connect(function()
-        if fovScreenGui and fovScreenGui.Parent then
-            fovScreenGui:Destroy()
-            fovCreated = false
-            fovScreenGuiRef = nil
-        end
-    end)
-
-    -- FOV 插值
-local isInterpolating = false
-local function startFOVInterpolation()
-    if destroyed then return end
-    if isInterpolating then return end
-    isInterpolating = true
-    heartbeatConn = RunService.Heartbeat:Connect(function(dt)
-        if destroyed then
-            if heartbeatConn then
-                heartbeatConn:Disconnect()
-                heartbeatConn = nil
-            end
-            isInterpolating = false
-            return
-        end
-        local cam = getViewportCamera()
-        if not cam then return end
-        local current = cam.FieldOfView
-        -- 若FOV被外部重置，强制插值或直接拉回目标值
-        if math.abs(current - targetFOV) > 0.01 then
-            local nextValue = current + (targetFOV - current) * math.clamp(lerpSpeed * dt, 0, 1)
-            cam.FieldOfView = nextValue
-        else
-            cam.FieldOfView = targetFOV
-        end
-        -- 保持监听，不断修正FOV
-        -- heartbeat监听不自动断开，只有destroyed时才断开
-    end)
-end
-
-    local function UpdateFOV(newFOV)
-        if destroyed then return end
-        local n = tonumber(newFOV) or OriginalFOV
-        n = math.floor(n)
-        n = math.clamp(n, 1, 1000)
-        targetFOV = n
-        FOVInput.Text = tostring(targetFOV)
-        InfoLabel.Text = ("原始FOV: %d\n当前FOV: %d\n上限: 1000"):format(math.floor(OriginalFOV), math.floor(targetFOV))
-        pcall(startFOVInterpolation)
-    end
-
-    -- Toggle: 支持拖动与点击（InputBegan/InputChanged/InputEnded）
-    local activeToggleInput = nil
-    local toggleDragStart = Vector2.new(0,0)
-    local toggleStartPos = Vector2.new(0,0)
-    local TOGGLE_DRAG_THRESHOLD = 8
-    local movedDuringTogglePress = false
-
-    ToggleBtn.InputBegan:Connect(function(input)
-        if destroyed then return end
-        if activeToggleInput then return end
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            activeToggleInput = input
-            movedDuringTogglePress = false
-            toggleDragStart = toVector2(input.Position)
-            toggleStartPos = Vector2.new(ToggleBtn.AbsolutePosition.X, ToggleBtn.AbsolutePosition.Y)
-            input.Changed:Connect(function()
-                if destroyed then return end
-                if input.UserInputState == Enum.UserInputState.End then
-                    local finalPos = toVector2(input.Position)
-                    local moved = (finalPos - toggleDragStart).Magnitude
-                    if moved < TOGGLE_DRAG_THRESHOLD then
-                        -- 短按：切换显示/隐藏 ControlWindow
-                        if MainFrame.Visible then
-                            MainFrame.Visible = false
-                        else
-                            MainFrame.Visible = true
-                        end
-                    else
-                        -- 拖动结束 -> 保存位置
-                        local abs = ToggleBtn.AbsolutePosition
-                        ToggleBtn:SetAttribute("posX", math.floor(abs.X))
-                        ToggleBtn:SetAttribute("posY", math.floor(abs.Y))
-                    end
-                    activeToggleInput = nil
-                end
-            end)
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if destroyed then return end
-        if not activeToggleInput then return end
-        if input ~= activeToggleInput then return end
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            local cur = toVector2(input.Position)
-            local delta = cur - toggleDragStart
-            if delta.Magnitude >= TOGGLE_DRAG_THRESHOLD then
-                movedDuringTogglePress = true
-                local newPos = toggleStartPos + delta
-                local vs = fov_getViewportSize()
-                newPos = Vector2.new(math.clamp(newPos.X, 0, vs.X - TOGGLE_SIZE), math.clamp(newPos.Y, 0, vs.Y - TOGGLE_SIZE))
-                ToggleBtn.Position = UDim2.new(0, math.floor(newPos.X), 0, math.floor(newPos.Y))
-            end
-        end
-    end)
-
-    -- BlackBar / MainFrame 拖动：保留原结构并修复拖动（点击并拖动 BlackBar 或 MainFrame 顶部时移动主窗口）
-    local barActiveInput = nil
-    local barDragging = false
-    local barDragStart = Vector2.new(0,0)
-    local barStartMainPos = Vector2.new(0,0)
-
-    BlackBar.InputBegan:Connect(function(input)
-        if destroyed then return end
-        if barActiveInput then return end
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            barActiveInput = input
-            barDragging = true
-            barDragStart = toVector2(input.Position)
-            barStartMainPos = Vector2.new(MainFrame.AbsolutePosition.X, MainFrame.AbsolutePosition.Y)
-            input.Changed:Connect(function()
-                if destroyed then return end
-                if input.UserInputState == Enum.UserInputState.End then
-                    if barDragging then
-                        barDragging = false
-                        local abs = MainFrame.AbsolutePosition
-                        MainFrame:SetAttribute("posX", math.floor(abs.X))
-                        MainFrame:SetAttribute("posY", math.floor(abs.Y))
-                    end
-                    barActiveInput = nil
-                end
-            end)
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if destroyed then return end
-        if not barActiveInput then return end
-        if input ~= barActiveInput then return end
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            local cur = toVector2(input.Position)
-            local delta = cur - barDragStart
-            local newPos = barStartMainPos + delta
-            local vs = fov_getViewportSize()
-            local aw, ah = MainFrame.AbsoluteSize.X, MainFrame.AbsoluteSize.Y
-            if aw == 0 then aw = MAIN_W end
-            if ah == 0 then ah = MAIN_H end
-            newPos = Vector2.new(math.clamp(newPos.X, 0, vs.X - aw), math.clamp(newPos.Y, 0, vs.Y - ah))
-            MainFrame.Position = UDim2.new(0, math.floor(newPos.X), 0, math.floor(newPos.Y))
-            -- 同步 BlackBar（位置基于 MainFrame）
-            pcall(function()
-                local abs = MainFrame.AbsolutePosition
-                local bx = math.max(6, abs.X - 4)
-                local by = math.max(6, abs.Y - BAR_H - 6)
-                BlackBar.Position = UDim2.new(0, math.floor(bx), 0, math.floor(by))
-            end)
-        end
-    end)
-
-    -- TopDrag：为 MainFrame 顶部拖动（兼容多点输入）
-    local TopDrag = Instance.new("Frame", MainFrame)
-    TopDrag.Name = "TopDrag"
-    TopDrag.Size = UDim2.new(1,0,0,28)
-    TopDrag.Position = UDim2.new(0,0,0,0)
-    TopDrag.BackgroundTransparency = 1
-    TopDrag.ZIndex = 2001
-
-    local mainActiveInput = nil
-    local draggingMain = false
-    local mainDragStart = Vector2.new(0,0)
-    local mainStartPos = Vector2.new(0,0)
-
-    TopDrag.InputBegan:Connect(function(input)
-        if destroyed then return end
-        if mainActiveInput then return end
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            mainActiveInput = input
-            draggingMain = true
-            mainDragStart = toVector2(input.Position)
-            mainStartPos = Vector2.new(MainFrame.AbsolutePosition.X, MainFrame.AbsolutePosition.Y)
-            input.Changed:Connect(function()
-                if destroyed then return end
-                if input.UserInputState == Enum.UserInputState.End then
-                    if draggingMain then
-                        draggingMain = false
-                        local abs = MainFrame.AbsolutePosition
-                        MainFrame:SetAttribute("posX", math.floor(abs.X))
-                        MainFrame:SetAttribute("posY", math.floor(abs.Y))
-                    end
-                    mainActiveInput = nil
-                end
-            end)
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if destroyed then return end
-        if not mainActiveInput then return end
-        if input ~= mainActiveInput then return end
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            local cur = toVector2(input.Position)
-            local delta = cur - mainDragStart
-            local newPos = mainStartPos + delta
-            local vs = fov_getViewportSize()
-            local aw, ah = MainFrame.AbsoluteSize.X, MainFrame.AbsoluteSize.Y
-            if aw == 0 then aw = MAIN_W end
-            if ah == 0 then ah = MAIN_H end
-            newPos = Vector2.new(math.clamp(newPos.X, 0, vs.X - aw), math.clamp(newPos.Y, 0, vs.Y - ah))
-            MainFrame.Position = UDim2.new(0, math.floor(newPos.X), 0, math.floor(newPos.Y))
-            pcall(function()
-                local abs = MainFrame.AbsolutePosition
-                local bx = math.max(6, abs.X - 4)
-                local by = math.max(6, abs.Y - BAR_H - 6)
-                BlackBar.Position = UDim2.new(0, math.floor(bx), 0, math.floor(by))
-            end)
-        end
-    end)
-
-    -- FOVInput / ResetBtn 行为（保持）
-    FOVInput.FocusLost:Connect(function(enter)
-        if destroyed then return end
-        if enter then
-            local text = tostring(FOVInput.Text or ""):gsub("%s+", "")
-            local num = tonumber(text)
-            num = num and math.clamp(math.floor(num), 1, 1000) or targetFOV
-            UpdateFOV(num)
-        else
-            if FOVInput.Text == "" then
-                FOVInput.Text = tostring(targetFOV)
-            end
-        end
-    end)
-
-    ResetBtn.MouseButton1Click:Connect(function()
-        if destroyed then return end
-        UpdateFOV(OriginalFOV)
-    end)
-    ResetBtn.TouchTap:Connect(function()
-        if destroyed then return end
-        UpdateFOV(OriginalFOV)
-    end)
-
-    -- 监听视口变化，调整默认位置并同步 bar
-    do
-        local cam = getViewportCamera()
-        if not cam then
-            repeat task.wait() until getViewportCamera()
-            cam = getViewportCamera()
-        end
-        cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
-            if destroyed then return end
-            fov_setDefaultTogglePosition()
-            -- 若 MainFrame 有保存位置则使用；否则计算默认
-            pcall(function()
-                local savedX = MainFrame:GetAttribute("posX")
-                local savedY = MainFrame:GetAttribute("posY")
-                local vs2 = fov_getViewportSize()
-                if type(savedX) == "number" and type(savedY) == "number" then
-                    MainFrame.Position = UDim2.new(0, savedX, 0, savedY)
-                    local abs = MainFrame.AbsolutePosition
-                    local bx = math.max(6, abs.X - 4)
-                    local by = math.max(6, abs.Y - BAR_H - 6)
-                    BlackBar.Position = UDim2.new(0, math.floor(bx), 0, math.floor(by))
-                else
-                    local defaultX = math.clamp(ToggleBtn.AbsolutePosition.X - MAIN_W - 10, 6, vs2.X - MAIN_W - 6)
-                    local defaultY = math.clamp(ToggleBtn.AbsolutePosition.Y, 6, vs2.Y - MAIN_H - 6)
-                    MainFrame.Position = UDim2.new(0, defaultX, 0, defaultY)
-                    BlackBar.Position = UDim2.new(0, math.max(6, defaultX - 4), 0, math.max(6, defaultY - BAR_H - 6))
-                end
-            end)
-        end)
-    end
-
-    fovCreated = true
-    fovScreenGuiRef = fovScreenGui
-    elevateInternalZIndex()
-end
--- ===== End ensureFOVUI =====
-
--- 渲染脚本条目（保持原结构；内存修改FOV 调用 ensureFOVUI）
+-- 渲染脚本条目（保持原结构；移除“内存修改FOV”相关功能）
 for i, v in ipairs(scriptList) do
     local item = Instance.new("Frame")
     item.Size = UDim2.new(1,0,0, math.floor(70*scale))
@@ -1389,11 +976,12 @@ for i, v in ipairs(scriptList) do
 
             inputBox:CaptureFocus()
         else
-            if v.name == "内存修改FOV" then
-                pcall(function() ensureFOVUI() end)
-                pcall(function() showRunToast(true, 1) end)
-                return
-            end
+            -- 移除“内存修改FOV”相关功能
+            -- if v.name == "内存修改FOV" then
+            --     pcall(function() ensureFOVUI() end)
+            --     pcall(function() showRunToast(true, 1) end)
+            --     return
+            -- end
             showRunPanel()
             enqueueRun(function()
                 pcall(function() setStatus("running") end)
@@ -1770,4 +1358,4 @@ task.delay(0.04, function()
     end)
 end)
 
-print("MultiScriptFloatingWindow v4.6 已加载
+print("MultiScriptFloatingWindow v4.6 已加载（已移除FOV相关功能）")
