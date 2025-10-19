@@ -504,8 +504,8 @@ local scriptList = {
         code = [[
 script_key="QuDnnUGUqiBjOFZASOYtZPWhcsCKRieB";
 _G.MaxHub = {
-    ['Discord Global Chat'] = false,
-    ['Maxhub Notifications'] = true
+    ['Discord Global Chat'] = false, -- (Maxhub Communications Chat. Talk to others)
+    ['Maxhub Notifications'] = true -- (Maxhub Shows number of executions, scriptname)
 }
 loadstring(game:HttpGet("https://api.luarmor.net/files/v3/loaders/993b07de445441e83e15ce5fde260d5f.lua"))()
         ]]
