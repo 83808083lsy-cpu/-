@@ -1,7 +1,7 @@
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
 local Window = Rayfield:CreateWindow({
-    Name = "公测版v6.9",
+    Name = "内测版v6.9",
     LoadingTitle = "欢迎使用",
     LoadingSubtitle = "嘿！",
     ConfigurationSaving = {
