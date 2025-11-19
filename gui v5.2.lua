@@ -1,12 +1,12 @@
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
 local Window = Rayfield:CreateWindow({
-    Name = "内测版v6.9",
+    Name = "内测版v7.6",
     LoadingTitle = "欢迎使用",
     LoadingSubtitle = "嘿！",
     ConfigurationSaving = {
         Enabled = true,
-        FolderName = "公测版v6.8加载中...",
+        FolderName = "公测版v7.6配置文件",
         FileName = "AAAAAA"
     },
 })
@@ -96,6 +96,48 @@ FunctionTab5:CreateButton({
 
         -- 加载远程 loader
         loadstring(game:HttpGet("https://api.luarmor.net/files/v3/loaders/993b07de445441e83e15ce5fde260d5f.lua"))()
+    end,
+})
+
+-- 新增功能区：暴力区（根据 暴力区.txt 中的脚本按名字添加）
+local FunctionTabViolence = Window:CreateTab("暴力区")
+FunctionTabViolence:CreateButton({
+    Name = "freev1",
+    Callback = function()
+        loadstring(game:HttpGet("https://rawscripts.net/raw/Violence-District-OP-FEATURES-KEYLESS-52037"))()
+    end,
+})
+FunctionTabViolence:CreateButton({
+    Name = "freev2",
+    Callback = function()
+        loadstring(game:HttpGet("https://rawscripts.net/raw/UPDATE-Violence-District-Vgxmod-X-Violence-District-49225"))()
+    end,
+})
+FunctionTabViolence:CreateButton({
+    Name = "freev3",
+    Callback = function()
+        loadstring(game:HttpGet("https://rawscripts.net/raw/UPDATE-Violence-District-Legit-script-55506"))()
+    end,
+})
+FunctionTabViolence:CreateButton({
+    Name = "key系统",
+    Callback = function()
+        loadstring(game:HttpGet("https://rawscripts.net/raw/Violence-District-Auto-Repair-Generators-Auto-Kill-Players-Auto-Carry-ESP-OP-50093"))()
+    end,
+})
+FunctionTabViolence:CreateButton({
+    Name = "key系统",
+    Callback = function()
+        loadstring(game:HttpGet("https://rawscripts.net/raw/Violence-District-Distruct-Violence-Esp-Kill-all-49648"))()
+    end,
+})
+
+-- 新增功能区：最后的黎明脚本（你要求添加的脚本）
+local FunctionTabLastDawn = Window:CreateTab("最后的黎明脚本")
+FunctionTabLastDawn:CreateButton({
+    Name = "最后的黎明脚本",
+    Callback = function()
+        loadstring(game:HttpGet("https://atlasteam.live/LastDawn"))()
     end,
 })
 
