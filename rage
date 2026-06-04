@@ -1,3 +1,4 @@
+-- 完整文件：rage.lua
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
@@ -6,7 +7,7 @@ local LocalPlayer = Players.LocalPlayer
 local ENABLE_VISUALS = true
 local TEAM_CHECK_DISABLED = false
 
-local DEFAULT_SCAN_INTERVAL = 0.5
+local DEFAULT_SCAN_INTERVAL = 0.05
 local RAGE_SCAN_INTERVAL = 0.6
 
 local TRACER_DURATION = 20.0
@@ -34,6 +35,9 @@ local ALLOW_DETECT_BEHIND_WALLS = false
 local rageEnabled = false
 local wallCheckEnabled = ALLOW_DETECT_BEHIND_WALLS
 local currentScanInterval = DEFAULT_SCAN_INTERVAL
+
+-- 本地生成点到人物的最大允许距离（之前要求的 24）
+local LOCAL_SPAWN_DISTANCE_LIMIT = 24
 
 math.randomseed(tick() % 2^31)
 
@@ -103,7 +107,11 @@ local function IsVisible(targetPart, fromPos)
     local params = GetDefaultRaycastParams()
     local dir = targetPart.Position - fromPos
     local result = workspace:Raycast(fromPos, dir, params)
-    if result and result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then
+    -- 如果没有命中任何东西，说明没有阻挡，视作可见
+    if not result then
+        return true
+    end
+    if result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then
         return true
     end
     return false
@@ -115,6 +123,10 @@ local function HasClearLineToTarget(spawnPos, targetPart)
     local dir = targetPart.Position - spawnPos
     if dir.Magnitude < 0.1 then return true end
     local res = workspace:Raycast(spawnPos, dir, params)
+    -- 如果没有命中任何东西，说明没有阻挡，视作有清晰直线
+    if not res then
+        return true
+    end
     if res and res.Instance then
         if res.Instance:IsDescendantOf(targetPart.Parent) then
             return true
@@ -206,6 +218,9 @@ local function FindSpawnPositionForTarget_Local(targetPart, maxAttempts, localRa
     local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
     local px, pz = hrp.Position.X, hrp.Position.Z
+
+    -- 限制本地搜索半径为 LOCAL_SPAWN_DISTANCE_LIMIT（用户要求）
+    localRadius = math.min(localRadius or 0, LOCAL_SPAWN_DISTANCE_LIMIT)
 
     local attempts = 0
     local candidates = GenerateLocalCandidatePoints(px, pz, localRadius, EDGE_GRID_STEPS)
@@ -509,12 +524,20 @@ task.spawn(function()
                         if not hrp then
                         else
                             local best = nil
-                            local bestDist = math.huge
+
+                            -- 单次遍历：同时记录最佳“可见目标”（bestVisible）和最佳“任意目标”（bestAny）
+                            local bestVisible = nil
+                            local bestVisibleDist = math.huge
+                            local bestAny = nil
+                            local bestAnyDist = math.huge
+
                             local camPos = cam.CFrame.Position
+                            -- 遍历 workspace 中的 Humanoid（仅一次）
                             for _, desc in pairs(workspace:GetDescendants()) do
                                 if desc:IsA("Humanoid") and desc.Health > 0 and desc.Parent ~= LocalPlayer.Character then
                                     local char = desc.Parent
                                     if IsShielded(char) then
+                                        -- 被护盾的跳过
                                     else
                                         local targetPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
                                         if targetPart then
@@ -527,9 +550,20 @@ task.spawn(function()
                                             end
                                             if not skipForTeam then
                                                 local distToPlayer = (targetPart.Position - hrp.Position).Magnitude
-                                                if distToPlayer <= maxAttackDistance and distToPlayer < bestDist and IsVisible(targetPart, camPos) then
-                                                    bestDist = distToPlayer
-                                                    best = {h = desc, p = char, head = targetPart}
+                                                if distToPlayer <= maxAttackDistance then
+                                                    -- 先做距离判断，再做射线判断，减少射线次数
+                                                    local visible = IsVisible(targetPart, camPos)
+                                                    if visible then
+                                                        if distToPlayer < bestVisibleDist then
+                                                            bestVisibleDist = distToPlayer
+                                                            bestVisible = {h = desc, p = char, head = targetPart}
+                                                        end
+                                                    end
+                                                    -- 无论是否可见，都可以作为“任意目标”（用于无视墙模式）
+                                                    if distToPlayer < bestAnyDist then
+                                                        bestAnyDist = distToPlayer
+                                                        bestAny = {h = desc, p = char, head = targetPart}
+                                                    end
                                                 end
                                             end
                                         end
@@ -537,35 +571,12 @@ task.spawn(function()
                                 end
                             end
 
-                            if not best and ALLOW_DETECT_BEHIND_WALLS then
-                                local best2 = nil
-                                local bestDist2 = math.huge
-                                for _, desc in pairs(workspace:GetDescendants()) do
-                                    if desc:IsA("Humanoid") and desc.Health > 0 and desc.Parent ~= LocalPlayer.Character then
-                                        local char = desc.Parent
-                                        if IsShielded(char) then
-                                        else
-                                            local targetPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
-                                            if targetPart then
-                                                local playerFromChar = Players:GetPlayerFromCharacter(char)
-                                                local skipForTeam = false
-                                                if playerFromChar and TEAM_CHECK_DISABLED then
-                                                    if not (LocalPlayer.Neutral or playerFromChar.Team ~= LocalPlayer.Team) then
-                                                        skipForTeam = true
-                                                    end
-                                                end
-                                                if not skipForTeam then
-                                                    local distToPlayer = (targetPart.Position - hrp.Position).Magnitude
-                                                    if distToPlayer <= maxAttackDistance and distToPlayer < bestDist2 then
-                                                        bestDist2 = distToPlayer
-                                                        best2 = {h = desc, p = char, head = targetPart}
-                                                    end
-                                                end
-                                            end
-                                        end
-                                    end
-                                end
-                                best = best2
+                            if bestVisible then
+                                best = bestVisible
+                            elseif ALLOW_DETECT_BEHIND_WALLS then
+                                best = bestAny
+                            else
+                                best = nil
                             end
 
                             if best then
@@ -580,7 +591,9 @@ task.spawn(function()
                                     end
 
                                     if spawnPos then
-                                        if (spawnPos - hrp.Position).Magnitude <= maxAttackDistance then
+                                        -- 必须在 maxAttackDistance 与 LOCAL_SPAWN_DISTANCE_LIMIT 内
+                                        local spawnDist = (spawnPos - hrp.Position).Magnitude
+                                        if spawnDist <= maxAttackDistance and spawnDist <= LOCAL_SPAWN_DISTANCE_LIMIT then
                                             local distance = (headPos - spawnPos).Magnitude
                                             pcall(function() fireRemote:FireServer(tstamp) end)
                                             pcall(function()
