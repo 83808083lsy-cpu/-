@@ -7,7 +7,7 @@ local ENABLE_VISUALS = true
 local TEAM_CHECK_DISABLED = false
 
 local DEFAULT_SCAN_INTERVAL = 0.05
-local RAGE_SCAN_INTERVAL = 0.02
+local RAGE_SCAN_INTERVAL = 0.6
 
 local TRACER_DURATION = 20.0
 local TRACER_THICKNESS = 0.08
@@ -52,13 +52,49 @@ end
 
 local function IsShielded(char)
     if not char then return false end
-    if char:FindFirstChildOfClass("ForceField") then return true end
-    local shieldObj = char:FindFirstChild("Shield")
-    if shieldObj and shieldObj:IsA("BoolValue") and shieldObj.Value then return true end
-    if char.GetAttribute then
-        local attr = char:GetAttribute("Shielded")
-        if attr == true then return true end
+
+    -- Classic ForceField class
+    if char:FindFirstChildOfClass("ForceField") then
+        return true
     end
+
+    -- Direct "Shield" child (BoolValue / NumberValue / IntValue)
+    local shieldObj = char:FindFirstChild("Shield")
+    if shieldObj then
+        if shieldObj:IsA("BoolValue") and shieldObj.Value then return true end
+        if (shieldObj:IsA("NumberValue") or shieldObj:IsA("IntValue")) and shieldObj.Value > 0 then return true end
+    end
+
+    -- Check any child whose name contains keywords like "shield", "invul", "god", "protec"
+    for _, child in ipairs(char:GetChildren()) do
+        local name = (child.Name or ""):lower()
+        if name:find("shield") or name:find("invul") or name:find("god") or name:find("protec") then
+            if child:IsA("BoolValue") and child.Value then return true end
+            if (child:IsA("NumberValue") or child:IsA("IntValue")) and child.Value > 0 then return true end
+            if child:IsA("StringValue") and child.Value ~= "" then return true end
+            if child:IsA("ObjectValue") and child.Value then return true end
+        end
+    end
+
+    -- Check attributes on the character and on its Humanoid (common names)
+    local checkAttrs = {"Shielded", "IsShielded", "Invulnerable", "GodMode", "Protected", "Protection"}
+    for _, attrName in ipairs(checkAttrs) do
+        if char.GetAttribute then
+            local a = char:GetAttribute(attrName)
+            if a == true or (type(a) == "number" and a > 0) then return true end
+        end
+    end
+
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        for _, attrName in ipairs(checkAttrs) do
+            if humanoid.GetAttribute then
+                local a = humanoid:GetAttribute(attrName)
+                if a == true or (type(a) == "number" and a > 0) then return true end
+            end
+        end
+    end
+
     return false
 end
 
