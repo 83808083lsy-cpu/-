@@ -6,7 +6,7 @@ local LocalPlayer = Players.LocalPlayer
 local ENABLE_VISUALS = true
 local TEAM_CHECK_DISABLED = false
 
-local DEFAULT_SCAN_INTERVAL = 0.05
+local DEFAULT_SCAN_INTERVAL = 0.5
 local RAGE_SCAN_INTERVAL = 0.6
 
 local TRACER_DURATION = 20.0
