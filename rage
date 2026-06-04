@@ -1,0 +1,597 @@
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+local ENABLE_VISUALS = true
+local TEAM_CHECK_DISABLED = false
+
+local DEFAULT_SCAN_INTERVAL = 0.05
+local RAGE_SCAN_INTERVAL = 0.02
+
+local TRACER_DURATION = 20.0
+local TRACER_THICKNESS = 0.08
+local TRACER_COLOR = Color3.fromRGB(255, 105, 180)
+local MARKER_DURATION = 20.0
+local MARKER_SIZE = 0.28
+local MARKER_COLOR = Color3.fromRGB(255, 255, 0)
+
+local OFFMAP_SPAWN_ENABLED = true
+local SEARCH_ATTEMPTS = 300
+local SEARCH_ATTEMPTS_RAGE = 800
+local SEARCH_HEIGHT = 20
+local SPAWN_VERTICAL_OFFSET = 19
+
+local SEARCH_WORLD_MIN = Vector2.new(-500, -500)
+local SEARCH_WORLD_MAX = Vector2.new(500, 500)
+local EDGE_GRID_STEPS = 6
+
+local MAX_ATTACK_DISTANCE_DEFAULT = 100
+local MAX_ATTACK_DISTANCE_MAX = 1000
+local maxAttackDistance = MAX_ATTACK_DISTANCE_DEFAULT
+
+local ALLOW_DETECT_BEHIND_WALLS = false
+local rageEnabled = false
+local wallCheckEnabled = ALLOW_DETECT_BEHIND_WALLS
+local currentScanInterval = DEFAULT_SCAN_INTERVAL
+
+math.randomseed(tick() % 2^31)
+
+local function clamp(val, a, b)
+    if val < a then return a end
+    if val > b then return b end
+    return val
+end
+
+local function GetDefaultRaycastParams()
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = { LocalPlayer.Character, workspace.CurrentCamera }
+    return params
+end
+
+local function IsShielded(char)
+    if not char then return false end
+    if char:FindFirstChildOfClass("ForceField") then return true end
+    local shieldObj = char:FindFirstChild("Shield")
+    if shieldObj and shieldObj:IsA("BoolValue") and shieldObj.Value then return true end
+    if char.GetAttribute then
+        local attr = char:GetAttribute("Shielded")
+        if attr == true then return true end
+    end
+    return false
+end
+
+local function IsVisible(targetPart, fromPos)
+    if not targetPart or not fromPos then return false end
+    local params = GetDefaultRaycastParams()
+    local dir = targetPart.Position - fromPos
+    local result = workspace:Raycast(fromPos, dir, params)
+    if result and result.Instance and result.Instance:IsDescendantOf(targetPart.Parent) then
+        return true
+    end
+    return false
+end
+
+local function HasClearLineToTarget(spawnPos, targetPart)
+    if not spawnPos or not targetPart then return false end
+    local params = GetDefaultRaycastParams()
+    local dir = targetPart.Position - spawnPos
+    if dir.Magnitude < 0.1 then return true end
+    local res = workspace:Raycast(spawnPos, dir, params)
+    if res and res.Instance then
+        if res.Instance:IsDescendantOf(targetPart.Parent) then
+            return true
+        else
+            return false
+        end
+    end
+    return false
+end
+
+local function SpawnTracer(startPos, endPos)
+    if not ENABLE_VISUALS then return end
+    if not startPos or not endPos then return end
+    local dir = endPos - startPos
+    local dist = dir.Magnitude
+    if dist <= 0 then return end
+
+    local part = Instance.new("Part")
+    part.Name = "TracerPart"
+    part.Anchored = true
+    part.CanCollide = false
+    part.Material = Enum.Material.Neon
+    part.Color = TRACER_COLOR
+    part.TopSurface = Enum.SurfaceType.Smooth
+    part.BottomSurface = Enum.SurfaceType.Smooth
+    part.Size = Vector3.new(TRACER_THICKNESS, TRACER_THICKNESS, math.max(dist, 0.01))
+    part.CFrame = CFrame.new(startPos, endPos) * CFrame.new(0, 0, -dist / 2)
+    part.CastShadow = false
+    part.Transparency = 0
+    part.Parent = workspace
+
+    local tweenInfo = TweenInfo.new(TRACER_DURATION, Enum.EasingStyle.Linear)
+    local tween = TweenService:Create(part, tweenInfo, { Transparency = 1 })
+    tween:Play()
+    delay(TRACER_DURATION + 0.02, function()
+        if part and part.Parent then part:Destroy() end
+    end)
+end
+
+local function SpawnHitMarker(pos)
+    if not ENABLE_VISUALS then return end
+    if not pos then return end
+    local marker = Instance.new("Part")
+    marker.Name = "HitMarker"
+    marker.Shape = Enum.PartType.Ball
+    marker.Size = Vector3.new(MARKER_SIZE, MARKER_SIZE, MARKER_SIZE)
+    marker.Anchored = true
+    marker.CanCollide = false
+    marker.Material = Enum.Material.Neon
+    marker.Color = MARKER_COLOR
+    marker.CFrame = CFrame.new(pos)
+    marker.Transparency = 0
+    marker.Parent = workspace
+
+    local tween = TweenService:Create(marker, TweenInfo.new(MARKER_DURATION, Enum.EasingStyle.Linear), { Transparency = 1, Size = Vector3.new(0.01, 0.01, 0.01) })
+    tween:Play()
+    delay(MARKER_DURATION + 0.02, function()
+        if marker and marker.Parent then marker:Destroy() end
+    end)
+end
+
+local function GroundPointAtXZ(x, z, height)
+    local origin = Vector3.new(x, height, z)
+    local params = GetDefaultRaycastParams()
+    local res = workspace:Raycast(origin, Vector3.new(0, -height - 50, 0), params)
+    if res then
+        return res.Position, res.Normal, res.Instance
+    end
+    return nil
+end
+
+local function GenerateLocalCandidatePoints(centerX, centerZ, radius, edgeSteps)
+    local pts = {}
+    local radiLayers = {0.9, 0.7, 0.5, 0.3}
+    for _, rf in ipairs(radiLayers) do
+        local r = clamp(radius * rf, 1, radius)
+        for i = 0, edgeSteps - 1 do
+            local angle = (i / edgeSteps) * math.pi * 2
+            local x = centerX + math.cos(angle) * r
+            local z = centerZ + math.sin(angle) * r
+            table.insert(pts, Vector2.new(x, z))
+        end
+    end
+    return pts
+end
+
+local function FindSpawnPositionForTarget_Local(targetPart, maxAttempts, localRadius)
+    if not targetPart or not LocalPlayer.Character then return nil end
+    local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local px, pz = hrp.Position.X, hrp.Position.Z
+
+    local attempts = 0
+    local candidates = GenerateLocalCandidatePoints(px, pz, localRadius, EDGE_GRID_STEPS)
+    for _, v in ipairs(candidates) do
+        if attempts >= maxAttempts then break end
+        attempts = attempts + 1
+        local gx, gz = v.X, v.Y
+        local groundPos = GroundPointAtXZ(gx, gz, SEARCH_HEIGHT)
+        if groundPos then
+            local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
+            if (spawnPos - hrp.Position).Magnitude <= localRadius then
+                if HasClearLineToTarget(spawnPos, targetPart) then
+                    return spawnPos
+                end
+            end
+        end
+    end
+
+    local remaining = maxAttempts - attempts
+    for i = 1, remaining do
+        local theta = math.random() * math.pi * 2
+        local r = math.sqrt(math.random()) * localRadius
+        local rx = px + math.cos(theta) * r
+        local rz = pz + math.sin(theta) * r
+        local groundPos = GroundPointAtXZ(rx, rz, SEARCH_HEIGHT)
+        if groundPos then
+            local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
+            if (spawnPos - hrp.Position).Magnitude <= localRadius then
+                if HasClearLineToTarget(spawnPos, targetPart) then
+                    return spawnPos
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function FindSpawnPositionForTarget_Global(targetPart, maxAttempts)
+    local attempts = 0
+    local function globalCandidates()
+        local pts = {}
+        table.insert(pts, Vector2.new(SEARCH_WORLD_MIN.X, SEARCH_WORLD_MIN.Y))
+        table.insert(pts, Vector2.new(SEARCH_WORLD_MIN.X, SEARCH_WORLD_MAX.Y))
+        table.insert(pts, Vector2.new(SEARCH_WORLD_MAX.X, SEARCH_WORLD_MIN.Y))
+        table.insert(pts, Vector2.new(SEARCH_WORLD_MAX.X, SEARCH_WORLD_MAX.Y))
+        for i = 0, EDGE_GRID_STEPS do
+            local t = i / math.max(1, EDGE_GRID_STEPS)
+            table.insert(pts, Vector2.new(SEARCH_WORLD_MIN.X + (SEARCH_WORLD_MAX.X - SEARCH_WORLD_MIN.X) * t, SEARCH_WORLD_MIN.Y))
+            table.insert(pts, Vector2.new(SEARCH_WORLD_MIN.X + (SEARCH_WORLD_MAX.X - SEARCH_WORLD_MIN.X) * t, SEARCH_WORLD_MAX.Y))
+            table.insert(pts, Vector2.new(SEARCH_WORLD_MIN.X, SEARCH_WORLD_MIN.Y + (SEARCH_WORLD_MAX.Y - SEARCH_WORLD_MIN.Y) * t))
+            table.insert(pts, Vector2.new(SEARCH_WORLD_MAX.X, SEARCH_WORLD_MIN.Y + (SEARCH_WORLD_MAX.Y - SEARCH_WORLD_MIN.Y) * t))
+        end
+        return pts
+    end
+
+    for _, v in ipairs(globalCandidates()) do
+        if attempts >= maxAttempts then break end
+        attempts = attempts + 1
+        local gx, gz = v.X, v.Y
+        local groundPos = GroundPointAtXZ(gx, gz, SEARCH_HEIGHT)
+        if groundPos then
+            local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
+            if HasClearLineToTarget(spawnPos, targetPart) then
+                return spawnPos
+            end
+        end
+    end
+
+    local remaining = maxAttempts - attempts
+    for i = 1, remaining do
+        local rx = math.random() * (SEARCH_WORLD_MAX.X - SEARCH_WORLD_MIN.X) + SEARCH_WORLD_MIN.X
+        local rz = math.random() * (SEARCH_WORLD_MAX.Y - SEARCH_WORLD_MIN.Y) + SEARCH_WORLD_MIN.Y
+        local groundPos = GroundPointAtXZ(rx, rz, SEARCH_HEIGHT)
+        if groundPos then
+            local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
+            if HasClearLineToTarget(spawnPos, targetPart) then
+                return spawnPos
+            end
+        end
+    end
+
+    return nil
+end
+
+local function CreateControlGui()
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AutoFireControls"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = playerGui
+
+    local frame = Instance.new("Frame")
+    frame.Name = "ControlFrame"
+    frame.Size = UDim2.new(0, 260, 0, 120)
+    frame.Position = UDim2.new(1, -270, 0, 10)
+    frame.BackgroundTransparency = 0.25
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    frame.BorderSizePixel = 0
+    frame.Parent = screenGui
+    frame.Active = true
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 20)
+    title.Position = UDim2.new(0, 0, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "AutoFire Controls"
+    title.TextColor3 = Color3.new(1,1,1)
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 14
+    title.Parent = frame
+
+    local rageBtn = Instance.new("TextButton")
+    rageBtn.Name = "RageBtn"
+    rageBtn.Size = UDim2.new(0, 100, 0, 32)
+    rageBtn.Position = UDim2.new(0, 8, 0, 24)
+    rageBtn.Text = "Rage: OFF"
+    rageBtn.Font = Enum.Font.SourceSansSemibold
+    rageBtn.TextSize = 14
+    rageBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    rageBtn.BackgroundColor3 = Color3.fromRGB(120, 20, 20)
+    rageBtn.Parent = frame
+
+    local wallBtn = Instance.new("TextButton")
+    wallBtn.Name = "WallBtn"
+    wallBtn.Size = UDim2.new(0, 100, 0, 32)
+    wallBtn.Position = UDim2.new(0, 132, 0, 24)
+    wallBtn.Text = "Wall: OFF"
+    wallBtn.Font = Enum.Font.SourceSansSemibold
+    wallBtn.TextSize = 14
+    wallBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    wallBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    wallBtn.Parent = frame
+
+    local sliderLabel = Instance.new("TextLabel")
+    sliderLabel.Name = "SliderLabel"
+    sliderLabel.Size = UDim2.new(0, 240, 0, 18)
+    sliderLabel.Position = UDim2.new(0, 8, 0, 64)
+    sliderLabel.BackgroundTransparency = 1
+    sliderLabel.Text = "Max Distance: "..tostring(maxAttackDistance)
+    sliderLabel.TextColor3 = Color3.fromRGB(220,220,220)
+    sliderLabel.Font = Enum.Font.SourceSans
+    sliderLabel.TextSize = 14
+    sliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+    sliderLabel.Parent = frame
+
+    local sliderBar = Instance.new("Frame")
+    sliderBar.Name = "SliderBar"
+    sliderBar.Size = UDim2.new(0, 240, 0, 12)
+    sliderBar.Position = UDim2.new(0, 8, 0, 84)
+    sliderBar.BackgroundColor3 = Color3.fromRGB(60,60,60)
+    sliderBar.BorderSizePixel = 0
+    sliderBar.Parent = frame
+
+    local sliderFill = Instance.new("Frame")
+    sliderFill.Name = "SliderFill"
+    sliderFill.Size = UDim2.new(maxAttackDistance / MAX_ATTACK_DISTANCE_MAX, 0, 1, 0)
+    sliderFill.Position = UDim2.new(0, 0, 0, 0)
+    sliderFill.BackgroundColor3 = Color3.fromRGB(200,100,20)
+    sliderFill.BorderSizePixel = 0
+    sliderFill.Parent = sliderBar
+
+    local knob = Instance.new("Frame")
+    knob.Name = "Knob"
+    knob.Size = UDim2.new(0, 16, 0, 16)
+    knob.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    knob.Parent = sliderBar
+
+    sliderBar:GetPropertyChangedSignal("AbsoluteSize"):Wait()
+    knob:GetPropertyChangedSignal("AbsoluteSize"):Wait()
+
+    local function SetSliderValue(val)
+        val = clamp(val, 0, MAX_ATTACK_DISTANCE_MAX)
+        maxAttackDistance = math.floor(val + 0.5)
+        sliderLabel.Text = "Max Distance: "..tostring(maxAttackDistance)
+        local t = maxAttackDistance / MAX_ATTACK_DISTANCE_MAX
+        sliderFill.Size = UDim2.new(t, 0, 1, 0)
+        local px = t * (sliderBar.AbsoluteSize.X - knob.AbsoluteSize.X)
+        knob.Position = UDim2.new(0, px, 0, -2)
+    end
+
+    SetSliderValue(maxAttackDistance)
+
+    local dragging = false
+    local function updateValueFromInput(x)
+        local abs = sliderBar.AbsolutePosition
+        local width = sliderBar.AbsoluteSize.X
+        local localX = x - abs.X
+        local t = localX / math.max(1, width)
+        t = clamp(t, 0, 1)
+        SetSliderValue(t * MAX_ATTACK_DISTANCE_MAX)
+    end
+
+    knob.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    sliderBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            updateValueFromInput(input.Position.X)
+            dragging = true
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            updateValueFromInput(input.Position.X)
+        end
+    end)
+
+    rageBtn.MouseButton1Click:Connect(function()
+        rageEnabled = not rageEnabled
+        if rageEnabled then
+            rageBtn.Text = "Rage: ON"
+            rageBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+            OFFMAP_SPAWN_ENABLED = true
+            currentScanInterval = RAGE_SCAN_INTERVAL
+            SEARCH_ATTEMPTS = SEARCH_ATTEMPTS_RAGE
+        else
+            rageBtn.Text = "Rage: OFF"
+            rageBtn.BackgroundColor3 = Color3.fromRGB(120, 20, 20)
+            OFFMAP_SPAWN_ENABLED = true
+            currentScanInterval = DEFAULT_SCAN_INTERVAL
+            SEARCH_ATTEMPTS = 300
+        end
+    end)
+
+    wallBtn.MouseButton1Click:Connect(function()
+        wallCheckEnabled = not wallCheckEnabled
+        ALLOW_DETECT_BEHIND_WALLS = wallCheckEnabled
+        if wallCheckEnabled then
+            wallBtn.Text = "Wall: ON"
+            wallBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 40)
+        else
+            wallBtn.Text = "Wall: OFF"
+            wallBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        end
+    end)
+
+    local draggingFrame = false
+    local dragStart, startPos = nil, nil
+    local function onInputBegan(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            draggingFrame = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    draggingFrame = false
+                end
+            end)
+        end
+    end
+    local function onInputChanged(input)
+        if not draggingFrame or not dragStart or not startPos then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - dragStart
+            local newX = startPos.X.Offset + delta.X
+            local newY = startPos.Y.Offset + delta.Y
+            local screenX, screenY = workspace.CurrentCamera.ViewportSize.X, workspace.CurrentCamera.ViewportSize.Y
+            newX = clamp(newX, 0, screenX - frame.AbsoluteSize.X)
+            newY = clamp(newY, 0, screenY - frame.AbsoluteSize.Y)
+            frame.Position = UDim2.new(0, newX, 0, newY)
+        end
+    end
+    frame.InputBegan:Connect(onInputBegan)
+    UserInputService.InputChanged:Connect(onInputChanged)
+end
+
+CreateControlGui()
+
+task.spawn(function()
+    while true do
+        task.wait(currentScanInterval)
+
+        if not LocalPlayer or not LocalPlayer.Character then
+        else
+            local cam = workspace.CurrentCamera
+            if not cam then
+            else
+                local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+                if not tool then
+                else
+                    local fireRemote = tool:FindFirstChild("FireWeapon")
+                    local hitRemote = tool:FindFirstChild("GunHit")
+                    if not fireRemote or not hitRemote then
+                    else
+                        local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                        if not hrp then
+                        else
+                            local best = nil
+                            local bestDist = math.huge
+                            local camPos = cam.CFrame.Position
+                            for _, desc in pairs(workspace:GetDescendants()) do
+                                if desc:IsA("Humanoid") and desc.Health > 0 and desc.Parent ~= LocalPlayer.Character then
+                                    local char = desc.Parent
+                                    if IsShielded(char) then
+                                    else
+                                        local targetPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+                                        if targetPart then
+                                            local playerFromChar = Players:GetPlayerFromCharacter(char)
+                                            local skipForTeam = false
+                                            if playerFromChar and TEAM_CHECK_DISABLED then
+                                                if not (LocalPlayer.Neutral or playerFromChar.Team ~= LocalPlayer.Team) then
+                                                    skipForTeam = true
+                                                end
+                                            end
+                                            if not skipForTeam then
+                                                local distToPlayer = (targetPart.Position - hrp.Position).Magnitude
+                                                if distToPlayer <= maxAttackDistance and distToPlayer < bestDist and IsVisible(targetPart, camPos) then
+                                                    bestDist = distToPlayer
+                                                    best = {h = desc, p = char, head = targetPart}
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+
+                            if not best and ALLOW_DETECT_BEHIND_WALLS then
+                                local best2 = nil
+                                local bestDist2 = math.huge
+                                for _, desc in pairs(workspace:GetDescendants()) do
+                                    if desc:IsA("Humanoid") and desc.Health > 0 and desc.Parent ~= LocalPlayer.Character then
+                                        local char = desc.Parent
+                                        if IsShielded(char) then
+                                        else
+                                            local targetPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+                                            if targetPart then
+                                                local playerFromChar = Players:GetPlayerFromCharacter(char)
+                                                local skipForTeam = false
+                                                if playerFromChar and TEAM_CHECK_DISABLED then
+                                                    if not (LocalPlayer.Neutral or playerFromChar.Team ~= LocalPlayer.Team) then
+                                                        skipForTeam = true
+                                                    end
+                                                end
+                                                if not skipForTeam then
+                                                    local distToPlayer = (targetPart.Position - hrp.Position).Magnitude
+                                                    if distToPlayer <= maxAttackDistance and distToPlayer < bestDist2 then
+                                                        bestDist2 = distToPlayer
+                                                        best2 = {h = desc, p = char, head = targetPart}
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                                best = best2
+                            end
+
+                            if best then
+                                local headPos = best.head.Position
+                                local tstamp = tick()
+                                local processed = false
+
+                                if OFFMAP_SPAWN_ENABLED then
+                                    local spawnPos = FindSpawnPositionForTarget_Local(best.head, SEARCH_ATTEMPTS, maxAttackDistance)
+                                    if not spawnPos then
+                                        spawnPos = FindSpawnPositionForTarget_Global(best.head, math.floor(SEARCH_ATTEMPTS / 2))
+                                    end
+
+                                    if spawnPos then
+                                        if (spawnPos - hrp.Position).Magnitude <= maxAttackDistance then
+                                            local distance = (headPos - spawnPos).Magnitude
+                                            pcall(function() fireRemote:FireServer(tstamp) end)
+                                            pcall(function()
+                                                hitRemote:FireServer(tstamp, {
+                                                    {
+                                                        ["Normal"] = Vector3.new(0,1,0),
+                                                        ["Position"] = headPos,
+                                                        ["Instance"] = best.head,
+                                                        ["Material"] = Enum.Material.Plastic,
+                                                        ["Distance"] = distance
+                                                    }
+                                                })
+                                            end)
+                                            pcall(function()
+                                                SpawnTracer(spawnPos, headPos)
+                                                SpawnHitMarker(headPos)
+                                            end)
+                                            processed = true
+                                        end
+                                    end
+                                end
+
+                                if not processed then
+                                    local camPos2 = cam.CFrame.Position
+                                    local distanceCam = (headPos - camPos2).Magnitude
+                                    pcall(function() fireRemote:FireServer(tstamp) end)
+                                    pcall(function()
+                                        hitRemote:FireServer(tstamp, {
+                                            {
+                                                ["Normal"] = Vector3.new(0,1,0),
+                                                ["Position"] = headPos,
+                                                ["Instance"] = best.head,
+                                                ["Material"] = Enum.Material.Plastic,
+                                                ["Distance"] = distanceCam
+                                            }
+                                        })
+                                    end)
+                                    pcall(function()
+                                        SpawnTracer(camPos2, headPos)
+                                        SpawnHitMarker(headPos)
+                                    end)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
