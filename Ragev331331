@@ -1,0 +1,837 @@
+-- 自动瞄准 + GUI 控制（可拖动/触摸）+ 穿墙功能（可设置最大厚度）
+-- Tracer 紫色并加粗，修复 UI 报错（拖拽事件使用 UserInputService）
+-- Tracer lifetime 默认为 30 秒
+-- 新增：优化自动调整左右上下距离（更细步进，优先尝试小偏移）
+-- 新增：tracer 开关 & 自动跳过好友（可在 GUI 中切换）
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local UserInputService = game:GetService("UserInputService")
+
+local lp = Players.LocalPlayer
+local remotes = ReplicatedStorage:WaitForChild("Events"):WaitForChild("RemoteEvents")
+local muzzle_flash = remotes:WaitForChild("CharacterMuzzleFlash")
+local fake_bullet = remotes:WaitForChild("ReplicateFakeBullet")
+local action_sync = ReplicatedStorage:WaitForChild("SystemResources"):WaitForChild("BufferCache"):WaitForChild("RequestActionSync")
+
+local last_attack = 0
+local cooldown = 0.6
+
+math.randomseed(tick())
+
+-- Settings controlled by GUI (defaults)
+local cfg = {
+    rageEnabled = true,
+    penetrationEnabled = false,
+    maxThickness = 10, -- studs, up to 50 via GUI
+    leftOffset = 19,   -- max left offset, 0..40
+    rightOffset = 19,  -- max right offset, 0..40
+    upOffset = 20,     -- height above player, 0..40
+    attempts = 18,
+    sampleRadius = 0.9,
+    sampleCount = 12,
+    penetrationStep = 0.5,
+    hitRadius = 1.2,
+    autoAdjustMaxExtraUp = 8,
+    autoAdjustSideStep = 2,
+    -- 更细的垂直步进以提高寻找空位概率
+    autoAdjustVerticalStep = 0.5,
+    tracerThickness = 0.14, -- 轨迹粗细
+    tracerColor = Color3.fromRGB(160, 64, 200), -- 紫色轨迹
+    tracerLifetime = 30, -- 轨迹存在时间（秒）
+    tracerEnabled = true, -- 是否显示弹道（tracer）
+    skipFriends = true, -- 新增：是否自动跳过好友
+}
+
+-- Utility: create a simple draggable slider (mouse + touch) with optional formatter
+local function createSlider(parent, labelText, minVal, maxVal, defaultVal, width, onChanged, fmt)
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(0, width, 0, 48)
+    container.BackgroundTransparency = 1
+    container.Parent = parent
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.6, 0, 1, 0)
+    label.Position = UDim2.new(0, 0, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Font = Enum.Font.SourceSansSemibold
+    label.TextSize = 14
+    label.TextColor3 = Color3.fromRGB(120, 140, 160)
+    label.Parent = container
+
+    local valueLabel = Instance.new("TextLabel")
+    valueLabel.Size = UDim2.new(0.4, 0, 1, 0)
+    valueLabel.Position = UDim2.new(0.6, 0, 0, 0)
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.Text = tostring(defaultVal)
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+    valueLabel.Font = Enum.Font.SourceSans
+    valueLabel.TextSize = 14
+    valueLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    valueLabel.Parent = container
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(1, 0, 0, 10)
+    track.Position = UDim2.new(0, 0, 1, -12)
+    track.BackgroundColor3 = Color3.fromRGB(40, 44, 48)
+    track.Parent = container
+    track.AnchorPoint = Vector2.new(0, 0)
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(0, 0, 1, 0)
+    fill.Position = UDim2.new(0, 0, 0, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(96, 108, 122)
+    fill.Parent = track
+
+    local handle = Instance.new("ImageLabel")
+    handle.Size = UDim2.new(0, 14, 0, 14)
+    handle.Position = UDim2.new(0, -7, -0.3, 0)
+    handle.BackgroundColor3 = Color3.fromRGB(160, 170, 180)
+    handle.Parent = track
+    handle.Active = true
+
+    local dragging = false
+    local function formatVal(v)
+        if fmt then return fmt(v) end
+        return tostring(math.floor(v * 100 + 0.5) / 100)
+    end
+
+    local function setFromPos(x)
+        local absX = math.clamp(x - track.AbsolutePosition.X, 0, track.AbsoluteSize.X)
+        local t = 0
+        if track.AbsoluteSize.X > 0 then
+            t = absX / track.AbsoluteSize.X
+        end
+        local val = minVal + (maxVal - minVal) * t
+        val = math.max(minVal, math.min(maxVal, val))
+        if onChanged then onChanged(val) end
+        fill.Size = UDim2.new(t, 0, 1, 0)
+        handle.Position = UDim2.new(t, -7, -0.3, 0)
+        valueLabel.Text = formatVal(val)
+    end
+
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            setFromPos(input.Position.X)
+        end
+    end)
+    track.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            setFromPos(input.Position.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    track:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+        if maxVal == minVal then return end
+        local t = (defaultVal - minVal) / (maxVal - minVal)
+        t = math.clamp(t, 0, 1)
+        fill.Size = UDim2.new(t, 0, 1, 0)
+        handle.Position = UDim2.new(t, -7, -0.3, 0)
+        valueLabel.Text = formatVal(defaultVal)
+        if onChanged then onChanged(defaultVal) end
+    end)
+
+    return container
+end
+
+-- Create GUI (compact main window + scrolling area)
+local function setupGui()
+    local playerGui = lp:WaitForChild("PlayerGui")
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "AutoAimRageGui"
+    screen.ResetOnSpawn = false
+    screen.Parent = playerGui
+
+    local main = Instance.new("Frame")
+    main.Size = UDim2.new(0, 340, 0, 320)
+    main.Position = UDim2.new(0.02, 0, 0.18, 0)
+    main.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+    main.BorderSizePixel = 0
+    main.Parent = screen
+
+    -- Title bar
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 28)
+    title.BackgroundTransparency = 1
+    title.Text = "AutoRage"
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 16
+    title.TextColor3 = Color3.fromRGB(220, 220, 220)
+    title.TextXAlignment = Enum.TextXAlignment.Center
+    title.Parent = main
+
+    -- Collapse button
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.Size = UDim2.new(0, 56, 0, 20)
+    toggleBtn.Position = UDim2.new(1, -62, 0, 4)
+    toggleBtn.Text = "Hide"
+    toggleBtn.Font = Enum.Font.SourceSans
+    toggleBtn.TextSize = 12
+    toggleBtn.Parent = main
+
+    -- Content frame
+    local content = Instance.new("Frame")
+    content.Size = UDim2.new(1, 0, 1, -28)
+    content.Position = UDim2.new(0, 0, 0, 28)
+    content.BackgroundTransparency = 1
+    content.Parent = main
+
+    -- Top toggles
+    local topRow = Instance.new("Frame")
+    topRow.Size = UDim2.new(1, -12, 0, 96)
+    topRow.Position = UDim2.new(0, 6, 0, 6)
+    topRow.BackgroundTransparency = 1
+    topRow.Parent = content
+
+    local rageToggle = Instance.new("TextButton")
+    rageToggle.Size = UDim2.new(0, 160, 0, 28)
+    rageToggle.Position = UDim2.new(0, 0, 0, 0)
+    rageToggle.Text = "Rage: ON"
+    rageToggle.Font = Enum.Font.SourceSansSemibold
+    rageToggle.TextSize = 14
+    rageToggle.Parent = topRow
+
+    rageToggle.MouseButton1Click:Connect(function()
+        cfg.rageEnabled = not cfg.rageEnabled
+        rageToggle.Text = "Rage: " .. (cfg.rageEnabled and "ON" or "OFF")
+    end)
+
+    local penToggle = Instance.new("TextButton")
+    penToggle.Size = UDim2.new(0, 160, 0, 28)
+    penToggle.Position = UDim2.new(0, 170, 0, 0)
+    penToggle.Text = "Penetration: OFF"
+    penToggle.Font = Enum.Font.SourceSansSemibold
+    penToggle.TextSize = 14
+    penToggle.Parent = topRow
+
+    penToggle.MouseButton1Click:Connect(function()
+        cfg.penetrationEnabled = not cfg.penetrationEnabled
+        penToggle.Text = "Penetration: " .. (cfg.penetrationEnabled and "ON" or "OFF")
+    end)
+
+    -- tracer 开关
+    local tracerToggle = Instance.new("TextButton")
+    tracerToggle.Size = UDim2.new(0, 160, 0, 28)
+    tracerToggle.Position = UDim2.new(0, 0, 0, 34)
+    tracerToggle.Text = "Tracer: " .. (cfg.tracerEnabled and "ON" or "OFF")
+    tracerToggle.Font = Enum.Font.SourceSansSemibold
+    tracerToggle.TextSize = 14
+    tracerToggle.Parent = topRow
+
+    tracerToggle.MouseButton1Click:Connect(function()
+        cfg.tracerEnabled = not cfg.tracerEnabled
+        tracerToggle.Text = "Tracer: " .. (cfg.tracerEnabled and "ON" or "OFF")
+    end)
+
+    -- 新增：跳过好友开关
+    local friendToggle = Instance.new("TextButton")
+    friendToggle.Size = UDim2.new(0, 160, 0, 28)
+    friendToggle.Position = UDim2.new(0, 170, 0, 34)
+    friendToggle.Text = "Skip Friends: " .. (cfg.skipFriends and "ON" or "OFF")
+    friendToggle.Font = Enum.Font.SourceSansSemibold
+    friendToggle.TextSize = 14
+    friendToggle.Parent = topRow
+
+    friendToggle.MouseButton1Click:Connect(function()
+        cfg.skipFriends = not cfg.skipFriends
+        friendToggle.Text = "Skip Friends: " .. (cfg.skipFriends and "ON" or "OFF")
+    end)
+
+    -- Scrolling sliders
+    local slidersParent = Instance.new("ScrollingFrame")
+    slidersParent.Size = UDim2.new(1, -12, 1, -150)
+    slidersParent.Position = UDim2.new(0, 6, 0, 76)
+    slidersParent.BackgroundTransparency = 1
+    slidersParent.ScrollBarThickness = 8
+    slidersParent.Parent = content
+
+    local sliderW = 316
+    local widgets = {}
+
+    local function addSlider(label, minv, maxv, default, onChanged, fmt)
+        local s = createSlider(slidersParent, label, minv, maxv, default, sliderW, onChanged, fmt)
+        table.insert(widgets, s)
+        return s
+    end
+
+    local maxThicknessSlider = addSlider("Max Thickness (0-50)", 0, 50, cfg.maxThickness, function(v)
+        cfg.maxThickness = math.floor(v + 0.5)
+    end, function(v) return tostring(math.floor(v + 0.5)) end)
+    maxThicknessSlider.Position = UDim2.new(0, 0, 0, 0)
+    maxThicknessSlider.Parent = slidersParent
+
+    local leftSlider = addSlider("Left Offset (0-40)", 0, 40, cfg.leftOffset, function(v)
+        cfg.leftOffset = math.floor(v + 0.5)
+    end, function(v) return tostring(math.floor(v + 0.5)) end)
+    leftSlider.Position = UDim2.new(0, 0, 0, 52)
+    leftSlider.Parent = slidersParent
+
+    local rightSlider = addSlider("Right Offset (0-40)", 0, 40, cfg.rightOffset, function(v)
+        cfg.rightOffset = math.floor(v + 0.5)
+    end, function(v) return tostring(math.floor(v + 0.5)) end)
+    rightSlider.Position = UDim2.new(0, 0, 0, 104)
+    rightSlider.Parent = slidersParent
+
+    local upSlider = addSlider("Up Offset (0-40)", 0, 40, cfg.upOffset, function(v)
+        cfg.upOffset = math.floor(v + 0.5)
+    end, function(v) return tostring(math.floor(v + 0.5)) end)
+    upSlider.Position = UDim2.new(0, 0, 0, 156)
+    upSlider.Parent = slidersParent
+
+    local infoLabel = Instance.new("TextLabel")
+    infoLabel.Size = UDim2.new(1, 0, 0, 18)
+    infoLabel.Position = UDim2.new(0, 0, 0, 208)
+    infoLabel.BackgroundTransparency = 1
+    infoLabel.Text = "HitRadius: " .. tostring(cfg.hitRadius) .. "   Attempts: " .. tostring(cfg.attempts)
+    infoLabel.Font = Enum.Font.SourceSans
+    infoLabel.TextSize = 12
+    infoLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+    infoLabel.Parent = slidersParent
+
+    local hitRadiusSlider = addSlider("Hit Radius (0-40)", 0, 40, cfg.hitRadius, function(v)
+        cfg.hitRadius = math.floor(v * 100 + 0.5) / 100
+        infoLabel.Text = "HitRadius: " .. tostring(cfg.hitRadius) .. "   Attempts: " .. tostring(cfg.attempts)
+    end, function(v) return string.format("%.2f", v) end)
+    hitRadiusSlider.Position = UDim2.new(0, 0, 0, 232)
+    hitRadiusSlider.Parent = slidersParent
+
+    local lastInfoLabel = Instance.new("TextLabel")
+    lastInfoLabel.Size = UDim2.new(1, 0, 0, 80)
+    lastInfoLabel.Position = UDim2.new(0, 0, 0, 284)
+    lastInfoLabel.BackgroundTransparency = 1
+    lastInfoLabel.Text = "Last Offset: N/A\nLast HitPos: N/A\nTracer: " .. (cfg.tracerEnabled and "ON" or "OFF") .. "  SkipFriends: " .. (cfg.skipFriends and "ON" or "OFF")
+    lastInfoLabel.Font = Enum.Font.SourceSans
+    lastInfoLabel.TextSize = 12
+    lastInfoLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    lastInfoLabel.TextXAlignment = Enum.TextXAlignment.Left
+    lastInfoLabel.Parent = slidersParent
+
+    -- Canvas size
+    local canvasH = (#widgets + 4) * 52 + 8
+    slidersParent.CanvasSize = UDim2.new(0, 0, 0, canvasH)
+
+    -- Collapse/hide logic
+    local collapsed = false
+    toggleBtn.MouseButton1Click:Connect(function()
+        collapsed = not collapsed
+        if collapsed then
+            content.Visible = false
+            toggleBtn.Text = "Show"
+            main.Size = UDim2.new(0, 140, 0, 28)
+            title.Position = UDim2.new(0, 6, 0, 0)
+            title.TextXAlignment = Enum.TextXAlignment.Left
+        else
+            content.Visible = true
+            toggleBtn.Text = "Hide"
+            main.Size = UDim2.new(0, 340, 0, 320)
+            title.Position = UDim2.new(0, 0, 0, 0)
+            title.TextXAlignment = Enum.TextXAlignment.Center
+        end
+    end)
+
+    -- Dragging: use UserInputService to avoid InputObject invalid event usage
+    local dragging = false
+    local dragInput = nil
+    local dragStart = Vector2.new()
+    local startPos = main.Position
+
+    title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragInput = input
+            dragStart = input.Position
+            startPos = main.Position
+        end
+    end)
+
+    local function onInputChanged(input)
+        if dragging and dragInput and input == dragInput then
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                local delta = input.Position - dragStart
+                main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end
+    end
+
+    local function onInputEnded(input)
+        if dragging and input == dragInput then
+            dragging = false
+            dragInput = nil
+        end
+    end
+
+    UserInputService.InputChanged:Connect(onInputChanged)
+    UserInputService.InputEnded:Connect(onInputEnded)
+
+    return screen, lastInfoLabel
+end
+
+local gui, lastInfoLabel = setupGui()
+
+-- Tracer (purple) and impact visuals
+local function spawnTracer(origin, hitPosition, opts)
+    -- Respect tracer enabled flag
+    if not cfg.tracerEnabled then return end
+
+    opts = opts or {}
+    local color = opts.Color or cfg.tracerColor
+    local thickness = opts.Thickness or cfg.tracerThickness
+    local lifetime = opts.Lifetime or cfg.tracerLifetime -- 默认现在为 30 秒
+
+    local dist = (hitPosition - origin).Magnitude
+    if dist <= 0 then return end
+
+    local tracer = Instance.new("Part")
+    tracer.Name = "BulletTracer"
+    tracer.Anchored = true
+    tracer.CanCollide = false
+    tracer.Size = Vector3.new(thickness, thickness, dist)
+    tracer.Material = Enum.Material.Neon
+    tracer.Color = color
+    tracer.CastShadow = false
+    tracer.Transparency = 0
+    tracer.CFrame = CFrame.new(origin, hitPosition) * CFrame.new(0, 0, -dist / 2)
+    tracer.Parent = workspace
+
+    local tween = TweenService:Create(tracer, TweenInfo.new(0.25), {Transparency = 0.7})
+    tween:Play()
+    Debris:AddItem(tracer, lifetime)
+end
+
+local function spawnImpactEffect(position)
+    local p = Instance.new("Part")
+    p.Size = Vector3.new(0.3, 0.3, 0.3)
+    p.Anchored = true
+    p.CanCollide = false
+    p.Material = Enum.Material.Neon
+    p.Color = Color3.fromRGB(255, 180, 60)
+    p.CFrame = CFrame.new(position)
+    p.Parent = workspace
+    Debris:AddItem(p, 0.7)
+end
+
+-- Path clear checker (ring samples)
+local function isPathClearStrict(origin, targetPos, targetCharacter, sampleRadius, sampleCount)
+    sampleRadius = sampleRadius or cfg.sampleRadius
+    sampleCount = sampleCount or cfg.sampleCount
+
+    local dir = targetPos - origin
+    local dist = dir.Magnitude
+    if dist <= 0 then return false end
+    local dirUnit = dir.Unit
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = { lp.Character }
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.IgnoreWater = true
+
+    local centerHit = workspace:Raycast(origin, dir, rayParams)
+    if centerHit then
+        if not centerHit.Instance:IsDescendantOf(targetCharacter) then
+            return false
+        end
+    end
+
+    local upGuess = Vector3.new(0, 1, 0)
+    local right = dirUnit:Cross(upGuess)
+    if right.Magnitude < 1e-3 then
+        upGuess = Vector3.new(1, 0, 0)
+        right = dirUnit:Cross(upGuess)
+    end
+    right = right.Unit
+    local up = right:Cross(dirUnit).Unit
+
+    for i = 0, sampleCount - 1 do
+        local angle = (i / sampleCount) * math.pi * 2
+        local offset = right * (math.cos(angle) * sampleRadius) + up * (math.sin(angle) * sampleRadius)
+        local sampleOrigin = origin + offset
+        local sampleDir = targetPos - sampleOrigin
+        if sampleDir.Magnitude > 0.001 then
+            local hit = workspace:Raycast(sampleOrigin, sampleDir, rayParams)
+            if hit then
+                if not hit.Instance:IsDescendantOf(targetCharacter) then
+                    return false
+                end
+            end
+        end
+    end
+
+    return true
+end
+
+-- Resolve with penetration logic
+local function resolveHitWithPenetration(origin, targetPos, targetCharacter)
+    local dir = targetPos - origin
+    local totalDist = dir.Magnitude
+    if totalDist <= 0 then return nil end
+    local dirUnit = dir.Unit
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = { lp.Character }
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.IgnoreWater = true
+
+    local currentOrigin = origin
+    local penetratedSum = 0
+    local maxThickness = cfg.maxThickness
+    local step = cfg.penetrationStep
+
+    while true do
+        local remainingDir = targetPos - currentOrigin
+        if remainingDir.Magnitude <= 0.01 then
+            return {hit = true, hitPosition = targetPos, hitInstance = targetCharacter:FindFirstChild("Head"), hitHumanoid = targetCharacter:FindFirstChildOfClass("Humanoid"), isHeadshot = true}
+        end
+
+        local result = workspace:Raycast(currentOrigin, remainingDir, rayParams)
+        if not result then
+            return {hit = true, hitPosition = targetPos, hitInstance = targetCharacter:FindFirstChild("Head"), hitHumanoid = targetCharacter:FindFirstChildOfClass("Humanoid"), isHeadshot = true}
+        end
+
+        if result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+            local isHeadshot = result.Instance.Name:lower():match("head") ~= nil
+            local mdl = result.Instance:FindFirstAncestorOfClass("Model")
+            local hum = mdl and mdl:FindFirstChildOfClass("Humanoid") or targetCharacter:FindFirstChildOfClass("Humanoid")
+            return {hit = true, hitPosition = result.Position, hitInstance = result.Instance, hitHumanoid = hum, isHeadshot = isHeadshot}
+        end
+
+        if not cfg.penetrationEnabled then
+            return {hit = false, hitPosition = result.Position, hitInstance = result.Instance, hitHumanoid = nil, isHeadshot = false}
+        end
+
+        local exitFound = false
+        local exitPos = nil
+        local pos = result.Position + dirUnit * (step * 0.5)
+        local overlapParams = OverlapParams.new()
+        overlapParams.FilterDescendantsInstances = { lp.Character }
+        overlapParams.FilterType = Enum.RaycastFilterType.Blacklist
+        local maxSteps = math.ceil((maxThickness - penetratedSum) / step)
+        if maxSteps <= 0 then
+            return {hit = false, hitPosition = result.Position, hitInstance = result.Instance, hitHumanoid = nil, isHeadshot = false}
+        end
+
+        for i = 1, maxSteps do
+            local parts = workspace:GetPartBoundsInRadius(pos, step * 0.4, overlapParams)
+            local insideSolid = false
+            if parts and #parts > 0 then
+                for _, part in ipairs(parts) do
+                    if part and part.CanCollide and not part:IsDescendantOf(targetCharacter) then
+                        insideSolid = true
+                        break
+                    end
+                end
+            end
+            if not insideSolid then
+                exitFound = true
+                exitPos = pos
+                break
+            end
+            pos = pos + dirUnit * step
+        end
+
+        if not exitFound then
+            return {hit = false, hitPosition = result.Position, hitInstance = result.Instance, hitHumanoid = nil, isHeadshot = false}
+        end
+
+        penetratedSum = penetratedSum + (exitPos - result.Position).Magnitude
+        if penetratedSum > maxThickness then
+            return {hit = false, hitPosition = result.Position, hitInstance = result.Instance, hitHumanoid = nil, isHeadshot = false}
+        end
+
+        currentOrigin = exitPos + dirUnit * 0.01
+    end
+end
+
+-- auto adjust helper (vertical & side micro-adjust)
+local function autoAdjustCandidate(rootPos, side, fwdOffset, initHeight, rightVec, forwardVec, leftLimit, rightLimit, overlapParams, rayParams)
+    local maxExtra = cfg.autoAdjustMaxExtraUp or 8
+    local stepH = cfg.autoAdjustVerticalStep or 0.5 -- 使用更细的步进以提高找到合适高度的概率
+    for dh = 0, maxExtra, stepH do
+        local h = initHeight + dh
+        if h > 40 then break end
+        local cand = rootPos + Vector3.new(0, h, 0) + rightVec * side + forwardVec * fwdOffset
+        local nearby = workspace:GetPartBoundsInRadius(cand, 0.6, overlapParams)
+        local insideSolid = false
+        if nearby and #nearby > 0 then
+            for _, part in ipairs(nearby) do
+                if part and part.CanCollide then
+                    insideSolid = true
+                    break
+                end
+            end
+        end
+        if not insideSolid then
+            local upHit = workspace:Raycast(cand, Vector3.new(0, 1.6, 0), rayParams)
+            if not upHit then
+                return cand, h, side
+            end
+        end
+    end
+
+    for dh = stepH, math.min(initHeight, 6), stepH do
+        local h = initHeight - dh
+        if h < 0 then break end
+        local cand = rootPos + Vector3.new(0, h, 0) + rightVec * side + forwardVec * fwdOffset
+        local nearby = workspace:GetPartBoundsInRadius(cand, 0.6, overlapParams)
+        local insideSolid = false
+        if nearby and #nearby > 0 then
+            for _, part in ipairs(nearby) do
+                if part and part.CanCollide then
+                    insideSolid = true
+                    break
+                end
+            end
+        end
+        if not insideSolid then
+            local upHit = workspace:Raycast(cand, Vector3.new(0, 1.6, 0), rayParams)
+            if not upHit then
+                return cand, h, side
+            end
+        end
+    end
+
+    local maxSideAdjust = math.max(leftLimit, rightLimit)
+    local stepSide = cfg.autoAdjustSideStep or 2
+    for s = stepSide, maxSideAdjust, stepSide do
+        local candidatesides = {}
+        if side > 0 then table.insert(candidatesides, math.max(0, side - s)) end
+        if side < 0 then table.insert(candidatesides, math.min(0, side + s)) end
+        table.insert(candidatesides, side + s)
+        table.insert(candidatesides, side - s)
+        for _, newSide in ipairs(candidatesides) do
+            if newSide and newSide >= -leftLimit and newSide <= rightLimit then
+                for dh = 0, maxExtra, stepH do
+                    local h = initHeight + dh
+                    if h > 40 then break end
+                    local cand = rootPos + Vector3.new(0, h, 0) + rightVec * newSide + forwardVec * fwdOffset
+                    local nearby = workspace:GetPartBoundsInRadius(cand, 0.6, overlapParams)
+                    local insideSolid = false
+                    if nearby and #nearby > 0 then
+                        for _, part in ipairs(nearby) do
+                            if part and part.CanCollide then
+                                insideSolid = true
+                                break
+                            end
+                        end
+                    end
+                    if not insideSolid then
+                        local upHit = workspace:Raycast(cand, Vector3.new(0, 1.6, 0), rayParams)
+                        if not upHit then
+                            return cand, h, newSide
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+-- findClearOrigin: 优化偏移尝试顺序：优先尝试小偏移（减少不必要的大偏移），返回 origin, resolved, usedSide, usedHeight, aimOff
+local function findClearOrigin(targetPlayer, height, leftOffset, rightOffset, attempts)
+    attempts = attempts or cfg.attempts
+    height = height or cfg.upOffset
+    leftOffset = leftOffset or cfg.leftOffset
+    rightOffset = rightOffset or cfg.rightOffset
+
+    if not lp or not lp.Character then return nil end
+    local root = lp.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+    if not targetPlayer or not targetPlayer.Character then return nil end
+    local targetHead = targetPlayer.Character:FindFirstChild("Head")
+    if not targetHead then return nil end
+
+    -- use root orientation for consistent offsets
+    local forward = root.CFrame.LookVector
+    local right = root.CFrame.RightVector
+    local up = Vector3.new(0, 1, 0)
+
+    local overlapParams = OverlapParams.new()
+    overlapParams.FilterDescendantsInstances = { lp.Character }
+    overlapParams.FilterType = Enum.RaycastFilterType.Blacklist
+    overlapParams.MaxParts = 16
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = { lp.Character }
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.IgnoreWater = true
+
+    -- 构造候选侧偏，从小到大（优先更小的偏移，减少对准误差）
+    local rawSides = {
+        -leftOffset * 0.25, -leftOffset * 0.5, -leftOffset * 0.75, -leftOffset,
+        0,
+        rightOffset * 0.25, rightOffset * 0.5, rightOffset * 0.75, rightOffset
+    }
+    table.sort(rawSides, function(a, b) return math.abs(a) < math.abs(b) end)
+
+    local function tryCandidateWithAdjust(side, fwdOffset)
+        local rootPos = root.Position
+        local cand, usedH, usedSide = autoAdjustCandidate(rootPos, side, fwdOffset, height, right, forward, leftOffset, rightOffset, overlapParams, rayParams)
+        if not cand then return false end
+
+        local aimOffsets = {}
+        table.insert(aimOffsets, Vector3.new(0, 0, 0))
+        local sampleN = math.max(6, cfg.sampleCount)
+        for j = 1, sampleN do
+            local angle = (j / sampleN) * math.pi * 2
+            local radius = cfg.hitRadius * (0.6 + 0.4 * ((j % 2)))
+            local off = right * math.cos(angle) * radius + up * math.sin(angle) * radius
+            table.insert(aimOffsets, off)
+        end
+
+        for _, off in ipairs(aimOffsets) do
+            local aimPos = targetHead.Position + off
+            local resolved = resolveHitWithPenetration(cand, aimPos, targetPlayer.Character)
+            if resolved and resolved.hit then
+                return true, cand, resolved, usedSide or side, usedH or height, off
+            end
+        end
+        return false
+    end
+
+    for _, side in ipairs(rawSides) do
+        local fwdOffset = 0
+        local ok, candidate, resolved, usedSide, usedH, aimOff = tryCandidateWithAdjust(side, fwdOffset)
+        if ok then
+            return candidate, resolved, usedSide, usedH, aimOff
+        end
+    end
+
+    -- biased random fallback toward edges
+    for i = 1, attempts do
+        local side
+        if math.random() < 0.65 then
+            local mag = (0.6 + 0.4 * math.random()) * (math.random() < 0.5 and leftOffset or rightOffset)
+            side = (math.random() < 0.5) and -mag or mag
+        else
+            side = (math.random() * (leftOffset + rightOffset)) - leftOffset
+            side = math.clamp(side, -leftOffset, rightOffset)
+        end
+        local fwdOffset = (math.random() * 2 - 1) * 5
+        local ok, candidate, resolved, usedSide, usedH, aimOff = tryCandidateWithAdjust(side, fwdOffset)
+        if ok then
+            return candidate, resolved, usedSide, usedH, aimOff
+        end
+    end
+
+    return nil
+end
+
+-- helper: 安全检测是否为好友（使用 pcall 防止异常）
+local function isFriendSafe(player)
+    if not lp or not player then return false end
+    local ok, res = pcall(function()
+        return lp:IsFriendsWith(player.UserId)
+    end)
+    return ok and res
+end
+
+-- target selection: nearest alive (并可跳过好友)
+local function get_target()
+    local target, dist = nil, math.huge
+    if not lp or not lp.Character or not lp.Character:FindFirstChild("HumanoidRootPart") then return nil end
+    local originPos = lp.Character.HumanoidRootPart.Position
+    for _, p in next, Players:GetPlayers() do
+        if p ~= lp and p.Character then
+            -- 跳过好友（若 cfg.skipFriends 打开）
+            if cfg.skipFriends then
+                local friend = isFriendSafe(p)
+                if friend then
+                    -- 跳过
+                else
+                    local head = p.Character:FindFirstChild("Head")
+                    local hum = p.Character:FindFirstChildOfClass("Humanoid")
+                    if head and hum and hum.Health > 0 then
+                        local mag = (originPos - head.Position).Magnitude
+                        if mag < dist then
+                            dist = mag
+                            target = p
+                        end
+                    end
+                end
+            else
+                local head = p.Character:FindFirstChild("Head")
+                local hum = p.Character:FindFirstChildOfClass("Humanoid")
+                if head and hum and hum.Health > 0 then
+                    local mag = (originPos - head.Position).Magnitude
+                    if mag < dist then
+                        dist = mag
+                        target = p
+                    end
+                end
+            end
+        end
+    end
+    return target
+end
+
+-- Main loop
+RunService.Heartbeat:Connect(function()
+    if os.clock() - last_attack < cooldown then return end
+    if not cfg.rageEnabled then return end
+    if not lp or not lp.Character then return end
+    local char = lp.Character
+    local tool = char and char:FindFirstChildOfClass("Tool")
+    if not char or not tool or not char:FindFirstChild("HumanoidRootPart") then return end
+
+    local enemy = get_target()
+    if enemy and enemy.Character and enemy.Character:FindFirstChild("Head") then
+        -- 双重保险：若选择到的 enemy 意外地是好友（race），则再检查一次并跳过
+        if cfg.skipFriends and isFriendSafe(enemy) then
+            return
+        end
+
+        local head = enemy.Character.Head
+
+        local origin, resolved, usedSide, usedHeight, aimOff = findClearOrigin(enemy, cfg.upOffset, cfg.leftOffset, cfg.rightOffset, cfg.attempts)
+        if not origin or not resolved then
+            return
+        end
+
+        if not resolved.hit then return end
+
+        last_attack = os.clock()
+
+        action_sync:FireServer({
+            origin = origin,
+            direction = (resolved.hitPosition - origin).Unit,
+            hitPosition = resolved.hitPosition,
+            hitInstance = resolved.hitInstance,
+            hitHumanoid = resolved.hitHumanoid,
+            IsHeadshot = resolved.isHeadshot or false
+        })
+
+        muzzle_flash:FireServer()
+        fake_bullet:FireServer(CFrame.new(origin, resolved.hitPosition), (resolved.hitPosition - origin).Unit)
+
+        -- spawnTracer 使用 cfg.tracerEnabled 来决定是否生成轨迹
+        spawnTracer(origin, resolved.hitPosition, { Color = cfg.tracerColor, Thickness = cfg.tracerThickness, Lifetime = cfg.tracerLifetime })
+        spawnImpactEffect(resolved.hitPosition)
+
+        -- 更新 GUI lastInfo（格式化）
+        pcall(function()
+            if lastInfoLabel then
+                local rootPos = char.HumanoidRootPart.Position
+                local rel = origin - rootPos
+                local sideVal = math.floor(rel:Dot(char.HumanoidRootPart.CFrame.RightVector) * 100 + 0.5) / 100
+                local upVal   = math.floor(rel.Y * 100 + 0.5) / 100
+                local fwdVal  = math.floor(rel:Dot(char.HumanoidRootPart.CFrame.LookVector) * 100 + 0.5) / 100
+                local hp = resolved.hitPosition
+                lastInfoLabel.Text = string.format("Last Offset -> side: %d  up: %d  fwd: %d\nLast HitPos -> (%.1f, %.1f, %.1f)\nTracer: %s  SkipFriends: %s",
+                    math.floor(sideVal+0.5), math.floor(upVal+0.5), math.floor(fwdVal+0.5), hp.X, hp.Y, hp.Z, (cfg.tracerEnabled and "ON" or "OFF"), (cfg.skipFriends and "ON" or "OFF"))
+            end
+        end)
+    end
+end)
