@@ -1,4 +1,4 @@
--- 完整文件：rage.lua
+-- rage.lua (更新：P 按钮重定义为关闭墙壁检查模式；开启后优先使用扫描并从找到的 spawn 点射击，不再盲目从摄像机射击)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
@@ -8,7 +8,7 @@ local ENABLE_VISUALS = true
 local TEAM_CHECK_DISABLED = false
 
 local DEFAULT_SCAN_INTERVAL = 0.05
-local RAGE_SCAN_INTERVAL = 0.6
+local RAGE_SCAN_INTERVAL = 0.2
 
 local TRACER_DURATION = 20.0
 local TRACER_THICKNESS = 0.08
@@ -31,13 +31,36 @@ local MAX_ATTACK_DISTANCE_DEFAULT = 100
 local MAX_ATTACK_DISTANCE_MAX = 1000
 local maxAttackDistance = MAX_ATTACK_DISTANCE_DEFAULT
 
-local ALLOW_DETECT_BEHIND_WALLS = false
+local ALLOW_DETECT_BEHIND_WALLS = false -- 检测墙后目标（lock）
+local ALLOW_SHOOT_THROUGH_WALLS = false -- 是否允许用 offmap spawn 导致子弹穿墙（旧穿透开关，保留）
 local rageEnabled = false
 local wallCheckEnabled = ALLOW_DETECT_BEHIND_WALLS
 local currentScanInterval = DEFAULT_SCAN_INTERVAL
 
--- 本地生成点到人物的最大允许距离（之前要求的 24）
+-- 新：P 开头按钮现在对应的模式 —— 关闭墙壁检查（Disable wall checks）。
+-- 开启后：优先使用扫描找到 spawnPos，并从该 spawnPos 发射；不会盲目前镜头发射穿墙子弹。
+local DISABLE_WALL_CHECKS_MODE = false
+
+-- 本地生成点到人物的最大允许距离（默认 24，可通过 GUI 调整，最大值 24）
 local LOCAL_SPAWN_DISTANCE_LIMIT = 24
+
+-- 新增：以目标为中心的四向偏移距离（用户之前要求的 19，可通过 GUI 调整，最大值 35）
+local OFFMAP_TARGET_OFFSET = 19
+
+-- 新增配置：打击半径（米），0 为不启用随机偏移（最大 30，可通过 GUI 调整）
+local HIT_RADIUS = 0.0
+
+-- 新增配置：命中头部的概率（0..1），否则命中躯干（HumanoidRootPart）
+local HEAD_HIT_PROB = 0.75
+
+-- 是否启用头部/身体随机（GUI 控制开关）
+local RANDOMIZE_HEAD_BODY = true
+
+-- 采样次数：在 HIT_RADIUS 内采样用于寻找可见采样点（适中）
+local SAMPLE_HIT_CHECKS = 10
+
+-- 新增：是否优先按距离选择目标（可在 GUI 开关）
+local PRIORITIZE_NEARBY = true
 
 math.randomseed(tick() % 2^31)
 
@@ -52,6 +75,22 @@ local function GetDefaultRaycastParams()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { LocalPlayer.Character, workspace.CurrentCamera }
     return params
+end
+
+-- 从 origin 向 (point) 做射线，判断是否命中 targetChar 的任意部件
+local function IsPointVisibleFrom(origin, point, targetChar)
+    if not origin or not point or not targetChar then return false end
+    local dir = point - origin
+    if dir.Magnitude < 0.001 then return true end
+    local params = GetDefaultRaycastParams()
+    local res = workspace:Raycast(origin, dir, params)
+    if not res then
+        return false
+    end
+    if res.Instance and res.Instance:IsDescendantOf(targetChar) then
+        return true
+    end
+    return false
 end
 
 local function IsShielded(char)
@@ -123,7 +162,7 @@ local function HasClearLineToTarget(spawnPos, targetPart)
     local dir = targetPart.Position - spawnPos
     if dir.Magnitude < 0.1 then return true end
     local res = workspace:Raycast(spawnPos, dir, params)
-    -- 如果没有命中任何东西，说明没有阻挡，视作有清晰直线
+    -- 如果没有命中任何东西，说明没有阻挡，视作有清晰直线（不过通常不会发生，因为目标在路径上）
     if not res then
         return true
     end
@@ -135,6 +174,17 @@ local function HasClearLineToTarget(spawnPos, targetPart)
         end
     end
     return false
+end
+
+-- 用于在球体内生成均匀的随机偏移向量
+local function RandomVectorInSphere(radius)
+    if radius <= 0 then return Vector3.new(0,0,0) end
+    local v
+    repeat
+        v = Vector3.new((math.random()*2-1),(math.random()*2-1),(math.random()*2-1))
+    until v.Magnitude > 0
+    local scale = math.pow(math.random(), 1/3) * radius
+    return v.Unit * scale
 end
 
 local function SpawnTracer(startPos, endPos)
@@ -213,10 +263,11 @@ local function GenerateLocalCandidatePoints(centerX, centerZ, radius, edgeSteps)
     return pts
 end
 
+-- 返回 spawnPos, groundY
 local function FindSpawnPositionForTarget_Local(targetPart, maxAttempts, localRadius)
-    if not targetPart or not LocalPlayer.Character then return nil end
+    if not targetPart or not LocalPlayer.Character then return nil, nil end
     local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
+    if not hrp then return nil, nil end
     local px, pz = hrp.Position.X, hrp.Position.Z
 
     -- 限制本地搜索半径为 LOCAL_SPAWN_DISTANCE_LIMIT（用户要求）
@@ -233,7 +284,7 @@ local function FindSpawnPositionForTarget_Local(targetPart, maxAttempts, localRa
             local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
             if (spawnPos - hrp.Position).Magnitude <= localRadius then
                 if HasClearLineToTarget(spawnPos, targetPart) then
-                    return spawnPos
+                    return spawnPos, groundPos.Y
                 end
             end
         end
@@ -250,15 +301,16 @@ local function FindSpawnPositionForTarget_Local(targetPart, maxAttempts, localRa
             local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
             if (spawnPos - hrp.Position).Magnitude <= localRadius then
                 if HasClearLineToTarget(spawnPos, targetPart) then
-                    return spawnPos
+                    return spawnPos, groundPos.Y
                 end
             end
         end
     end
 
-    return nil
+    return nil, nil
 end
 
+-- 返回 spawnPos, groundY
 local function FindSpawnPositionForTarget_Global(targetPart, maxAttempts)
     local attempts = 0
     local function globalCandidates()
@@ -285,7 +337,7 @@ local function FindSpawnPositionForTarget_Global(targetPart, maxAttempts)
         if groundPos then
             local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
             if HasClearLineToTarget(spawnPos, targetPart) then
-                return spawnPos
+                return spawnPos, groundPos.Y
             end
         end
     end
@@ -298,12 +350,62 @@ local function FindSpawnPositionForTarget_Global(targetPart, maxAttempts)
         if groundPos then
             local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
             if HasClearLineToTarget(spawnPos, targetPart) then
-                return spawnPos
+                return spawnPos, groundPos.Y
             end
         end
     end
 
-    return nil
+    return nil, nil
+end
+
+-- 改进版：返回 spawnPos, groundY（或 nil, nil）
+-- 扩展采样角度与步距，按评分选最优 spawn，修复左右采样稀少问题
+local function FindSpawnPositionAroundTargetOffsets(targetPart, offsetDist, maxAttempts)
+    if not targetPart then return nil, nil end
+    local headPos = targetPart.Position
+    -- 配置：角度数与步距数（可调整）
+    local anglesCount = 8 -- 八方向采样（包括左右与对角）
+    local radiusSteps = 3 -- 每个方向 3 步（从近到远）
+    local attempts = 0
+    local best = nil
+    local bestScore = math.huge
+
+    local hrp = nil
+    if LocalPlayer and LocalPlayer.Character then
+        hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    end
+
+    for step = 1, radiusSteps do
+        local rFrac = step / radiusSteps
+        local r = offsetDist * rFrac
+        for i = 0, anglesCount - 1 do
+            if attempts >= maxAttempts then break end
+            attempts = attempts + 1
+            local angle = (i / anglesCount) * math.pi * 2
+            local gx = headPos.X + math.cos(angle) * r
+            local gz = headPos.Z + math.sin(angle) * r
+            local groundPos = GroundPointAtXZ(gx, gz, SEARCH_HEIGHT)
+            if groundPos then
+                local spawnPos = groundPos + Vector3.new(0, SPAWN_VERTICAL_OFFSET, 0)
+                if HasClearLineToTarget(spawnPos, targetPart) then
+                    -- 计算评分：优先更近的 spawn（到本地 hrp），并微量偏好地面更高的点（减分）
+                    local spawnDist = hrp and (spawnPos - hrp.Position).Magnitude or r
+                    local heightBias = (groundPos.Y - SEARCH_HEIGHT) * -0.1 -- 地面越高 bias 越负（更优）
+                    local score = spawnDist + heightBias
+                    if score < bestScore then
+                        bestScore = score
+                        best = {pos = spawnPos, groundY = groundPos.Y, dist = spawnDist}
+                    end
+                end
+            end
+        end
+        if attempts >= maxAttempts then break end
+    end
+
+    if best then
+        return best.pos, best.groundY
+    end
+    return nil, nil
 end
 
 local function CreateControlGui()
@@ -315,7 +417,9 @@ local function CreateControlGui()
 
     local frame = Instance.new("Frame")
     frame.Name = "ControlFrame"
-    frame.Size = UDim2.new(0, 260, 0, 120)
+    local EXPANDED_SIZE = UDim2.new(0, 260, 0, 396) -- 扩大以容纳 Max Distance 滑块
+    local COLLAPSED_SIZE = UDim2.new(0, 260, 0, 40)
+    frame.Size = EXPANDED_SIZE
     frame.Position = UDim2.new(1, -270, 0, 10)
     frame.BackgroundTransparency = 0.25
     frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
@@ -324,19 +428,32 @@ local function CreateControlGui()
     frame.Active = true
 
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 20)
-    title.Position = UDim2.new(0, 0, 0, 0)
+    title.Size = UDim2.new(1, -120, 0, 20)
+    title.Position = UDim2.new(0, 8, 0, 6)
     title.BackgroundTransparency = 1
     title.Text = "AutoFire Controls"
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.SourceSansBold
     title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = frame
+
+    -- 隐藏/展开按钮
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.Name = "ToggleBtn"
+    toggleBtn.Size = UDim2.new(0, 28, 0, 28)
+    toggleBtn.Position = UDim2.new(1, -36, 0, 6)
+    toggleBtn.Text = "—"
+    toggleBtn.Font = Enum.Font.SourceSansSemibold
+    toggleBtn.TextSize = 18
+    toggleBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(80,80,80)
+    toggleBtn.Parent = frame
 
     local rageBtn = Instance.new("TextButton")
     rageBtn.Name = "RageBtn"
     rageBtn.Size = UDim2.new(0, 100, 0, 32)
-    rageBtn.Position = UDim2.new(0, 8, 0, 24)
+    rageBtn.Position = UDim2.new(0, 8, 0, 36)
     rageBtn.Text = "Rage: OFF"
     rageBtn.Font = Enum.Font.SourceSansSemibold
     rageBtn.TextSize = 14
@@ -347,7 +464,7 @@ local function CreateControlGui()
     local wallBtn = Instance.new("TextButton")
     wallBtn.Name = "WallBtn"
     wallBtn.Size = UDim2.new(0, 100, 0, 32)
-    wallBtn.Position = UDim2.new(0, 132, 0, 24)
+    wallBtn.Position = UDim2.new(0, 132, 0, 36)
     wallBtn.Text = "Wall: OFF"
     wallBtn.Font = Enum.Font.SourceSansSemibold
     wallBtn.TextSize = 14
@@ -355,94 +472,172 @@ local function CreateControlGui()
     wallBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
     wallBtn.Parent = frame
 
-    local sliderLabel = Instance.new("TextLabel")
-    sliderLabel.Name = "SliderLabel"
-    sliderLabel.Size = UDim2.new(0, 240, 0, 18)
-    sliderLabel.Position = UDim2.new(0, 8, 0, 64)
-    sliderLabel.BackgroundTransparency = 1
-    sliderLabel.Text = "Max Distance: "..tostring(maxAttackDistance)
-    sliderLabel.TextColor3 = Color3.fromRGB(220,220,220)
-    sliderLabel.Font = Enum.Font.SourceSans
-    sliderLabel.TextSize = 14
-    sliderLabel.TextXAlignment = Enum.TextXAlignment.Left
-    sliderLabel.Parent = frame
+    -- P 按钮现在用于切换关闭墙壁检查模式（Disable Wall Checks Mode）
+    local penBtn = Instance.new("TextButton")
+    penBtn.Name = "PenetrateBtn"
+    penBtn.Size = UDim2.new(0, 100, 0, 32)
+    penBtn.Position = UDim2.new(0, 8, 0, 76)
+    penBtn.Text = "P: WallChk OFF"
+    penBtn.Font = Enum.Font.SourceSansSemibold
+    penBtn.TextSize = 14
+    penBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    penBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    penBtn.Parent = frame
 
-    local sliderBar = Instance.new("Frame")
-    sliderBar.Name = "SliderBar"
-    sliderBar.Size = UDim2.new(0, 240, 0, 12)
-    sliderBar.Position = UDim2.new(0, 8, 0, 84)
-    sliderBar.BackgroundColor3 = Color3.fromRGB(60,60,60)
-    sliderBar.BorderSizePixel = 0
-    sliderBar.Parent = frame
+    -- Prioritize Nearby 开关
+    local prioritizeBtn = Instance.new("TextButton")
+    prioritizeBtn.Name = "PrioritizeBtn"
+    prioritizeBtn.Size = UDim2.new(0, 140, 0, 24)
+    prioritizeBtn.Position = UDim2.new(0, 116, 0, 76)
+    prioritizeBtn.Text = "Prioritize Nearby: ON"
+    prioritizeBtn.Font = Enum.Font.SourceSans
+    prioritizeBtn.TextSize = 12
+    prioritizeBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    prioritizeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    prioritizeBtn.Parent = frame
 
-    local sliderFill = Instance.new("Frame")
-    sliderFill.Name = "SliderFill"
-    sliderFill.Size = UDim2.new(maxAttackDistance / MAX_ATTACK_DISTANCE_MAX, 0, 1, 0)
-    sliderFill.Position = UDim2.new(0, 0, 0, 0)
-    sliderFill.BackgroundColor3 = Color3.fromRGB(200,100,20)
-    sliderFill.BorderSizePixel = 0
-    sliderFill.Parent = sliderBar
+    -- 头/躯干随机开关（Random Head/Body）
+    local hbRandomBtn = Instance.new("TextButton")
+    hbRandomBtn.Name = "HBRandomBtn"
+    hbRandomBtn.Size = UDim2.new(0, 140, 0, 24)
+    hbRandomBtn.Position = UDim2.new(0, 116, 0, 104)
+    hbRandomBtn.Text = "Random Head/Body: ON"
+    hbRandomBtn.Font = Enum.Font.SourceSans
+    hbRandomBtn.TextSize = 12
+    hbRandomBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    hbRandomBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    hbRandomBtn.Parent = frame
 
-    local knob = Instance.new("Frame")
-    knob.Name = "Knob"
-    knob.Size = UDim2.new(0, 16, 0, 16)
-    knob.BackgroundColor3 = Color3.fromRGB(255,255,255)
-    knob.Parent = sliderBar
+    -- 下面区域为滑块区（当折叠时会隐藏）
+    local slidersStartY = 140
 
-    sliderBar:GetPropertyChangedSignal("AbsoluteSize"):Wait()
-    knob:GetPropertyChangedSignal("AbsoluteSize"):Wait()
+    -- 通用滑块创建器
+    local function createSlider(parent, name, yOffset, labelText, minVal, maxVal, initialVal, decimals, onChange)
+        decimals = decimals or 0
+        local label = Instance.new("TextLabel")
+        label.Name = name.."Label"
+        label.Size = UDim2.new(0, 240, 0, 18)
+        label.Position = UDim2.new(0, 8, 0, yOffset)
+        label.BackgroundTransparency = 1
+        label.Text = labelText.." : "..tostring(initialVal)
+        label.TextColor3 = Color3.fromRGB(220,220,220)
+        label.Font = Enum.Font.SourceSans
+        label.TextSize = 14
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = parent
 
-    local function SetSliderValue(val)
-        val = clamp(val, 0, MAX_ATTACK_DISTANCE_MAX)
-        maxAttackDistance = math.floor(val + 0.5)
-        sliderLabel.Text = "Max Distance: "..tostring(maxAttackDistance)
-        local t = maxAttackDistance / MAX_ATTACK_DISTANCE_MAX
-        sliderFill.Size = UDim2.new(t, 0, 1, 0)
-        local px = t * (sliderBar.AbsoluteSize.X - knob.AbsoluteSize.X)
-        knob.Position = UDim2.new(0, px, 0, -2)
+        local sliderBar = Instance.new("Frame")
+        sliderBar.Name = name.."Bar"
+        sliderBar.Size = UDim2.new(0, 240, 0, 12)
+        sliderBar.Position = UDim2.new(0, 8, 0, yOffset + 20)
+        sliderBar.BackgroundColor3 = Color3.fromRGB(60,60,60)
+        sliderBar.BorderSizePixel = 0
+        sliderBar.Parent = parent
+
+        local sliderFill = Instance.new("Frame")
+        sliderFill.Name = name.."Fill"
+        sliderFill.Size = UDim2.new((initialVal - minVal) / math.max(1, (maxVal - minVal)), 0, 1, 0)
+        sliderFill.Position = UDim2.new(0, 0, 0, 0)
+        sliderFill.BackgroundColor3 = Color3.fromRGB(200,100,20)
+        sliderFill.BorderSizePixel = 0
+        sliderFill.Parent = sliderBar
+
+        local knob = Instance.new("Frame")
+        knob.Name = name.."Knob"
+        knob.Size = UDim2.new(0, 16, 0, 16)
+        knob.BackgroundColor3 = Color3.fromRGB(255,255,255)
+        knob.Parent = sliderBar
+
+        -- wait for sizes to be ready
+        sliderBar:GetPropertyChangedSignal("AbsoluteSize"):Wait()
+        knob:GetPropertyChangedSignal("AbsoluteSize"):Wait()
+
+        local function setValue(val)
+            val = clamp(val, minVal, maxVal)
+            local displayVal = val
+            if decimals > 0 then
+                local mul = 10 ^ decimals
+                displayVal = math.floor(val * mul + 0.5) / mul
+            else
+                displayVal = math.floor(val + 0.5)
+            end
+            local t = (displayVal - minVal) / math.max(1, (maxVal - minVal))
+            sliderFill.Size = UDim2.new(t, 0, 1, 0)
+            local px = t * (sliderBar.AbsoluteSize.X - knob.AbsoluteSize.X)
+            knob.Position = UDim2.new(0, px, 0, -2)
+            label.Text = labelText.." : "..tostring(displayVal)
+            if onChange then
+                onChange(displayVal)
+            end
+        end
+
+        setValue(initialVal)
+
+        local dragging = false
+        local function updateValueFromInput(x)
+            local abs = sliderBar.AbsolutePosition
+            local width = sliderBar.AbsoluteSize.X
+            local localX = x - abs.X
+            local t = localX / math.max(1, width)
+            t = clamp(t, 0, 1)
+            local val = minVal + t * (maxVal - minVal)
+            setValue(val)
+        end
+
+        knob.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+
+        sliderBar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                updateValueFromInput(input.Position.X)
+                dragging = true
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                updateValueFromInput(input.Position.X)
+            end
+        end)
+
+        return {
+            label = label,
+            bar = sliderBar,
+            fill = sliderFill,
+            knob = knob,
+            setValue = setValue,
+        }
     end
 
-    SetSliderValue(maxAttackDistance)
+    -- 创建多个滑块（位置按顺序堆叠）
+    local y = slidersStartY
+    -- 新增：Max Distance 滑块（加回）
+    local maxDistanceSlider = createSlider(frame, "MaxDistance", y, "Max Distance", 0, MAX_ATTACK_DISTANCE_MAX, maxAttackDistance, 0, function(v) maxAttackDistance = v end)
+    y = y + 36
 
-    local dragging = false
-    local function updateValueFromInput(x)
-        local abs = sliderBar.AbsolutePosition
-        local width = sliderBar.AbsoluteSize.X
-        local localX = x - abs.X
-        local t = localX / math.max(1, width)
-        t = clamp(t, 0, 1)
-        SetSliderValue(t * MAX_ATTACK_DISTANCE_MAX)
-    end
+    local targetOffsetSlider = createSlider(frame, "TargetOffset", y, "Target Offset", 0, 35, OFFMAP_TARGET_OFFSET, 0, function(v) OFFMAP_TARGET_OFFSET = v end)
+    y = y + 36
+    local hitRadiusSlider = createSlider(frame, "HitRadius", y, "Hit Radius", 0, 30, HIT_RADIUS, 1, function(v) HIT_RADIUS = v end)
+    y = y + 36
+    local spawnHeightSlider = createSlider(frame, "SpawnHeight", y, "Spawn Height", 0, 30, SPAWN_VERTICAL_OFFSET, 0, function(v) SPAWN_VERTICAL_OFFSET = v end)
+    y = y + 36
+    local lrLimitSlider = createSlider(frame, "LRLimit", y, "Left/Right Limit", 0, 24, LOCAL_SPAWN_DISTANCE_LIMIT, 0, function(v) LOCAL_SPAWN_DISTANCE_LIMIT = v end)
+    y = y + 36
 
-    knob.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
-
-    sliderBar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            updateValueFromInput(input.Position.X)
-            dragging = true
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            updateValueFromInput(input.Position.X)
-        end
-    end)
-
+    -- 点击事件绑定（和以前逻辑一致）
     rageBtn.MouseButton1Click:Connect(function()
         rageEnabled = not rageEnabled
         if rageEnabled then
@@ -472,6 +667,76 @@ local function CreateControlGui()
         end
     end)
 
+    penBtn.MouseButton1Click:Connect(function()
+        DISABLE_WALL_CHECKS_MODE = not DISABLE_WALL_CHECKS_MODE
+        if DISABLE_WALL_CHECKS_MODE then
+            penBtn.Text = "P: WallChk ON"
+            penBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+        else
+            penBtn.Text = "P: WallChk OFF"
+            penBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        end
+    end)
+
+    prioritizeBtn.MouseButton1Click:Connect(function()
+        PRIORITIZE_NEARBY = not PRIORITIZE_NEARBY
+        if PRIORITIZE_NEARBY then
+            prioritizeBtn.Text = "Prioritize Nearby: ON"
+            prioritizeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        else
+            prioritizeBtn.Text = "Prioritize Nearby: OFF"
+            prioritizeBtn.BackgroundColor3 = Color3.fromRGB(120, 60, 60)
+        end
+    end)
+
+    hbRandomBtn.MouseButton1Click:Connect(function()
+        RANDOMIZE_HEAD_BODY = not RANDOMIZE_HEAD_BODY
+        if RANDOMIZE_HEAD_BODY then
+            hbRandomBtn.Text = "Random Head/Body: ON"
+            hbRandomBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        else
+            hbRandomBtn.Text = "Random Head/Body: OFF"
+            hbRandomBtn.BackgroundColor3 = Color3.fromRGB(120, 60, 60)
+        end
+    end)
+
+    local expanded = true
+    toggleBtn.MouseButton1Click:Connect(function()
+        expanded = not expanded
+        if expanded then
+            toggleBtn.Text = "—"
+            frame.Size = EXPANDED_SIZE
+            -- 显示滑块
+            for _, child in ipairs(frame:GetChildren()) do
+                if child.Name:match("Label") or child.Name:match("Bar") or child.Name:match("Fill") or child.Name:match("Knob") then
+                    child.Visible = true
+                end
+            end
+            -- 保证按钮也可见
+            rageBtn.Visible = true
+            wallBtn.Visible = true
+            penBtn.Visible = true
+            prioritizeBtn.Visible = true
+            hbRandomBtn.Visible = true
+        else
+            toggleBtn.Text = "+"
+            frame.Size = COLLAPSED_SIZE
+            -- 隐藏滑块与下方按钮（保留标题与 toggle）
+            for _, child in ipairs(frame:GetChildren()) do
+                if child ~= title and child ~= toggleBtn then
+                    child.Visible = (child == title or child == toggleBtn)
+                end
+            end
+            -- 让 rage/wall/pen/prioritize/hbRandom 在折叠时也隐藏（保持界面简洁）
+            rageBtn.Visible = false
+            wallBtn.Visible = false
+            penBtn.Visible = false
+            prioritizeBtn.Visible = false
+            hbRandomBtn.Visible = false
+        end
+    end)
+
+    -- 拖拽窗口逻辑（保持原样）
     local draggingFrame = false
     local dragStart, startPos = nil, nil
     local function onInputBegan(input)
@@ -523,21 +788,15 @@ task.spawn(function()
                         local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
                         if not hrp then
                         else
-                            local best = nil
-
-                            -- 单次遍历：同时记录最佳“可见目标”（bestVisible）和最佳“任意目标”（bestAny）
-                            local bestVisible = nil
-                            local bestVisibleDist = math.huge
-                            local bestAny = nil
-                            local bestAnyDist = math.huge
-
+                            local candidates = {}
                             local camPos = cam.CFrame.Position
-                            -- 遍历 workspace 中的 Humanoid（仅一次）
+
+                            -- 遍历 workspace 中的 Humanoid（仅一次），收集候选
                             for _, desc in pairs(workspace:GetDescendants()) do
                                 if desc:IsA("Humanoid") and desc.Health > 0 and desc.Parent ~= LocalPlayer.Character then
                                     local char = desc.Parent
                                     if IsShielded(char) then
-                                        -- 被护盾的跳过
+                                        -- 被护盾的跳过（循环直接跳过）
                                     else
                                         local targetPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
                                         if targetPart then
@@ -551,19 +810,8 @@ task.spawn(function()
                                             if not skipForTeam then
                                                 local distToPlayer = (targetPart.Position - hrp.Position).Magnitude
                                                 if distToPlayer <= maxAttackDistance then
-                                                    -- 先做距离判断，再做射线判断，减少射线次数
                                                     local visible = IsVisible(targetPart, camPos)
-                                                    if visible then
-                                                        if distToPlayer < bestVisibleDist then
-                                                            bestVisibleDist = distToPlayer
-                                                            bestVisible = {h = desc, p = char, head = targetPart}
-                                                        end
-                                                    end
-                                                    -- 无论是否可见，都可以作为“任意目标”（用于无视墙模式）
-                                                    if distToPlayer < bestAnyDist then
-                                                        bestAnyDist = distToPlayer
-                                                        bestAny = {h = desc, p = char, head = targetPart}
-                                                    end
+                                                    table.insert(candidates, {h = desc, p = char, head = targetPart, dist = distToPlayer, visible = visible})
                                                 end
                                             end
                                         end
@@ -571,70 +819,250 @@ task.spawn(function()
                                 end
                             end
 
-                            if bestVisible then
-                                best = bestVisible
-                            elseif ALLOW_DETECT_BEHIND_WALLS then
-                                best = bestAny
+                            -- 从候选中选出最优目标（基于 PRIORITIZE_NEARBY 开关）
+                            local best = nil
+                            local bestScore = math.huge
+                            for _, c in ipairs(candidates) do
+                                local score = c.dist
+                                if PRIORITIZE_NEARBY then
+                                    -- 纯距离优先（可见不改变主排序，但仍可作为 tie-breaker）
+                                    if c.visible then score = score * 0.95 end
+                                else
+                                    -- 可见性加权：可见目标折扣，隐蔽目标加重
+                                    if c.visible then
+                                        score = score * 0.6
+                                    else
+                                        score = score * 1.2
+                                    end
+                                end
+                                if score < bestScore then
+                                    bestScore = score
+                                    best = c
+                                end
+                            end
+
+                            local targetWasBehind = false
+
+                            if DISABLE_WALL_CHECKS_MODE then
+                                -- 关闭墙壁检查模式：仍然使用 best（可能是不可见），并假定墙后
+                                if best then
+                                    targetWasBehind = true
+                                end
                             else
-                                best = nil
+                                -- 如果选出的 best 是不可见且允许检测墙后，则标记为墙后
+                                if best and not best.visible and ALLOW_DETECT_BEHIND_WALLS then
+                                    targetWasBehind = true
+                                else
+                                    targetWasBehind = false
+                                end
                             end
 
                             if best then
-                                local headPos = best.head.Position
-                                local tstamp = tick()
-                                local processed = false
+                                -- 额外护盾检查（动态护盾状态也会被跳过）
+                                if IsShielded(best.p) then
+                                    -- 跳过被护盾的目标
+                                else
+                                    local headPos = best.head.Position
+                                    local tstamp = tick()
+                                    local processed = false
 
-                                if OFFMAP_SPAWN_ENABLED then
-                                    local spawnPos = FindSpawnPositionForTarget_Local(best.head, SEARCH_ATTEMPTS, maxAttackDistance)
-                                    if not spawnPos then
-                                        spawnPos = FindSpawnPositionForTarget_Global(best.head, math.floor(SEARCH_ATTEMPTS / 2))
-                                    end
-
-                                    if spawnPos then
-                                        -- 必须在 maxAttackDistance 与 LOCAL_SPAWN_DISTANCE_LIMIT 内
-                                        local spawnDist = (spawnPos - hrp.Position).Magnitude
-                                        if spawnDist <= maxAttackDistance and spawnDist <= LOCAL_SPAWN_DISTANCE_LIMIT then
-                                            local distance = (headPos - spawnPos).Magnitude
-                                            pcall(function() fireRemote:FireServer(tstamp) end)
-                                            pcall(function()
-                                                hitRemote:FireServer(tstamp, {
-                                                    {
-                                                        ["Normal"] = Vector3.new(0,1,0),
-                                                        ["Position"] = headPos,
-                                                        ["Instance"] = best.head,
-                                                        ["Material"] = Enum.Material.Plastic,
-                                                        ["Distance"] = distance
-                                                    }
-                                                })
-                                            end)
-                                            pcall(function()
-                                                SpawnTracer(spawnPos, headPos)
-                                                SpawnHitMarker(headPos)
-                                            end)
-                                            processed = true
+                                    -- 先尝试找到 spawnPos（本地 -> 全局）
+                                    local spawnPos, spawnGroundY = nil, nil
+                                    if OFFMAP_SPAWN_ENABLED then
+                                        spawnPos, spawnGroundY = FindSpawnPositionForTarget_Local(best.head, SEARCH_ATTEMPTS, maxAttackDistance)
+                                        if not spawnPos then
+                                            spawnPos, spawnGroundY = FindSpawnPositionForTarget_Global(best.head, math.floor(SEARCH_ATTEMPTS / 2))
                                         end
                                     end
-                                end
 
-                                if not processed then
-                                    local camPos2 = cam.CFrame.Position
-                                    local distanceCam = (headPos - camPos2).Magnitude
-                                    pcall(function() fireRemote:FireServer(tstamp) end)
-                                    pcall(function()
-                                        hitRemote:FireServer(tstamp, {
-                                            {
-                                                ["Normal"] = Vector3.new(0,1,0),
-                                                ["Position"] = headPos,
-                                                ["Instance"] = best.head,
-                                                ["Material"] = Enum.Material.Plastic,
-                                                ["Distance"] = distanceCam
-                                            }
-                                        })
-                                    end)
-                                    pcall(function()
-                                        SpawnTracer(camPos2, headPos)
-                                        SpawnHitMarker(headPos)
-                                    end)
+                                    -- 若无 spawnPos 并且目标被墙遮挡或关闭墙壁检查模式，使用改进后的四向/多角偏移扫描（更密集）
+                                    if not spawnPos and OFFMAP_SPAWN_ENABLED then
+                                        local tryOffset = (targetWasBehind or DISABLE_WALL_CHECKS_MODE)
+                                        if tryOffset then
+                                            local altPos, altGroundY = FindSpawnPositionAroundTargetOffsets(best.head, OFFMAP_TARGET_OFFSET, 12)
+                                            if altPos then
+                                                spawnPos = altPos
+                                                spawnGroundY = altGroundY
+                                            end
+                                        end
+                                    end
+
+                                    -- 选择实际命中部位（随机头或躯干），并计算实际命中位置（考虑 HIT_RADIUS）
+                                    local headPart = best.p:FindFirstChild("Head")
+                                    local hrpPart = best.p:FindFirstChild("HumanoidRootPart")
+                                    local chosenPart = headPart or hrpPart
+                                    if headPart and hrpPart then
+                                        if RANDOMIZE_HEAD_BODY then
+                                            if math.random() < HEAD_HIT_PROB then
+                                                chosenPart = headPart
+                                            else
+                                                chosenPart = hrpPart
+                                            end
+                                        else
+                                            -- 不随机：始终头部（若存在）
+                                            chosenPart = headPart or hrpPart
+                                        end
+                                    end
+                                    if not chosenPart then
+                                        -- 没有可用的命中部位，跳过本次目标
+                                    else
+                                        local actualHitPos = chosenPart.Position
+                                        if HIT_RADIUS and HIT_RADIUS > 0 then
+                                            actualHitPos = actualHitPos + RandomVectorInSphere(HIT_RADIUS)
+                                        end
+
+                                        -- 优化：如果目标在墙后且不允许穿墙，尝试在 HIT_RADIUS 内采样找可见采样点（优先 spawnPos，再 camera）
+                                        local foundSample = nil
+                                        if targetWasBehind and (not ALLOW_SHOOT_THROUGH_WALLS) and HIT_RADIUS and HIT_RADIUS > 0 then
+                                            local origins = {}
+                                            if spawnPos then table.insert(origins, spawnPos) end
+                                            table.insert(origins, camPos)
+                                            for _, origin in ipairs(origins) do
+                                                for i = 1, SAMPLE_HIT_CHECKS do
+                                                    local samplePos = chosenPart.Position + RandomVectorInSphere(HIT_RADIUS)
+                                                    if IsPointVisibleFrom(origin, samplePos, best.p) then
+                                                        foundSample = {origin = origin, pos = samplePos}
+                                                        break
+                                                    end
+                                                end
+                                                if foundSample then break end
+                                            end
+                                        end
+
+                                        -- 如果在采样中找到了可用点，直接使用该 origin 发射（优先 spawnPos）
+                                        if foundSample then
+                                            local origin = foundSample.origin
+                                            local samplePos = foundSample.pos
+                                            if origin == spawnPos then
+                                                local spawnDist = (spawnPos - hrp.Position).Magnitude
+                                                if spawnDist <= maxAttackDistance and spawnDist <= LOCAL_SPAWN_DISTANCE_LIMIT then
+                                                    local distance = (samplePos - spawnPos).Magnitude
+                                                    pcall(function() fireRemote:FireServer(tstamp) end)
+                                                    pcall(function()
+                                                        hitRemote:FireServer(tstamp, {
+                                                            {
+                                                                ["Normal"] = Vector3.new(0,1,0),
+                                                                ["Position"] = samplePos,
+                                                                ["Instance"] = chosenPart,
+                                                                ["Material"] = Enum.Material.Plastic,
+                                                                ["Distance"] = distance
+                                                            }
+                                                        })
+                                                    end)
+                                                    pcall(function()
+                                                        SpawnTracer(spawnPos, samplePos)
+                                                        SpawnHitMarker(samplePos)
+                                                    end)
+                                                    processed = true
+                                                end
+                                            else
+                                                -- origin 为 camera
+                                                local distanceCam = (samplePos - camPos).Magnitude
+                                                pcall(function() fireRemote:FireServer(tstamp) end)
+                                                pcall(function()
+                                                    hitRemote:FireServer(tstamp, {
+                                                        {
+                                                            ["Normal"] = Vector3.new(0,1,0),
+                                                            ["Position"] = samplePos,
+                                                            ["Instance"] = chosenPart,
+                                                            ["Material"] = Enum.Material.Plastic,
+                                                            ["Distance"] = distanceCam
+                                                        }
+                                                    })
+                                                end)
+                                                pcall(function()
+                                                    SpawnTracer(camPos, samplePos)
+                                                    SpawnHitMarker(samplePos)
+                                                end)
+                                                processed = true
+                                            end
+                                        else
+                                            -- 新行为：当 DISABLE_WALL_CHECKS_MODE 开启时，优先且仅从找到的 spawnPos 发射（避免直接从摄像机对着墙射击）
+                                            if DISABLE_WALL_CHECKS_MODE then
+                                                if spawnPos then
+                                                    local spawnDist = (spawnPos - hrp.Position).Magnitude
+                                                    if spawnDist <= maxAttackDistance and spawnDist <= LOCAL_SPAWN_DISTANCE_LIMIT then
+                                                        local distance = (actualHitPos - spawnPos).Magnitude
+                                                        pcall(function() fireRemote:FireServer(tstamp) end)
+                                                        pcall(function()
+                                                            hitRemote:FireServer(tstamp, {
+                                                                {
+                                                                    ["Normal"] = Vector3.new(0,1,0),
+                                                                    ["Position"] = actualHitPos,
+                                                                    ["Instance"] = chosenPart,
+                                                                    ["Material"] = Enum.Material.Plastic,
+                                                                    ["Distance"] = distance
+                                                                }
+                                                            })
+                                                        end)
+                                                        pcall(function()
+                                                            SpawnTracer(spawnPos, actualHitPos)
+                                                            SpawnHitMarker(actualHitPos)
+                                                        end)
+                                                        processed = true
+                                                    end
+                                                end
+                                                -- 如果没有找到 spawnPos，我们选择不盲目用摄像机射击（避免“光对着墙射击”）。
+                                                -- processed 为 false -> 将跳过该目标本轮发射。
+                                            else
+                                                -- 旧逻辑（保留保守规则与穿透控制）
+                                                local skipOffmapBecauseRule = false
+                                                if targetWasBehind and (not ALLOW_SHOOT_THROUGH_WALLS) and spawnPos and spawnGroundY then
+                                                    local spawnDist = (spawnPos - hrp.Position).Magnitude
+                                                    if math.abs(spawnGroundY - SEARCH_HEIGHT) <= 0.5 or spawnDist <= LOCAL_SPAWN_DISTANCE_LIMIT then
+                                                        skipOffmapBecauseRule = true
+                                                    end
+                                                end
+
+                                                -- 只有在 OFFMAP_SPAWN_ENABLED 并且（目标不是墙后 或 允许穿透）并且没有被保守规则强制跳过时，才使用 offmap spawn 命中
+                                                if spawnPos and OFFMAP_SPAWN_ENABLED and (not targetWasBehind or ALLOW_SHOOT_THROUGH_WALLS) and (not skipOffmapBecauseRule) then
+                                                    local spawnDist = (spawnPos - hrp.Position).Magnitude
+                                                    if spawnDist <= maxAttackDistance and spawnDist <= LOCAL_SPAWN_DISTANCE_LIMIT then
+                                                        local distance = (actualHitPos - spawnPos).Magnitude
+                                                        pcall(function() fireRemote:FireServer(tstamp) end)
+                                                        pcall(function()
+                                                            hitRemote:FireServer(tstamp, {
+                                                                {
+                                                                    ["Normal"] = Vector3.new(0,1,0),
+                                                                    ["Position"] = actualHitPos,
+                                                                    ["Instance"] = chosenPart,
+                                                                    ["Material"] = Enum.Material.Plastic,
+                                                                    ["Distance"] = distance
+                                                                }
+                                                            })
+                                                        end)
+                                                        pcall(function()
+                                                            SpawnTracer(spawnPos, actualHitPos)
+                                                            SpawnHitMarker(actualHitPos)
+                                                        end)
+                                                        processed = true
+                                                    end
+                                                end
+
+                                                -- 未处理（包括：没有 spawn、或 spawn 被保守规则跳过、或目标墙后但不允许穿透）时，使用摄像机原点发射（不会穿墙）
+                                                if not processed then
+                                                    local camPos2 = cam.CFrame.Position
+                                                    local distanceCam = (actualHitPos - camPos2).Magnitude
+                                                    pcall(function() fireRemote:FireServer(tstamp) end)
+                                                    pcall(function()
+                                                        hitRemote:FireServer(tstamp, {
+                                                            {
+                                                                ["Normal"] = Vector3.new(0,1,0),
+                                                                ["Position"] = actualHitPos,
+                                                                ["Instance"] = chosenPart,
+                                                                ["Material"] = Enum.Material.Plastic,
+                                                                ["Distance"] = distanceCam
+                                                            }
+                                                        })
+                                                    end)
+                                                    pcall(function()
+                                                        SpawnTracer(camPos2, actualHitPos)
+                                                        SpawnHitMarker(actualHitPos)
+                                                    end)
+                                                end
+                                            end
+                                        end
+                                    end
                                 end
                             end
                         end
