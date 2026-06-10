@@ -52,6 +52,8 @@ local cfg = {
     useOldScan = false,
     outsideOffsetEnabled = false,
     outsideOffsetDistance = 3,
+    sideDirection = 1,
+    autoAdjustRestoreDelay = 1.0,
 }
 
 local posHistory = {}
@@ -734,11 +736,19 @@ local function findClearOrigin(targetPlayer, upOffset, leftOffset, rightOffset, 
         end
     end
     rawSides = uniq
-    if cfg.preferMaxOffset then
-        table.sort(rawSides, function(a,b) return math.abs(a) > math.abs(b) end)
-    else
-        table.sort(rawSides, function(a,b) return math.abs(a) < math.abs(b) end)
-    end
+
+    table.sort(rawSides, function(a,b)
+        local sa = (a >= 0) and 1 or -1
+        local sb = (b >= 0) and 1 or -1
+        if cfg.sideDirection and sa ~= sb then
+            return sa == cfg.sideDirection
+        end
+        if cfg.preferMaxOffset then
+            return math.abs(a) > math.abs(b)
+        else
+            return math.abs(a) < math.abs(b)
+        end
+    end)
 
     local function tryCandidate(side, fwd)
         local rootPos = root.Position
@@ -766,7 +776,7 @@ local function findClearOrigin(targetPlayer, upOffset, leftOffset, rightOffset, 
 
     local function tryOutsideCandidate()
         if not cfg.outsideOffsetEnabled then return nil end
-        local outsideDist = cfg.outsideOffsetDistance or 3
+        local outsideDist = math.clamp(cfg.outsideOffsetDistance or 3, 0, 40)
         local rootPos = root.Position
         local fwdOffsets = {0, 2, -2}
         local dirVecs = {
@@ -800,7 +810,8 @@ local function findClearOrigin(targetPlayer, upOffset, leftOffset, rightOffset, 
                         if resolved and resolved.hit then
                             local usedSide = 0
                             pcall(function() usedSide = (candPos - rootPos):Dot(right) end)
-                            local usedH = upOffset
+                            usedSide = math.clamp(math.floor(usedSide + 0.5), -cap, cap)
+                            local usedH = math.clamp(math.floor(upOffset + 0.5), 0, 40)
                             return candPos, resolved, usedSide, usedH, off
                         end
                     end
@@ -1072,6 +1083,7 @@ spawn(function()
 end)
 
 local lastAutoAdjustTime = 0
+local autoAdjustRestore = { id = 0, prev = nil }
 local function autoAdjustOffsets(targetPlayer)
     if not targetPlayer or not targetPlayer.Character then return end
     if not lp or not lp.Character then return end
@@ -1094,7 +1106,6 @@ local function autoAdjustOffsets(targetPlayer)
     local suggestedUp = math.clamp((head.Position.Y - groundY) * 0.8 + 1, 0, 40)
 
     local capSide = math.clamp(cfg.offset or 40, 0, 40)
-    local maxTestSide = capSide
     local sideStep = math.max(1, cfg.autoAdjustSideStep or 2)
     local heightCandidates = { suggestedUp, math.max(0, suggestedUp - 1), suggestedUp + 1 }
     local rightVec = root.CFrame.RightVector
@@ -1112,16 +1123,16 @@ local function autoAdjustOffsets(targetPlayer)
     rayParams.IgnoreWater = true
 
     local bestScore = -1
-    local bestSide = cfg.sideOffset
-
+    local bestSignedSide = cfg.sideDirection * (cfg.sideOffset or 0)
     local sides = {}
-    for s = 0, maxTestSide, sideStep do table.insert(sides, s) end
+    for s = 0, capSide, sideStep do table.insert(sides, s) end
     if cfg.preferMaxOffset then table.sort(sides, function(a,b) return a > b end) end
 
+    local breakEarly = false
     for _, s in ipairs(sides) do
-        local scorePos = 0
         for _, sideSign in ipairs({-1, 1}) do
             local sideVal = s * sideSign
+            local scorePos = 0
             for _, fwd in ipairs(fwdCandidates) do
                 for _, h in ipairs(heightCandidates) do
                     local cand = root.Position + Vector3.new(0, h, 0) + rightVec * sideVal + forwardVec * fwd
@@ -1132,8 +1143,7 @@ local function autoAdjustOffsets(targetPlayer)
                             if part and part.CanCollide and not part:IsDescendantOf(targetPlayer.Character) then insideSolid = true; break end
                         end
                     end
-                    if insideSolid then
-                    else
+                    if not insideSolid then
                         local upHit = workspace:Raycast(cand, Vector3.new(0, 1.6, 0), rayParams)
                         local pathClear = isPathClearStrict(cand, head.Position, targetPlayer.Character, cfg.sampleRadius, cfg.scanSampleCount)
                         if not upHit and pathClear then scorePos = scorePos + 4
@@ -1142,22 +1152,48 @@ local function autoAdjustOffsets(targetPlayer)
                     end
                 end
             end
+            if scorePos > bestScore or (scorePos == bestScore and math.abs(sideVal) > math.abs(bestSignedSide)) then
+                bestScore = scorePos
+                bestSignedSide = sideVal
+            end
+            if cfg.preferMaxOffset and bestScore >= (#heightCandidates * #fwdCandidates * 4 * 0.8) then
+                breakEarly = true
+                break
+            end
         end
-        if scorePos > bestScore or (scorePos == bestScore and math.abs(s) > math.abs(bestSide)) then
-            bestScore = scorePos
-            bestSide = s
-        end
-        if cfg.preferMaxOffset and bestScore >= (#heightCandidates * #fwdCandidates * 4 * 0.8) then break end
+        if breakEarly then break end
     end
 
     if bestScore >= 1 then
-        local newSide = math.clamp(math.floor(bestSide + 0.5), 0, capSide)
-        if math.abs(cfg.sideOffset - newSide) >= 1 then cfg.sideOffset = newSide end
+        local newSideMag = math.clamp(math.floor(math.abs(bestSignedSide) + 0.5), 0, capSide)
+        local newUp = math.clamp(math.floor(suggestedUp + 0.5), 0, 40)
+        local prevSide = math.clamp(cfg.sideOffset or 0, 0, capSide)
+        local prevUp = math.clamp(cfg.upOffset or 0, 0, 40)
+        local prevOffset = math.clamp(cfg.offset or 0, 0, capSide)
+
+        autoAdjustRestore.id = autoAdjustRestore.id + 1
+        local myId = autoAdjustRestore.id
+        autoAdjustRestore.prev = { sideOffset = prevSide, upOffset = prevUp, offset = prevOffset, sideDirection = cfg.sideDirection or 1 }
+
+        cfg.sideOffset = newSideMag
+        cfg.upOffset = newUp
+        cfg.offset = math.floor((cfg.sideOffset + cfg.upOffset) / 2 + 0.5)
+        cfg.sideDirection = (bestSignedSide >= 0) and 1 or -1
+
+        spawn(function()
+            wait(cfg.autoAdjustRestoreDelay or 1.0)
+            if autoAdjustRestore.id == myId and autoAdjustRestore.prev then
+                local capNow = math.clamp(cfg.offset or 40, 0, 40)
+                pcall(function()
+                    cfg.sideOffset = math.clamp(autoAdjustRestore.prev.sideOffset or cfg.sideOffset, 0, capNow)
+                    cfg.upOffset = math.clamp(autoAdjustRestore.prev.upOffset or cfg.upOffset, 0, 40)
+                    cfg.offset = math.clamp(autoAdjustRestore.prev.offset or cfg.offset, 0, capNow)
+                    cfg.sideDirection = autoAdjustRestore.prev.sideDirection or cfg.sideDirection
+                end)
+                autoAdjustRestore.prev = nil
+            end
+        end)
     end
-
-    if math.abs(cfg.upOffset - suggestedUp) >= 1 then cfg.upOffset = math.clamp(math.floor(suggestedUp + 0.5), 0, 40) end
-
-    cfg.offset = math.floor((cfg.sideOffset + cfg.upOffset) / 2 + 0.5)
 end
 
 local function get_target()
@@ -1187,7 +1223,8 @@ local function get_target()
     for i = 1, maxChecks do
         local p = candidates[i].player
         local ok, candidate, resolved = pcall(function()
-            return findClearOrigin(p, cfg.upOffset, cfg.sideOffset, cfg.sideOffset, math.max(6, cfg.attempts))
+            local sideArg = (cfg.sideOffset or 0) * (cfg.sideDirection or 1)
+            return findClearOrigin(p, cfg.upOffset, math.abs(sideArg), math.abs(sideArg), math.max(6, cfg.attempts))
         end)
         if ok and candidate and resolved and resolved.hit then return p end
     end
@@ -1251,7 +1288,8 @@ RunService.Heartbeat:Connect(function(dt)
     end
 
     if not origin then
-        origin, resolved = findClearOrigin(enemy, cfg.upOffset, cfg.sideOffset, cfg.sideOffset, cfg.attempts)
+        local sideArg = (cfg.sideOffset or 0) * (cfg.sideDirection or 1)
+        origin, resolved = findClearOrigin(enemy, cfg.upOffset, math.abs(sideArg), math.abs(sideArg), cfg.attempts)
     end
 
     if not origin or not resolved or not resolved.hit then return end
@@ -1267,7 +1305,6 @@ RunService.Heartbeat:Connect(function(dt)
         if pr and pr.hit then
             finalHitPos = pr.hitPosition
             resolved = pr
-        else
         end
     end
 
