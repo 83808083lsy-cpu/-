@@ -6270,8 +6270,8 @@ end)
 -- == State ==
 local RB_State, RF_State, AutoReload, DownCheck   = false, false, false, false
 local Debug_Rays, TargetMode, HitSoundSelection   = false, "Near", "None"
-local Origin_Radius, Hit_Radius                   = 18.50, 23.50
-local Origin_Scans, Hit_Scans                     = 24, 24
+local Origin_Radius, Hit_Radius                   = 19.5, 24.5
+local Origin_Scans, Hit_Scans                     = 24, 30
 local ScanRate                                     = 14
 local Last_Shot, Valid_Pair, Locked_Path          = 0, nil, nil
 local WB = {LastScan=0, Cached=false, Toggle=false, Threshold=0.5, Round=0}
@@ -7719,7 +7719,7 @@ end)
 -- =====================================================================
 ;(function()
 local Window    = Library:Window({Logo="77218680285262", FadeTime=0.3})
-local Watermark = Library:Watermark("Cat.gg")
+local Watermark = Library:Watermark("Link.cc")
 local KeybindList = Library:KeybindList()
 
 do -- Combat page
@@ -7802,11 +7802,11 @@ do -- Combat page
         s1:Toggle({Name="Auto Reload", Flag="CAT_Auto_Reload_27",  Callback=function(v) AutoReload=v; if v then AutoReloadSetup() else clearReloadConnections() end end}):Keybind({Flag="CAT_Auto_Reload_27_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Auto_Reload_27"] then Library.SetFlags["CAT_Auto_Reload_27"](v) end end})
         s1:Toggle({Name="Down Check", Flag="CAT_Down_Check_28",   Callback=function(v) DownCheck=v end}):Keybind({Flag="CAT_Down_Check_28_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Down_Check_28"] then Library.SetFlags["CAT_Down_Check_28"](v) end end})
       s1:Slider({Name="Max Cache", Flag="CAT_Max_Cache_30",    Min=0.1, Max=25,  Default=0.5,   Decimals=0.01, Callback=function(v) WB.Threshold=v end})
-        s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=20, Default=18.50, Decimals=0.01, Callback=function(v) Origin_Radius=v end})
+        s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=19.5, Default=19.5, Decimals=0.01, Callback=function(v) Origin_Radius=v end})
         s1:Slider({Name="Origin Scans", Flag="CAT_Origin_Scans_32", Min=1,   Max=50, Default=24,    Callback=function(v) Origin_Scans=math.floor(v) end})
-        s1:Slider({Name="Scan Rate",    Flag="CAT_Scan_Rate",       Min=1,   Max=60, Default=14,    Callback=function(v) ScanRate=math.floor(v) end})
-        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=25, Default=23.50, Decimals=0.01, Callback=function(v) Hit_Radius=v end})
-        s1:Slider({Name="Hit Scans", Flag="CAT_Hit_Scans_34",    Min=1,   Max=50, Default=24,    Callback=function(v) Hit_Scans=math.floor(v) end})
+        s1:Slider({Name="Scan Rate",    Flag="CAT_Scan_Rate",       Min=1,   Max=200, Default=30,    Callback=function(v) ScanRate=math.floor(v) end})
+        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=24.5, Default=24.2, Decimals=0.01, Callback=function(v) Hit_Radius=v end})
+        s1:Slider({Name="Hit Scans", Flag="CAT_Hit_Scans_34",    Min=1,   Max=100, Default=30,    Callback=function(v) Hit_Scans=math.floor(v) end})
         local s2 = Rage:Section({Name="Target Selection", Side=2})
         s2:Dropdown({Name="Target Mode", Flag="CAT_Target_Mode_35", Items={"Near","Mouse","Centre","Lock"},         Default="Near", Callback=function(v) TargetMode=v end})
         s2:Dropdown({Name="Hit Sound", Flag="CAT_Hit_Sound_36",   Items={"None","Skeet","Neverlose","Gamesense"}, Default="None", Callback=function(v) HitSoundSelection=v end})
@@ -8407,30 +8407,36 @@ local function GetOffsets_Algo1(firePos, targetPos, offset)
 end
 
 -- =====================================================================
--- == 解析2：纯净版斐波那契半球 (无区域划分、无防重复偏移)
+-- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
+-- == 改动说明：
+-- ==  - 采样在与 poleDir 垂直的平面上进行（即在目标的“屏幕平面”上），
+-- ==  - 使用 concentric disk (r = radius * sqrt(rand)) 来保证圆盘内的均匀分布，
+-- ==  - 这样 radius 始终是世界单位，不会随距离缩减，命中更精确稳定。
 -- =====================================================================
 local function GetOffsets_Algo2(center, poleDir, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
     local offsets = {center} -- 优先检测中心点
-    local PHI = 0.6180339887
-    
-    -- 构建正交基 (用于确定半球的朝向)
+
+    -- 构建正交基：t1, t2 为与 poleDir 垂直的两个单位向量（plane basis）
     local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
-    local t1 = poleDir:Cross(arb).Unit
+    local t1 = poleDir:Cross(arb)
+    if t1.Magnitude == 0 then
+        arb = Vector3.new(0,0,1)
+        t1 = poleDir:Cross(arb)
+    end
+    t1 = t1.Unit
     local t2 = poleDir:Cross(t1).Unit
 
-    for i = 0, count - 1 do
-        -- 斐波那契黄金角
-        local phi = i * PHI * 2 * math.pi
-        -- 均匀分布：cosTheta 从 1 (伞尖) 到 0 (赤道)
-        local cosT = 1 - (i + 0.5) / count
-        local sinT = math.sqrt(1 - cosT * cosT)
-        -- 随机半径，使点分布在半球体积内而不是仅在表面
-        local r = radius * (math.random()^(1/3))
-        
-        local dir = t1 * (sinT * math.cos(phi)) + t2 * (sinT * math.sin(phi)) + poleDir * cosT
-        table.insert(offsets, center + dir * r)
+    -- 为了提高命中精度：中心附近点权重更高（可选）
+    -- 使用 concentric disk sampling 保证圆盘上的均匀采样
+    for i = 1, count do
+        -- 极坐标：角度与半径（半径使用 sqrt(rand) 保证面积均匀）
+        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count) -- 带少量角度抖动
+        local r = radius * math.sqrt(math.random())
+        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+        table.insert(offsets, center + offsetVec)
     end
+
     return offsets
 end
 
@@ -8477,7 +8483,7 @@ local function DoRagebot()
         newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
         newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
     else
-        -- 【单数轮】：使用 解析2 (纯净版斐波那契半球)
+        -- 【单数轮】：使用 解析2 (圆盘均匀采样，确保 radius 为固定世界单位)
         local oPole = (tPos - myPos)
         if oPole.Magnitude < 0.001 then return end
         oPole = oPole.Unit
