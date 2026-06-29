@@ -7966,8 +7966,6 @@ do -- Visuals page
     end
 end
 
--- Complete script with improved sampling algorithms (GetOffsets_Algo1 / GetOffsets_Algo2 replaced)
--- Complete script with improved sampling algorithms (GetOffsets_Algo1 / GetOffsets_Algo2 replaced)
 do -- Player page
     local Page = Window:Page({Name="Player", SubPages=true})
     local Sub  = Page:SubPage({Name="Physical", Columns=2})
@@ -8230,128 +8228,9 @@ local function DoSkinUpdate()
     end
 end
 
--- =====================================================================
--- == Helper sampling utilities (deterministic low-discrepancy + fibonacci sphere)
--- =====================================================================
-local function halton(index, base)
-    local result = 0
-    local f = 1
-    local i = index
-    while i > 0 do
-        f = f / base
-        result = result + (i % base) * f
-        i = math.floor(i / base)
-    end
-    return result
-end
+-- Performance/config tweak: multiplier to make DS offset updates faster (默认 2 倍)
+local OFFSET_SPEED_MULTIPLIER = 2
 
-local function fibonacciSphere(n)
-    local pts = {}
-    local phi = math.pi * (3 - math.sqrt(5)) -- golden angle in radians *2
-    if n <= 0 then return pts end
-    for i = 0, n-1 do
-        local y = 1 - (i / (n-1)) * 2
-        local r = math.sqrt(math.max(0, 1 - y * y))
-        local theta = phi * i
-        local x = math.cos(theta) * r
-        local z = math.sin(theta) * r
-        pts[#pts + 1] = Vector3.new(x, y, z)
-    end
-    return pts
-end
-
--- =====================================================================
--- == 解析1：用 Fibonacci sphere + 局部对齐，提升分布均匀性与方向覆盖
--- == 兼容原签名：GetOffsets_Algo1(firePos, targetPos, offset)
--- =====================================================================
-local function GetOffsets_Algo1(firePos, targetPos, offset)
-    if not offset or offset <= 0 then return {firePos} end
-
-    local offsets = {firePos} -- 优先检测中心点
-
-    -- 采样点数量（可根据 offset 自动调整）
-    local n = 32
-    if offset < 2 then n = 20 end
-    if offset > 12 then n = 48 end
-
-    local pts = fibonacciSphere(n)
-    -- 构建变换，使采样在以 forward 为朝向的本地坐标系下展开（减少盲区）
-    local forward = (targetPos - firePos)
-    if forward.Magnitude < 1e-6 then
-        forward = Vector3.new(0,0,1)
-    else
-        forward = forward.Unit
-    end
-    local arb = math.abs(forward.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
-    local right = forward:Cross(arb)
-    if right.Magnitude == 0 then
-        arb = Vector3.new(0,0,1)
-        right = forward:Cross(arb)
-    end
-    right = right.Unit
-    local up = right:Cross(forward).Unit
-
-    -- 给予朝向前方更高权重（更可能命中目标面向的一侧）
-    for i = 1, #pts do
-        local v = pts[i]
-        -- 拉伸 Y（或 Z）轴以让平面内采样更符合射击偏移习惯（可根据需要调整）
-        local localOffset = (right * (v.X * offset)) + (up * (v.Y * offset * 0.8)) + (forward * (v.Z * offset * 0.2))
-        local worldPoint = firePos + localOffset
-        offsets[#offsets + 1] = worldPoint
-    end
-
-    return offsets
-end
-
--- =====================================================================
--- == 解析2（替换）：Halton 序列 + 圆盘采样（concentric / 极坐标）
--- == 保证采样的低色散与面积均匀；提供 centerBias 参数以提高近中心命中率
--- == 兼容或增强原签名：GetOffsets_Algo2(center, poleDir, radius, count)
--- =====================================================================
-local function GetOffsets_Algo2(center, poleDir, radius, count, centerBias)
-    -- 参数保护
-    if not radius or radius <= 0 or not count or count <= 0 then return {center} end
-    centerBias = centerBias or 0.25 -- 0..1，越大更偏向中心（默认轻度偏向）
-
-    -- 防止 poleDir 为零向量
-    if not poleDir or poleDir.Magnitude < 1e-6 then
-        poleDir = Vector3.new(0,0,1)
-    else
-        poleDir = poleDir.Unit
-    end
-
-    local offsets = {center} -- 优先检测中心点
-
-    -- 构建正交基：t1, t2 为与 poleDir 垂直的两个单位向量（plane basis）
-    local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
-    local t1 = poleDir:Cross(arb)
-    if t1.Magnitude == 0 then
-        arb = Vector3.new(0,0,1)
-        t1 = poleDir:Cross(arb)
-    end
-    t1 = t1.Unit
-    local t2 = poleDir:Cross(t1).Unit
-
-    -- 使用 Halton 序列（低差异点）作为均匀采样的基础
-    -- halton(i,2), halton(i,3) 在 [0,1) 提供 quasi-random 值对
-    for i = 1, count do
-        local u = halton(i, 2)
-        local v = halton(i, 3)
-        -- mix sqrt(u) (面积均匀) 与 linear u (中心偏重) 以形成温和中心加权
-        local r_uniform = math.sqrt(u)
-        local r_biased = u
-        local r = radius * ( (1 - centerBias) * r_uniform + centerBias * r_biased )
-        local theta = 2 * math.pi * v
-        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-        offsets[#offsets + 1] = center + offsetVec
-    end
-
-    return offsets
-end
-
--- =====================================================================
--- == 核心 Ragebot 逻辑
--- =====================================================================
 local function DoDesyncLogic()
     if not DS.Enabled or Invis_Enabled then
         DS.AppliedOffset = Vector3.zero
@@ -8375,7 +8254,8 @@ local function DoDesyncLogic()
         DS.AppliedOffset=Vector3.zero; return
     end
     local clk=os.clock()
-    local interval=DS.TPRate>0 and (1/DS.TPRate) or 0
+    local effectiveTPRate = (DS.TPRate or 1) * (OFFSET_SPEED_MULTIPLIER or 1)
+    local interval = effectiveTPRate>0 and (1/effectiveTPRate) or 0
     if clk-DS.LastTPTime >= interval then
         DS.LastTPTime=clk
         DS.Y_Toggle=not DS.Y_Toggle
@@ -8507,7 +8387,7 @@ end
 
 -- =====================================================================
 -- == 解析1：固定25点向量表 + 随机Roll轴旋转
--- == （已替换为 fibonacciSphere 版本上面）
+-- == 修改：始终返回偏移集合（如果 offset 非法使用小默认值）
 -- =====================================================================
 local ScanVectors = {
     Vector3.new(1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0),
@@ -8521,11 +8401,60 @@ local ScanVectors = {
     -Vector3.new(-1,0,2)/math.sqrt(5), -Vector3.new(1,0,2)/math.sqrt(5),
 }
 
--- The old GetOffsets_Algo1 was replaced above with a more advanced fibonacciSphere-based function.
--- The old GetOffsets_Algo2 was replaced above with a Halton-based function.
+local function GetOffsets_Algo1(firePos, targetPos, offset)
+    -- 如果 offset 无效，使用一个很小的默认值以保证始终返回偏移点
+    if not offset or offset <= 0 then offset = 0.01 end
+    local offsets = {}
+    local cfOffset = CFrame.new(firePos, targetPos) * CFrame.Angles(0, 0, math.rad(math.random(1, 90)))
+    for _, pos in ipairs(ScanVectors) do
+        table.insert(offsets, cfOffset * (pos * offset))
+    end
+    return offsets
+end
 
 -- =====================================================================
--- == 核心 Ragebot 逻辑
+-- == 解析2（已替换）：基于视线垂直平面的圆盘分层(concentric stratified)均匀采样
+-- == 改动说明：
+-- ==  - 采样在与 poleDir 垂直的平面上进行，
+-- ==  - 使用分层 (stratified) concentric disk 采样：在每个分层内随机化，能提供更均匀且稳定的覆盖
+-- ==  - 不再返回中心点作为默认，radius/count 无效时使用安全默认值
+-- =====================================================================
+local function GetOffsets_Algo2(center, poleDir, radius, count)
+    -- 保证 radius 和 count 有合理值，避免返回仅中心点
+    if not radius or radius <= 0 then radius = 0.01 end
+    if not count or count <= 0 then count = 8 end
+
+    local offsets = {}
+
+    -- 构建正交基：t1, t2 为与 poleDir 垂直的两个单位向量（plane basis）
+    local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+    local t1 = poleDir:Cross(arb)
+    if t1.Magnitude == 0 then
+        arb = Vector3.new(0,0,1)
+        t1 = poleDir:Cross(arb)
+    end
+    t1 = t1.Unit
+    local t2 = poleDir:Cross(t1).Unit
+
+    -- 分层采样：在每个分层中采用随机化的半径与角度，保证覆盖同时避免聚集
+    for i = 1, count do
+        -- stratified sample in [0,1): u = (i-1 + rand)/count
+        local u = ((i - 1) + math.random()) / count
+        local theta = 2 * math.pi * u + (math.random() - 0.5) * (2*math.pi / count) -- 少量角度抖动
+        local r = radius * math.sqrt(u) -- concentric disk style (area-correct)
+        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+        table.insert(offsets, center + offsetVec)
+    end
+
+    return offsets
+end
+
+-- ================= utility: squared-distance check (更高效/更稳定) =================
+local function Dist2(a,b) local v=a-b; return v:Dot(v) end
+local function WithinRadiusSq(a,b,r) return Dist2(a,b) <= (r*r) end
+
+-- =====================================================================
+-- == 核心 Ragebot 逻辑（改进：使用平方距离比较以减少开根号，缓存判断更高效）
 -- =====================================================================
 local function DoRagebot()
     if not RB_State then Valid_Pair=nil; Locked_Path=nil; return end
@@ -8541,11 +8470,14 @@ local function DoRagebot()
 
     -- 1. 缓存机制 (如果上一发的轨迹依然有效，直接复用，不扫描)
     if Locked_Path then
-        local dO=(myPos-Locked_Path.MyPos).Magnitude
-        local dH=(tPos-Locked_Path.TPos).Magnitude
-        local inRange=(myPos-Locked_Path.AbsO).Magnitude<=Origin_Radius
-                   and (tPos-Locked_Path.AbsH).Magnitude<=Hit_Radius
-        if dO<=WB.Threshold and dH<=WB.Threshold and inRange then
+        local dOvec = myPos - Locked_Path.MyPos
+        local dHvec = tPos - Locked_Path.TPos
+        local dO2 = dOvec:Dot(dOvec)
+        local dH2 = dHvec:Dot(dHvec)
+        local thr2 = (WB.Threshold or 0) * (WB.Threshold or 0)
+        local inRange = WithinRadiusSq(myPos, Locked_Path.AbsO, Origin_Radius or 0.01)
+                      and WithinRadiusSq(tPos, Locked_Path.AbsH, Hit_Radius or 0.01)
+        if dO2 <= thr2 and dH2 <= thr2 and inRange then
             if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
                 Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target}
                 WB.Cached=true; return
@@ -8563,19 +8495,19 @@ local function DoRagebot()
     local newOrigin, newTarget
     
     if WB.Round % 2 == 0 then
-        -- 【双数轮】：使用 解析1 (Fibonacci sphere 改良版)
+        -- 【双数轮】：使用 解析1 (25点固定向量 + 随机旋转)
         newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
         newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
     else
-        -- 【单数轮】：使用 解析2 (Halton 圆盘均匀采样，确保 radius 为固定世界单位)
+        -- 【单数轮】：使用 解析2 (圆盘分层采样，确保 radius 为固定世界单位)
         local oPole = (tPos - myPos)
         if oPole.Magnitude < 0.001 then return end
         oPole = oPole.Unit
         local hPole = -oPole -- 敌人的半球朝向玩家
         
         -- 这里会读取你 UI 菜单里的 Origin_Scans 和 Hit_Scans 数量
-        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans or 16, 0.25)
-        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans or 16, 0.25)
+        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
+        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans)
     end
 
     -- 4. 双重循环穷举寻找合法弹道 (找到即返回，不再比较距离)
