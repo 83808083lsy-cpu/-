@@ -7057,7 +7057,7 @@ local function StartAutoUnlockSafe()
                 local bredMakurz = map and map:FindFirstChild("BredMakurz")
 
                 if bredMakurz then
-                    local closestSafe, minDist = nil, 5  -- 加大感应距离到 12
+                    local closestSafe, minDist = nil, 12  -- 加大感应距离到 12
 
                     for _, obj in ipairs(bredMakurz:GetChildren()) do
                         if string.find(string.lower(obj.Name), "safe") then
@@ -8106,6 +8106,147 @@ do -- Misc page
     sR:Slider( {Name="Speed", Flag="CAT_Speed_72", Min=1, Max=10, Default=6, Callback=function(v) MC.LerpSpeed=v end})
 end
 
+-- 原文件基础上改进：主要在命中扫描（Ragebot）处增强采样策略与优先级，提升命中率
+do -- Player page
+    local Page = Window:Page({Name="Player", SubPages=true})
+    local Sub  = Page:SubPage({Name="Physical", Columns=2})
+    local sec  = Sub:Section({Name="Movement", Side=1})
+    sec:Toggle({Name="WalkSpeed", Flag="CAT_WalkSpeed_53", Callback=function(v) SpeedState=v end}):Keybind({Flag="CAT_WalkSpeed_53_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_WalkSpeed_53"] then Library.SetFlags["CAT_WalkSpeed_53"](v) end end})
+    sec:Slider( {Name="Value", Flag="CAT_Value_54", Min=1, Max=100, Default=33.5, Decimals=0.1, Callback=function(v) SpeedValue=v end})
+    sec:Toggle({Name="JumpPower", Flag="CAT_JumpPower_55", Callback=function(v) JumpState=v end}):Keybind({Flag="CAT_JumpPower_55_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_JumpPower_55"] then Library.SetFlags["CAT_JumpPower_55"](v) end end})
+    sec:Slider( {Name="Value", Flag="CAT_Value_56", Min=1, Max=100, Default=73,   Decimals=0.1, Callback=function(v) JumpValue=v end})
+    sec:Toggle({Name="No fall", Flag="CAT_No_fall_57", Default=false, Callback=function(v) NoFallEnabled=v end}):Keybind({Flag="CAT_No_fall_57_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_No_fall_57"] then Library.SetFlags["CAT_No_fall_57"](v) end end})
+    sec:Toggle({Name="Fly", Flag="CAT_PL_Fly", Callback=function(v)
+        FLY.Enabled = v
+        if FLY.MobileMode then
+            -- 手机模式：和原来一样，有GUI
+            if v then
+                FlyCreateUI()
+                FlyOn()
+            else
+                FlyOff()
+                FlyDestroyUI()
+            end
+        else
+            -- 普通模式：直接飞，无任何GUI
+            if v then
+                FlyOn()
+            else
+                FlyOff()
+            end
+        end
+    end}):Keybind({Flag="CAT_PL_Fly_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_Fly"] then Library.SetFlags["CAT_PL_Fly"](v) end end})
+    sec:Slider({Name="Fly speed", Flag="CAT_Fly_speed_58", Min=1, Max=100, Default=60, Callback=function(v) FLY.Speed=v end})
+    sec:Toggle({Name="Mobile mode", Flag="CAT_PL_MobileMode", Default=false, Callback=function(v)
+        FLY.MobileMode = v
+    end}):Keybind({Flag="CAT_PL_MobileMode_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_MobileMode"] then Library.SetFlags["CAT_PL_MobileMode"](v) end end})
+    sec:Toggle({Name="Infinite Stamina", Flag="CAT_PL_InfStamina", Default=false, Callback=function(Value)
+        InfStaminaEnabled=Value
+        if InfStaminaConnection then InfStaminaConnection:Disconnect(); InfStaminaConnection=nil end
+        if Value then
+            local ok=pcall(function()
+                local tgt=getupvalue(getrenv()._G.S_Take,2); local old
+                old=hookfunction(tgt,function(v1,...) if InfStaminaEnabled then v1=0 end return old(v1,...) end)
+            end)
+            if not ok then
+                local tbs={}
+                local function collect() tbs={}; for _,v in pairs(getgc(true)) do if type(v)=="table" and rawget(v,"S") then tbs[#tbs+1]=v end end end
+                pcall(collect)
+                InfStaminaConnection=RunService.RenderStepped:Connect(function()
+                    if InfStaminaEnabled then
+                        if tick()%5<0.1 then pcall(collect) end
+                        for _,t in ipairs(tbs) do pcall(function() t.S=100 end) end
+                        local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+                        if h then h:SetAttribute("ZSPRN_M",true) end
+                    end
+                end)
+            end
+        else
+            local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+            if h then h:SetAttribute("ZSPRN_M",nil) end
+        end
+    end}):Keybind({Flag="CAT_PL_InfStamina_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_InfStamina"] then Library.SetFlags["CAT_PL_InfStamina"](v) end end})
+end
+
+do -- Antis page
+    local Page        = Window:Page({Name="Antis", SubPages=false})
+    local AntiHitSec  = Page:Section({Name="Anti hit", Side=1})
+
+    AntiHitSec:Dropdown({Name="Head mode", Flag="CAT_Head_mode_59", Items={"Hide head","Yaw head","Custom"}, Callback=function(v)
+        if not v and OriginalNeckC0 then
+            local ch = LocalPlayer.Character
+            if ch then
+                local hd = ch:FindFirstChild("Head")
+                local ts = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+                local nk = (hd and hd:FindFirstChild("Neck")) or (ts and ts:FindFirstChild("Neck"))
+                if nk then nk.C0 = OriginalNeckC0; nk.C1 = OriginalNeckC1 end
+            end
+            OriginalNeckC0, OriginalNeckC1 = nil, nil
+        end
+        HeadYawTime = 0
+        HeadMode = v
+    end})
+    AntiHitSec:Slider({Name="Custom yaw", Flag="CAT_Custom_yaw_60",     Min=-90, Max=90, Default=30,  Decimals=0.1, Callback=function(v) HeadYaw=v; HeadCustomYaw=v end})
+    AntiHitSec:Slider({Name="Rotation speed", Flag="CAT_Rotation_speed_61", Min=-50,  Max=50,  Default=30,  Decimals=0.1, Callback=function(v) HeadRotSpeed=v end})
+
+    AntiHitSec:Dropdown({Name="Hands mod", Flag="CAT_Hands_mod_62", Items={"Hands up","Open hands"}, Callback=function(v) HandsModSelection=v end})
+
+    AntiHitSec:Toggle({Name="乱飞", Flag="CAT_AN_LuanFei", Callback=function(v)
+        LF.Enabled = v
+        if not v then
+            if LF.Track1 then pcall(function() LF.Track1:Stop(0) end); LF.Track1 = nil end
+            if LF.Track2 then pcall(function() LF.Track2:Stop(0) end); LF.Track2 = nil end
+            LF.Angle = 0
+        end
+    end}):Keybind({Flag="CAT_AN_LuanFei_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_AN_LuanFei"] then Library.SetFlags["CAT_AN_LuanFei"](v) end end})
+
+    -- Invisible toggle
+    AntiHitSec:Toggle({Name="Invisible", Flag="CAT_AN_Invisible", Callback=function(v)
+        Invis_Enabled=v
+        if not v then
+            if Invis_Track then pcall(function() Invis_Track:Stop() end); Invis_Track=nil end
+            local char=LocalPlayer.Character
+            if char then
+                for _,p in ipairs(char:GetChildren()) do
+                    if p:IsA("BasePart") and p.Transparency==0.5 then p.Transparency=0 end
+                end
+            end
+        end
+    end}):Keybind({Flag="CAT_AN_Invisible_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_AN_Invisible"] then Library.SetFlags["CAT_AN_Invisible"](v) end end})
+
+    do -- Desync
+        local sec=Page:Section({Name="Velocity desync", Side=2})
+        sec:Toggle({Name="Enable", Flag="CAT_Enable_63",    Callback=function(v) DS.Enabled=v end}):Keybind({Flag="CAT_Enable_63_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Enable_63"] then Library.SetFlags["CAT_Enable_63"](v) end end})
+        sec:Toggle({Name="Visualize", Flag="CAT_Visualize_64", Default=true, Callback=function(v) DS.Visualize=v end}):Keybind({Flag="CAT_Visualize_64_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Visualize_64"] then Library.SetFlags["CAT_Visualize_64"](v) end end})
+        sec:Slider({Name="TP Rate", Flag="CAT_TP_Rate_65",  Min=1,  Max=100, Default=60,  Callback=function(v) DS.TPRate=v end})
+        sec:Slider({Name="X Offset", Flag="CAT_X_Offset_66", Min=1,  Max=20,  Default=8.5, Decimals=0.1, Callback=function(v) DS.X=v end})
+        sec:Slider({Name="Y Offset", Flag="CAT_Y_Offset_67", Min=1,  Max=20,  Default=3,   Decimals=0.1, Callback=function(v) DS.Y=v end})
+        sec:Slider({Name="Z Offset", Flag="CAT_Z_Offset_68", Min=1,  Max=20,  Default=8.5, Decimals=0.1, Callback=function(v) DS.Z=v end})
+    end
+end
+
+do -- Misc page
+    local Page = Window:Page({Name="Misc", SubPages=false})
+    
+    local sL   = Page:Section({Name="Shiftlock", Side=1})
+    sL:Toggle({Name="Anti auto shiftlock", Flag="CAT_Anti_auto_shiftlock_69", Callback=function(v) MC.AntiShift=v end}):Keybind({Flag="CAT_Anti_auto_shiftlock_69_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Anti_auto_shiftlock_69"] then Library.SetFlags["CAT_Anti_auto_shiftlock_69"](v) end end})
+    sL:Slider( {Name="Delay", Flag="CAT_Delay_70", Min=0.01, Max=0.50, Default=0.05, Decimals=0.01, Callback=function(v) MC.ShiftDelay=v end})
+    
+    local sFarm = Page:Section({Name="Farm", Side=1})
+    sFarm:Toggle({Name="Auto pick up money", Flag="CAT_MC_AutoPickup", Callback=function(v) 
+        SC.APM_Enabled = v 
+        if v then StartAutoPickUpMoney() end
+    end}):Keybind({Flag="CAT_MC_AutoPickup_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_MC_AutoPickup"] then Library.SetFlags["CAT_MC_AutoPickup"](v) end end})
+    sFarm:Toggle({Name="Auto unlock safe", Flag="CAT_MC_AutoUnlock", Callback=function(v)
+        SC.AUS_Enabled = v
+        if v then StartAutoUnlockSafe() end
+    end}):Keybind({Flag="CAT_MC_AutoUnlock_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_MC_AutoUnlock"] then Library.SetFlags["CAT_MC_AutoUnlock"](v) end end})
+
+    local sR = Page:Section({Name="Camera", Side=2})
+    sR:Toggle({Name="Smooth Camera", Flag="CAT_Smooth_Camera_71", Callback=function(v) MC.SmoothCam=v; if not v then MC.SmoothPos=nil end end}):Keybind({Flag="CAT_Smooth_Camera_71_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Smooth_Camera_71"] then Library.SetFlags["CAT_Smooth_Camera_71"](v) end end})
+    sR:Slider( {Name="Speed", Flag="CAT_Speed_72", Min=1, Max=10, Default=6, Callback=function(v) MC.LerpSpeed=v end})
+end
+
 do -- PlayerList page
     local Page = Window:Page({Name="PlayerList", SubPages=false})
     local pL   = Page:Section({Name="Target List", Side=1})
@@ -8382,7 +8523,7 @@ local function DoInvisible()
 end
 
 -- =====================================================================
--- == 解析1：固定25点向量表 + 随机Roll轴旋转
+-- == 解析1：固定25点向量表 + 随机Roll轴旋转 (保持不变)
 -- =====================================================================
 local ScanVectors = {
     Vector3.new(1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0),
@@ -8407,12 +8548,10 @@ local function GetOffsets_Algo1(firePos, targetPos, offset)
 end
 
 -- =====================================================================
--- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
--- == 改动说明：
--- ==  - 采样在与 poleDir 垂直的平面上进行（即在目标的“屏幕平面”上），
--- ==  - 使用 concentric disk (r = radius * sqrt(rand)) 来保证圆盘内的均匀分布，
--- ==  - 这样 radius 始终是世界单位，不会随距离缩减，命中更精确稳定。
+-- == 解析2（改进）：基于视线垂直平面的圆盘均匀采样（保持） + 目标表面/中心采样（新增）
+-- == 主要改动：新增针对目标部位的采样函数 GetTargetSamplePoints，提高头部和躯干采样优先级
 -- =====================================================================
+
 local function GetOffsets_Algo2(center, poleDir, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
     local offsets = {center} -- 优先检测中心点
@@ -8427,7 +8566,6 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
     t1 = t1.Unit
     local t2 = poleDir:Cross(t1).Unit
 
-    -- 为了提高命中精度：中心附近点权重更高（可选）
     -- 使用 concentric disk sampling 保证圆盘上的均匀采样
     for i = 1, count do
         -- 极坐标：角度与半径（半径使用 sqrt(rand) 保证面积均匀）
@@ -8440,8 +8578,99 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
     return offsets
 end
 
+-- 从一个 BasePart 上采样点（中心 + 表面/体内随机点）
+local function SamplePointsOnPart(part, sampleCount)
+    local pts = {}
+    if not part or not part:IsA("BasePart") then return pts end
+    -- include center
+    local center = (part.CFrame).p
+    pts[#pts+1] = center
+    local sx, sy, sz = part.Size.X/2, part.Size.Y/2, part.Size.Z/2
+    for i = 1, sampleCount do
+        -- 在包围盒内随机采样点（可以增加命中面或角）
+        local rx = (math.random() - 0.5) * 2 * sx
+        local ry = (math.random() - 0.5) * 2 * sy
+        local rz = (math.random() - 0.5) * 2 * sz
+        local localCFrame = CFrame.new(rx, ry, rz)
+        local worldPos = (part.CFrame * localCFrame).p
+        pts[#pts+1] = worldPos
+    end
+    return pts
+end
+
+-- 为目标生成优先级采样点集（优先头部 -> 上躯干 -> HRP）
+-- hitRadius 用于控制对部位表面的额外扩展采样（单位：世界单位）
+-- hitScans 为目标总体采样预算（会按部位大小分配）
+local function GetTargetSamplePoints(target, hitRadius, hitScans)
+    if not target or not target.Character then return { (target and target.Character and (target.Character:FindFirstChild("Head") and target.Character:FindFirstChild("Head").Position) or Vector3.new()) } end
+    local ch = target.Character
+    local parts = {}
+    local head = ch:FindFirstChild("Head")
+    local upper = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+    local hrp = ch:FindFirstChild("HumanoidRootPart")
+    if head then parts[#parts+1] = {part=head, weight=3} end -- 头权重高
+    if upper then parts[#parts+1] = {part=upper, weight=2} end
+    if hrp then parts[#parts+1] = {part=hrp, weight=1} end
+
+    -- fallback
+    if #parts == 0 then
+        local pos = (hrp and hrp.Position) or (head and head.Position) or (upper and upper.Position) or Vector3.new()
+        return {pos}
+    end
+
+    -- 计算总权重并按部位分配采样数
+    local totalWeight = 0
+    for _,info in ipairs(parts) do totalWeight = totalWeight + (info.weight or 1) end
+    local samples = {}
+    -- Always include exact centers (head center etc.)
+    for _,info in ipairs(parts) do
+        table.insert(samples, info.part.Position)
+    end
+
+    -- distribute remaining scans
+    local remaining = math.max(0, hitScans - #parts)
+    for i=1,remaining do
+        -- choose a part by weight (roulette)
+        local r = math.random() * totalWeight
+        local acc = 0
+        for _,info in ipairs(parts) do
+            acc = acc + info.weight
+            if r <= acc then
+                -- sample on chosen part; number of internal samples per pick = 1
+                local sub = SamplePointsOnPart(info.part, 1)
+                for _,p in ipairs(sub) do table.insert(samples, p) end
+                break
+            end
+        end
+    end
+
+    -- additionally add small-radius jitter around each sample to diversify (use hitRadius)
+    local out = {}
+    for _,p in ipairs(samples) do
+        table.insert(out, p)
+        if hitRadius and hitRadius > 0 then
+            -- add a few local jittered samples
+            local jitterCount = 1
+            for j=1,jitterCount do
+                local ang = math.random() * 2 * math.pi
+                local r = hitRadius * math.sqrt(math.random())
+                -- generate arbitrary perpendicular basis using camera-forward or world up
+                local arb = Vector3.new(0,1,0)
+                local t1 = (hrp and ((hrp.Position - p).Unit):Cross(arb) or Vector3.new(1,0,0))
+                if t1.Magnitude == 0 then t1 = Vector3.new(1,0,0) end
+                t1 = t1.Unit
+                local t2 = (hrp and ((hrp.Position - p).Unit):Cross(t1) or Vector3.new(0,0,1)).Unit
+                local off = t1 * (math.cos(ang)*r) + t2 * (math.sin(ang)*r)
+                table.insert(out, p + off)
+            end
+        end
+    end
+
+    return out
+end
+
 -- =====================================================================
--- == 核心 Ragebot 逻辑
+-- == 核心 Ragebot 逻辑（改进采样/优先级/自适应起点半径）
 -- =====================================================================
 local function DoRagebot()
     if not RB_State then Valid_Pair=nil; Locked_Path=nil; return end
@@ -8483,30 +8712,36 @@ local function DoRagebot()
         newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
         newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
     else
-        -- 【单数轮】：使用 解析2 (圆盘均匀采样，确保 radius 为固定世界单位)
+        -- 【单数轮】：使用 改进解析2
         local oPole = (tPos - myPos)
         if oPole.Magnitude < 0.001 then return end
         oPole = oPole.Unit
         local hPole = -oPole -- 敌人的半球朝向玩家
         
-        -- 这里会读取你 UI 菜单里的 Origin_Scans 和 Hit_Scans 数量
-        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
-        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans)
+        -- 自适应 Origin 半径：随距离微增，避免远距抖动过小
+        local dist = (tPos - myPos).Magnitude
+        local adaptOriginRadius = math.max(Origin_Radius, Origin_Radius + dist * 0.02)
+
+        -- Origin 的采样仍沿屏幕平面圆盘，但半径自适应
+        newOrigin = GetOffsets_Algo2(myPos, oPole, adaptOriginRadius, Origin_Scans)
+
+        -- Target 采样使用针对部位的优先级采样（头/上躯干/HRP）
+        newTarget = GetTargetSamplePoints(target, Hit_Radius, Hit_Scans)
     end
 
     -- 4. 双重循环穷举寻找合法弹道 (找到即返回，不再比较距离)
     local bestPO, bestPH = nil, nil
 
-    for _, pO in ipairs(newOrigin) do
-        for _, pH in ipairs(newTarget) do
+    -- 优化：优先尝试 target 样本中靠近头部的前几项（GetTargetSamplePoints 已把中心与头部优先放前）
+    for _, pH in ipairs(newTarget) do
+        for _, pO in ipairs(newOrigin) do
             if CheckWallbang(pO, pH) then
-                -- 找到第一条合法路径，立即锁定并跳出循环
                 bestPO = pO
                 bestPH = pH
                 break
             end
         end
-        if bestPO then break end -- 找到就跳出外层循环
+        if bestPO then break end
     end
 
     -- 5. 更新缓存与射击对
