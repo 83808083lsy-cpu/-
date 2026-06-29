@@ -1,3 +1,4 @@
+-- 竞争终极版.lua（已修改：移除轨迹夜光（PointLight），保留 Beam 视觉）
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -18,7 +19,8 @@ local BeginKnifeHideBindable = Bindables and Bindables:FindFirstChild("SetKnifeH
 
 local LocalPlayer = Players.LocalPlayer
 
-local KNIFE_RATE = 0.1
+--（保留你之前在 v4 中的极限速率设置；可按需调整）
+local KNIFE_RATE = 0.00
 local GUN_RATE = 2.4
 
 local FIRE_RADIUS = 1000
@@ -27,7 +29,7 @@ local MAX_ANGLE_DEG = 90
 
 local TRACER_THICKNESS = 0.15
 local TRACER_COLOR = Color3.fromRGB(255, 105, 180)
-local TRACER_FADE_TIME = 10
+local TRACER_FADE_TIME = 10  -- 固定轨迹持续时间为 10 秒
 
 local HIT_OFFSET = Vector3.new(0, 0, 0)
 local WALL_PENETRATION_MAX = 1.5
@@ -91,7 +93,7 @@ local SETTINGS = {
     ScanRange = MUZZLE_OFFSET,
     PlayMusic = true,
     MusicSoundId = "rbxassetid://133363390219538",
-    MusicVolume = 2.5, -- 默认最高
+    MusicVolume = 2.5,
     MusicIndex = 2,
     MusicEnabled = { false, true, false },
     OneSecondTest = false
@@ -102,6 +104,25 @@ local MUSIC_OPTIONS = {
     { name = "音乐 2", id = "rbxassetid://110919391228823" },
     { name = "音乐 3", id = "rbxassetid://97285892199649" }
 }
+
+-- 随机选择已启用的曲目（若都未启用则从全部中随机）
+local function getRandomEnabledMusicIndex()
+    local enabled = {}
+    for i = 1, #MUSIC_OPTIONS do
+        if SETTINGS.MusicEnabled[i] then
+            table.insert(enabled, i)
+        end
+    end
+    if #enabled == 0 then
+        for i = 1, #MUSIC_OPTIONS do table.insert(enabled, i) end
+    end
+    return enabled[math.random(1, #enabled)]
+end
+
+-- 如果当前索引无效或未启用，则随机选择一个
+if typeof(SETTINGS.MusicIndex) ~= "number" or not SETTINGS.MusicEnabled[SETTINGS.MusicIndex] then
+    SETTINGS.MusicIndex = getRandomEnabledMusicIndex()
+end
 
 local TOP_GUIS = {}
 local TOP_DISPLAY_ORDER = 10000
@@ -185,40 +206,80 @@ RunService.Heartbeat:Connect(function(dt)
 end)
 
 local baseMuzzleOffsets = {}
+-- 移除“用尽后重置”的复杂状态：我们改为简单循环（轮询使用索引）
+local muzzleCycleIndex = 1
+
+-- 新增：记录每个偏移点最后一次被使用的时间，用于冷却
+local offsetLastUsed = {}
+local OFFSET_COOLDOWN = 0.5 -- 秒
+
+local function markOffsetUsed(idx)
+    if type(idx) == "number" then
+        offsetLastUsed[idx] = tick()
+    end
+end
+
+local function getNextUnusedIndex(startIdx)
+    -- 改为简单的循环索引返回（不检查已用集合）
+    local n = #baseMuzzleOffsets
+    if n <= 0 then return 1 end
+    startIdx = startIdx or muzzleCycleIndex
+    local idx = ((startIdx - 1) % n) + 1
+    -- 同步推进全局索引，确保下次更倾向不同索引（轮询）
+    muzzleCycleIndex = (idx % n) + 1
+    return idx
+end
+
 local function rebuildBaseMuzzleOffsets(scanRange)
     scanRange = scanRange or SETTINGS.MuzzleOffset
     baseMuzzleOffsets = {}
+
+    -- 保留一些中心/轴向点，保证近距离与垂直目标的覆盖
+    -- 前后
     table.insert(baseMuzzleOffsets, Vector3.new(0, 0, math.clamp(scanRange * 0.5, 6, 20)))
     table.insert(baseMuzzleOffsets, Vector3.new(0, 0, -math.clamp(scanRange * 0.5, 6, 20)))
+    -- 中心
     table.insert(baseMuzzleOffsets, Vector3.new(0, 0, 0))
+    -- 上下
     table.insert(baseMuzzleOffsets, Vector3.new(0, scanRange * 0.5, 0))
     table.insert(baseMuzzleOffsets, Vector3.new(0, -scanRange * 0.5, 0))
-    table.insert(baseMuzzleOffsets, Vector3.new(0, scanRange, 0))
-    table.insert(baseMuzzleOffsets, Vector3.new(0, -scanRange, 0))
-    local NUM_AROUND = 16
-    for ring = 1, 3 do
-        local r = scanRange * (0.3 * ring)
-        local vertScale = 0.4 + 0.15 * ring
-        for i = 1, NUM_AROUND do
-            local ang = (i - 1) / NUM_AROUND * math.pi * 2
-            local x = math.cos(ang) * r
-            local y = math.sin(ang) * r * vertScale
-            local z = (i % 3 == 0) and ( (ring-1) * 0.4 ) or 0
-            table.insert(baseMuzzleOffsets, Vector3.new(x, y, z))
-        end
+
+    -- 新增：左右（X 方向）
+    local lr = math.clamp(scanRange * 0.5, 6, 20)
+    table.insert(baseMuzzleOffsets, Vector3.new(lr, 0, 0))
+    table.insert(baseMuzzleOffsets, Vector3.new(-lr, 0, 0))
+
+    -- 补上原本八角中“剩余的四个角” —— 按你的要求，这四个角的偏移采用“左右”的偏移值（即使用与左右相同的 X 偏移）
+    -- 因为你要求“那四个角的偏移就是左右”，这里把四个角点设置为左右的重复项（以满足要求且保持行为一致）。
+    table.insert(baseMuzzleOffsets, Vector3.new(lr, 0, 0))
+    table.insert(baseMuzzleOffsets, Vector3.new(-lr, 0, 0))
+    table.insert(baseMuzzleOffsets, Vector3.new(lr, 0, 0))
+    table.insert(baseMuzzleOffsets, Vector3.new(-lr, 0, 0))
+
+    -- 黄金角（Fermat 螺旋）采样，用于生成均匀分布的扫描点
+    local N = math.clamp(64, 24, 128)
+    local goldenAngle = math.pi * (3 - math.sqrt(5))
+    for i = 1, N do
+        local t = i - 0.5
+        local r = (scanRange * math.sqrt(t / N))
+        local ang = t * goldenAngle
+        local x = math.cos(ang) * r
+        local y = math.sin(ang) * r * (0.6 + 0.4 * ( (i % 3 == 0) and 1 or 0.8 ))
+        local z = (math.sin(ang * 0.7) * 0.15 + (math.random() - 0.5) * 0.06) * scanRange
+        table.insert(baseMuzzleOffsets, Vector3.new(x, y, z))
     end
-    for i = 1, 8 do
-        local rr = scanRange * (0.5 + (i / 8) * 0.7)
+
+    -- 添加一些随机散点，增加不可预测性
+    for i = 1, 12 do
+        local rr = scanRange * (0.3 + (i / 12) * 0.7)
         local ang = math.random() * math.pi * 2
         local x = math.cos(ang) * rr
-        local y = (math.sin(ang) * rr * 0.5) * ( (i % 2 == 0) and 1 or -1 )
-        local z = (math.random() - 0.5) * scanRange * 0.2
+        local y = math.sin(ang) * rr * ( (i % 2 == 0) and 1 or -1 ) * 0.5
+        local z = (math.random() - 0.5) * scanRange * 0.25
         table.insert(baseMuzzleOffsets, Vector3.new(x, y, z))
     end
 end
 rebuildBaseMuzzleOffsets(SETTINGS.MuzzleOffset)
-
-local muzzleCycleIndex = 1
 
 local function makeRayParams()
     local rp = RaycastParams.new()
@@ -286,8 +347,8 @@ local JITTERS = {Vector3.new(0,0,0), Vector3.new(0.5,0,0), Vector3.new(0,0.5,0),
 local VERTICAL_MATCH_THRESHOLD = 1.25
 local OUTER_STEP_SIZE = 1
 local MAX_OUTER_STEPS = 4
-local MAX_START_TRIES = 2
-local MAX_CANDIDATES = 2
+local MAX_START_TRIES = 6
+local MAX_CANDIDATES = 6
 
 local function shouldCreateTracerFor(ownerUserId, isKnife)
     if isKnife then
@@ -307,36 +368,117 @@ local function shouldCreateTracerFor(ownerUserId, isKnife)
     end
 end
 
+-- createTracer 保持 Beam，但移除夜光（PointLight / 中间光源）
 local function createTracer(startPos, endPos, color, thickness, fadeTime, ownerUserId, isKnife)
     if not startPos or not endPos then return end
     if not shouldCreateTracerFor(ownerUserId, isKnife) then
         return nil
     end
+
+    local cam = workspace.CurrentCamera
+    if not cam then
+        local dir = endPos - startPos
+        local dist = dir.Magnitude
+        if dist <= 0 then return end
+        local part = Instance.new("Part")
+        part.Name = "BulletTracer"
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanQuery = false
+        part.CanTouch = false
+        part.Size = Vector3.new(thickness or TRACER_THICKNESS, thickness or TRACER_THICKNESS, dist)
+        part.Material = Enum.Material.Neon
+        if color then
+            part.Color = color
+        else
+            part.Color = getColorForOwner(ownerUserId)
+        end
+        part.Transparency = 0
+        part.CastShadow = false
+        part.CFrame = CFrame.new(startPos, endPos) * CFrame.new(0, 0, -dist/2)
+        part.Parent = workspace
+        local tweenInfo = TweenInfo.new(fadeTime or TRACER_FADE_TIME, Enum.EasingStyle.Linear)
+        local tween = TweenService:Create(part, tweenInfo, {Transparency = 1})
+        tween:Play()
+        Debris:AddItem(part, (fadeTime or TRACER_FADE_TIME) + 0.1)
+        return part
+    end
+
     local dir = endPos - startPos
     local dist = dir.Magnitude
-    if dist <= 0 then return end
-    local part = Instance.new("Part")
-    part.Name = "BulletTracer"
-    part.Anchored = true
-    part.CanCollide = false
-    part.CanQuery = false
-    part.CanTouch = false
-    part.Size = Vector3.new(thickness or TRACER_THICKNESS, thickness or TRACER_THICKNESS, dist)
-    part.Material = Enum.Material.Neon
-    if color then
-        part.Color = color
-    else
-        part.Color = getColorForOwner(ownerUserId)
+    if dist <= 0.01 then
+        dist = 0.05
     end
-    part.Transparency = 0
-    part.CastShadow = false
-    part.CFrame = CFrame.new(startPos, endPos) * CFrame.new(0, 0, -dist/2)
-    part.Parent = workspace
-    local tweenInfo = TweenInfo.new(fadeTime or TRACER_FADE_TIME, Enum.EasingStyle.Linear)
-    local tween = TweenService:Create(part, tweenInfo, {Transparency = 1})
-    tween:Play()
-    Debris:AddItem(part, (fadeTime or TRACER_FADE_TIME) + 0.1)
-    return part
+
+    local binParent = workspace:FindFirstChild("Bin") or workspace
+
+    local part0 = Instance.new("Part")
+    part0.Name = "Tracer_Att_Part0"
+    part0.Anchored = true
+    part0.CanCollide = false
+    part0.CanQuery = false
+    part0.CanTouch = false
+    part0.Size = Vector3.new(0.2, 0.2, 0.2)
+    part0.Transparency = 1
+    part0.CFrame = CFrame.new(startPos)
+    part0.Parent = binParent
+
+    local part1 = Instance.new("Part")
+    part1.Name = "Tracer_Att_Part1"
+    part1.Anchored = true
+    part1.CanCollide = false
+    part1.CanQuery = false
+    part1.CanTouch = false
+    part1.Size = Vector3.new(0.2, 0.2, 0.2)
+    part1.Transparency = 1
+    part1.CFrame = CFrame.new(endPos)
+    part1.Parent = binParent
+
+    local att0 = Instance.new("Attachment")
+    att0.Name = "Tracer_Att_0"
+    att0.Parent = part0
+
+    local att1 = Instance.new("Attachment")
+    att1.Name = "Tracer_Att_1"
+    att1.Parent = part1
+
+    local beam = Instance.new("Beam")
+    beam.Name = "V67_TracerBeam"
+    beam.Attachment0 = att0
+    beam.Attachment1 = att1
+    beam.Width0 = thickness or TRACER_THICKNESS
+    beam.Width1 = thickness or TRACER_THICKNESS
+    beam.FaceCamera = true
+    beam.TextureMode = Enum.TextureMode.Stretch
+    beam.LightInfluence = 1
+    local beamColor = color or getColorForOwner(ownerUserId)
+    beam.Color = ColorSequence.new(beamColor)
+    beam.Transparency = NumberSequence.new(0)
+
+    beam.Parent = part0
+
+    local totalFade = (fadeTime or TRACER_FADE_TIME) or TRACER_FADE_TIME
+    local startTime = tick()
+    local conn
+    conn = RunService.Heartbeat:Connect(function(dt)
+        local elapsed = tick() - startTime
+        local frac = math.clamp(elapsed / totalFade, 0, 1)
+        local curTrans = NumberSequence.new(frac)
+        pcall(function() beam.Transparency = curTrans end)
+        if frac >= 1 then
+            pcall(function() conn:Disconnect() end)
+            pcall(function() beam:Destroy() end)
+            pcall(function() att0:Destroy() end)
+            pcall(function() att1:Destroy() end)
+            pcall(function() part0:Destroy() end)
+            pcall(function() part1:Destroy() end)
+        end
+    end)
+
+    Debris:AddItem(part0, totalFade + 1)
+    Debris:AddItem(part1, totalFade + 1)
+
+    return beam
 end
 
 local function playHitSoundAt(pos)
@@ -425,14 +567,10 @@ local function playMusic()
     stopMusic()
     if not SETTINGS.PlayMusic then return end
     local idx = SETTINGS.MusicIndex
+    -- 如果当前索引不可用，则随机选一个启用曲目
     if not SETTINGS.MusicEnabled[idx] then
-        local first = findFirstEnabledIndex()
-        if first then
-            idx = first
-            SETTINGS.MusicIndex = idx
-        else
-            return
-        end
+        idx = getRandomEnabledMusicIndex()
+        SETTINGS.MusicIndex = idx
     end
     local id = getMusicIdForIndex(idx)
     if not id then return end
@@ -845,7 +983,7 @@ local function consumeDestructiblesAlongSegment(from, to, ignoreList, ownerUserI
 end
 
 local function makeBulletTracerAndEffects(from, to, fxName, hitPart, ownerUserId)
-    createTracer(from, to, nil, nil, nil, ownerUserId, false)
+    createTracer(from, to, nil, nil, TRACER_FADE_TIME, ownerUserId, false)
     safeRunEffect("BulletEffects." .. (fxName or "Default"), {
         ["CFrame"] = CFrame.new(from, to),
         ["Origin"] = from,
@@ -873,7 +1011,6 @@ local function spawnBulletSimple(data, ply)
             ["Character"] = data.hitInstance.Parent,
             ["Limb"] = data.hitInstance
         })
-        -- 注意：命中音效仅在服务端命中回报（HitReplicate）时播放，避免本地预测误触发
     end
 end
 
@@ -888,7 +1025,7 @@ local function spawnKnifeSimple(tbl)
     local dir = target - origin
     local distance = dir.Magnitude
     if distance <= 0.01 then
-        createTracer(origin, target, nil, 0.12, 10, ownerUserId, true)
+        createTracer(origin, target, nil, 0.12, TRACER_FADE_TIME, ownerUserId, true)
         safeRunEffect("ThrowEffects.Default", {["Knife"] = nil, ["Origin"] = origin, ["HitPos"] = target})
         return
     end
@@ -915,7 +1052,8 @@ local function spawnKnifeSimple(tbl)
     visual.Parent = workspace:FindFirstChild("Bin") or workspace
     Debris:AddItem(visual, time + 4)
 
-    createTracer(origin, target, visual.Color, 0.12, math.clamp(time + 0.2, 2, 10), ownerUserId, true)
+    -- 强制轨迹持续时间为 TRACER_FADE_TIME（即 10 秒）
+    createTracer(origin, target, visual.Color, 0.12, TRACER_FADE_TIME, ownerUserId, true)
     safeRunEffect("ThrowEffects.Default", {["Knife"] = visual, ["Origin"] = origin, ["HitPos"] = target})
 
     spawn(function()
@@ -934,7 +1072,6 @@ local function spawnKnifeSimple(tbl)
         end
         pcall(function()
             safeRunEffect("ThrowHit", {["CFrame"] = CFrame.new(target), ["HitPart"] = nil})
-            -- 注意：命中音效仅在服务端命中回报（HitReplicate）时播放，避免本地预测误触发
         end)
         pcall(function() visual:Destroy() end)
     end)
@@ -965,7 +1102,6 @@ if HitReplicate and HitReplicate:IsA("RemoteEvent") then
                         if typeof(fromPlayer) == "Instance" and fromPlayer.UserId then owner = fromPlayer.UserId end
                     end
                     if owner == LocalPlayer.UserId then
-                        -- 服务端确认的命中，在这里播放命中音效
                         playHitSoundAt(hitTbl.hitPos)
                     end
                 end)
@@ -979,7 +1115,6 @@ if HitReplicate and HitReplicate:IsA("RemoteEvent") then
                         if typeof(fromPlayer) == "Instance" and fromPlayer.UserId then owner = fromPlayer.UserId end
                     end
                     if owner == LocalPlayer.UserId then
-                        -- 服务端确认的命中，在这里播放命中音效
                         playHitSoundAt(hitTbl.hitPos)
                     end
                 end)
@@ -1012,8 +1147,148 @@ local function hasActiveShield(character)
     return ok and res or false
 end
 
-local lastOneSecondTest = 0
+-- 新增：为外环采样（命中半径边缘）生成候选点
+local function GetOffsets_Outer(center, poleDir, radius, count)
+    if not radius or radius <= 0 or not count or count <= 0 then return {center} end
+    local offsets = {}
+    local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+    local t1 = poleDir:Cross(arb)
+    if t1.Magnitude == 0 then
+        arb = Vector3.new(0,0,1)
+        t1 = poleDir:Cross(arb)
+    end
+    t1 = t1.Unit
+    local t2 = poleDir:Cross(t1).Unit
 
+    for i = 1, count do
+        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count) * 0.05
+        local offsetVec = t1 * (math.cos(theta) * radius) + t2 * (math.sin(theta) * radius)
+        table.insert(offsets, center + offsetVec)
+    end
+    return offsets
+end
+
+-- 旧的 GetOffsets_Algo1/2 保留（DoRagebot 可能使用）
+local ScanVectors = {
+    Vector3.new(1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0),
+    -Vector3.new(1, 0, 0), -Vector3.new(0, 0, 1), -Vector3.new(0, 1, 0),
+    Vector3.new(1, 1, 0)/math.sqrt(2), Vector3.new(1, 0, 1)/math.sqrt(2), Vector3.new(0, 1, 1)/math.sqrt(2),
+    Vector3.new(-1, 1, 0)/math.sqrt(2), Vector3.new(-1, 0, 1)/math.sqrt(2),
+    -Vector3.new(1, 0, 1)/math.sqrt(2), -Vector3.new(-1, 0, 1)/math.sqrt(2), -Vector3.new(0, -1, 1)/math.sqrt(2),
+    Vector3.new(1, 1, 1)/math.sqrt(3), Vector3.new(-1, 1, 1)/math.sqrt(3), Vector3.new(1, 1, -1)/math.sqrt(3),
+    -Vector3.new(1, 1, 1)/math.sqrt(3), -Vector3.new(1, -1, 1)/math.sqrt(3),
+    Vector3.new(1,2,0)/math.sqrt(5), Vector3.new(-1,2,0)/math.sqrt(5), Vector3.new(1,0,2)/math.sqrt(5), Vector3.new(-1,0,2)/math.sqrt(5),
+    -Vector3.new(-1,0,2)/math.sqrt(5), -Vector3.new(1,0,2)/math.sqrt(5),
+}
+
+local function GetOffsets_Algo1(firePos, targetPos, offset)
+    if not offset or offset <= 0 then return {firePos} end
+    local offsets = {firePos}
+    local cfOffset = CFrame.new(firePos, targetPos) * CFrame.Angles(0, 0, math.rad(math.random(1, 90)))
+    for _, pos in ipairs(ScanVectors) do
+        table.insert(offsets, (cfOffset * (pos * offset)).p)
+    end
+    return offsets
+end
+
+local function GetOffsets_Algo2(center, poleDir, radius, count)
+    if not radius or radius <= 0 or not count or count <= 0 then return {center} end
+    local offsets = {center}
+    local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+    local t1 = poleDir:Cross(arb)
+    if t1.Magnitude == 0 then
+        arb = Vector3.new(0,0,1)
+        t1 = poleDir:Cross(arb)
+    end
+    t1 = t1.Unit
+    local t2 = poleDir:Cross(t1).Unit
+
+    for i = 1, count do
+        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count)
+        local r = radius * math.sqrt(math.random())
+        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+        table.insert(offsets, center + offsetVec)
+    end
+    return offsets
+end
+
+-- DoRagebot（保持原有逻辑/可选加速）——若环境存在外部函数则有用
+local RB_State = RB_State
+local Valid_Pair = Valid_Pair
+local Locked_Path = Locked_Path
+local Origin_Radius = Origin_Radius or 3
+local Hit_Radius = Hit_Radius or 1.5
+local Origin_Scans = Origin_Scans or 64
+local Hit_Scans = Hit_Scans or 32
+local ScanRate = ScanRate or 120
+local WB = WB or { LastScan = 0, Threshold = 0.05, Cached = false, Round = 0 }
+
+local function DoRagebot()
+    if not RB_State then Valid_Pair = nil; Locked_Path = nil; return end
+    local target = GetTarget()
+    if not target or not target.Character then Valid_Pair = nil; Locked_Path = nil; return end
+    if Locked_Path and Locked_Path.Target ~= target then Locked_Path = nil end
+
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local tRoot  = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot or not tRoot then return end
+    local myPos = GetLocalRealPosition()
+    local tPos = tRoot.Position
+
+    if Locked_Path then
+        local dO = (myPos - Locked_Path.MyPos).Magnitude
+        local dH = (tPos - Locked_Path.TPos).Magnitude
+        local inRange = (myPos - Locked_Path.AbsO).Magnitude <= Origin_Radius
+                      and (tPos - Locked_Path.AbsH).Magnitude <= Hit_Radius
+        if dO <= WB.Threshold and dH <= WB.Threshold and inRange then
+            if CheckWallbang(Locked_Path.AbsO, Locked_Path.AbsH) then
+                Valid_Pair = {Origin = Locked_Path.AbsO, Hit = Locked_Path.AbsH, Target = target}
+                WB.Cached = true
+                return
+            end
+        end
+        Locked_Path = nil
+    end
+
+    if tick() - WB.LastScan < 1 / ScanRate then return end
+    WB.LastScan = tick()
+    WB.Round = (WB.Round or 0) + 1
+
+    local newOrigin, newTarget
+    if WB.Round % 2 == 0 then
+        newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
+        newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
+    else
+        local oPole = (tPos - myPos)
+        if oPole.Magnitude < 0.001 then return end
+        oPole = oPole.Unit
+        local hPole = -oPole
+        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
+        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans)
+    end
+
+    local bestPO, bestPH = nil, nil
+    for _, pO in ipairs(newOrigin) do
+        for _, pH in ipairs(newTarget) do
+            if CheckWallbang(pO, pH) then
+                bestPO = pO
+                bestPH = pH
+                break
+            end
+        end
+        if bestPO then break end
+    end
+
+    if bestPO then
+        Locked_Path = {AbsO = bestPO, AbsH = bestPH, Target = target, MyPos = myPos, TPos = tPos}
+        Valid_Pair = {Origin = bestPO, Hit = bestPH, Target = target}
+        WB.Cached = false
+    else
+        Valid_Pair = nil
+    end
+end
+
+-- 主自动射击循环（包含：若设置了 HitRadius 则使用多环从内到外优先采样）
 RunService.Heartbeat:Connect(function()
     if not LocalPlayer.Character then return end
     if not SETTINGS.AutoFire then return end
@@ -1044,7 +1319,11 @@ RunService.Heartbeat:Connect(function()
     local interval = (weaponType == "knife") and KNIFE_RATE or GUN_RATE
     if currentTime - lastFireTimes[weaponType] < interval then return end
 
-    local topCandidates = {}
+    -- 尝试提前运行 DoRagebot（若存在）
+    pcall(function() DoRagebot() end)
+
+    -- 收集所有候选目标（不再按距离优先）
+    local candidates = {}
     local fireRadiusSq = (SETTINGS.FireRadius or FIRE_RADIUS) * (SETTINGS.FireRadius or FIRE_RADIUS)
 
     local playersList = Players:GetPlayers()
@@ -1062,7 +1341,7 @@ RunService.Heartbeat:Connect(function()
                         local dz = head.Position.Z - localPos.Z
                         local distSq = dx*dx + dy*dy + dz*dz
                         if distSq <= fireRadiusSq then
-                            insertTopByDist(topCandidates, {player = player, character = player.Character, head = head, distSq = distSq}, distSq, MAX_CANDIDATES)
+                            table.insert(candidates, {player = player, character = player.Character, head = head, distSq = distSq})
                         end
                     end
                 end
@@ -1086,7 +1365,7 @@ RunService.Heartbeat:Connect(function()
                         local dz = head.Position.Z - localPos.Z
                         local distSq = dx*dx + dy*dy + dz*dz
                         if distSq <= fireRadiusSq then
-                            insertTopByDist(topCandidates, {player = nil, character = ch, head = head, distSq = distSq}, distSq, MAX_CANDIDATES)
+                            table.insert(candidates, {player = nil, character = ch, head = head, distSq = distSq})
                         end
                     end
                 end
@@ -1094,12 +1373,24 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    if #topCandidates == 0 then return end
+    -- 如果没有候选则退出
+    if #candidates == 0 then return end
+
+    -- 随机打乱候选顺序（去除“最近优先”）
+    local function shuffle(t)
+        for i = #t, 2, -1 do
+            local j = math.random(1, i)
+            t[i], t[j] = t[j], t[i]
+        end
+    end
+    shuffle(candidates)
+    while #candidates > MAX_CANDIDATES do table.remove(candidates) end
+    local topCandidates = candidates
 
     if SETTINGS.OneSecondTest and #topCandidates > 1 and currentTime - lastOneSecondTest >= 1 then
         lastOneSecondTest = currentTime
         for ci = 1, #topCandidates do
-            local cand = topCandidates[ci].item
+            local cand = topCandidates[ci]
             local targetCharacter = cand.character
             local head = cand.head
             local ownerId = LocalPlayer.UserId
@@ -1123,255 +1414,375 @@ RunService.Heartbeat:Connect(function()
     end
 
     local didFire = false
+
+    -- 优先使用 DoRagebot 给出的 Valid_Pair（若目标匹配）
+    if Valid_Pair and Valid_Pair.Target then
+        for i = 1, #topCandidates do
+            local cand = topCandidates[i]
+            if cand.player and cand.player == Valid_Pair.Target then
+                local chosenStart = Valid_Pair.Origin
+                local predicted = Valid_Pair.Hit
+                if chosenStart and predicted then
+                    local ownerId = LocalPlayer.UserId
+                    if weaponType == "knife" then
+                        throwIdCounter = throwIdCounter + 1
+                        local throwTbl = {
+                            origin = chosenStart,
+                            target = predicted,
+                            id = throwIdCounter,
+                            ownerUserId = ownerId,
+                            skin = LocalPlayer:GetAttribute("KnifeSkin") or "Default",
+                            effects = {},
+                            power = 1
+                        }
+                        spawnKnifeSimple(throwTbl)
+                        if ThrowReplicate and ThrowReplicate:IsA("RemoteEvent") then
+                            pcall(function() ThrowReplicate:FireServer(throwTbl) end)
+                        end
+                        if ReportHit and ReportHit:IsA("RemoteEvent") then
+                            local hitReport = {
+                                kind = "throw",
+                                throwId = throwIdCounter,
+                                ownerUserId = ownerId,
+                                targetUserId = (cand.player and cand.player.UserId) or 0,
+                                targetModel = cand.character,
+                                at = time(),
+                                origin = chosenStart,
+                                to = predicted,
+                                vel = (predicted - chosenStart),
+                                hitPart = cand.head,
+                                hitPos = predicted,
+                                headshot = (cand.head and cand.head.Name == "Head") and true or false
+                            }
+                            pcall(function() ReportHit:FireServer(hitReport) end)
+                        end
+                        -- 标记偏移点已使用（冷却）
+                        if Valid_Pair.OriginIdx then
+                            markOffsetUsed(Valid_Pair.OriginIdx)
+                        end
+                        lastFireTimes.knife = currentTime
+                        didFire = true
+                        break
+                    else
+                        local args = {
+                            [1] = {
+                                ["hitPos"] = predicted,
+                                ["to"] = predicted,
+                                ["hitInstance"] = cand.head,
+                                ["id"] = 24,
+                                ["mode"] = "single",
+                                ["origin"] = chosenStart,
+                                ["from"] = chosenStart,
+                                ["hitNormal"] = Vector3.new(1, 0, 0),
+                                ["effects"] = {
+                                    ["Frost"] = 0,
+                                    ["Ricochet"] = 0,
+                                    ["Barrage"] = 0
+                                },
+                                ["ownerUserId"] = ownerId,
+                                ["kind"] = "bullet",
+                                ["isCharacterHit"] = true,
+                                ["isADS"] = false
+                            }
+                        }
+                        if ShootReplicate and ShootReplicate:IsA("RemoteEvent") then
+                            pcall(function() ShootReplicate:FireServer(unpack(args)) end)
+                        end
+                        createTracer(chosenStart, predicted, nil, nil, TRACER_FADE_TIME, ownerId, false)
+                        -- 标记偏移点已使用（冷却）
+                        if Valid_Pair.OriginIdx then
+                            markOffsetUsed(Valid_Pair.OriginIdx)
+                        end
+                        lastFireTimes.gun = currentTime
+                        didFire = true
+                        break
+                    end
+                end
+            end
+        end
+        if didFire then return end
+    end
+
+    -- 主候选处理：若设置了 HitRadius (>0)，则基于多环（内到外）采样多个预测点尝试开火（以 HitRadius 的最大范围为准）
     for i = 1, #topCandidates do
         if didFire then break end
-        local cand = topCandidates[i].item
+        local cand = topCandidates[i]
         local targetCharacter = cand.character
         local head = cand.head
 
         local baseHitPos = head.Position + HIT_OFFSET
-
         local hr = (type(SETTINGS.HitRadius) == "number") and SETTINGS.HitRadius or 0
 
-        local hitPos = baseHitPos
+        -- 生成预测点列表：如果有指定 HitRadius (>0) 则使用多环从内到外采样，否则只用中心点
+        local predictedList = {}
         if hr and hr > 0 then
-            local rx = (math.random() * 2 - 1) * hr
-            local ry = (math.random() * 2 - 1) * hr
-            hitPos = baseHitPos + Vector3.new(rx, ry, 0)
+            local toTargetVec = (baseHitPos - localPos)
+            local pole = toTargetVec.Magnitude > 0.001 and toTargetVec.Unit or Vector3.new(0,1,0)
+            local rings = {0, hr * 0.25, hr * 0.5, hr * 0.75, hr}
+            local totalScans = Hit_Scans or 32
+            local countPerRing = math.max(6, math.floor(totalScans / math.max(1, #rings)))
+            -- 保证中心点最先被考虑
+            table.insert(predictedList, baseHitPos)
+            for r = 2, #rings do
+                local pts = GetOffsets_Outer(baseHitPos, pole, rings[r], countPerRing)
+                for _, p in ipairs(pts) do table.insert(predictedList, p) end
+            end
+        else
+            predictedList = { baseHitPos }
         end
 
-        local hroot = targetCharacter:FindFirstChild("HumanoidRootPart")
-        local targetVel = (hroot and hroot.Velocity) or Vector3.new(0,0,0)
-        local toTargetX = hitPos.X - localPos.X
-        local toTargetY = hitPos.Y - localPos.Y
-        local toTargetZ = hitPos.Z - localPos.Z
-        local magSq = toTargetX*toTargetX + toTargetY*toTargetY + toTargetZ*toTargetZ
-        if magSq <= 0 then
-        else
-            local mag = math.sqrt(magSq)
-            local predicted = hitPos
+        -- 将对 predictedList 的尝试提取到一个局部函数，以便内向优先和回退外向优先两次尝试
+        local function tryPredictedList(plList)
+            for _, predicted in ipairs(plList) do
+                if didFire then break end
+                if typeof(predicted) ~= "Vector3" then predicted = baseHitPos end
 
-            local vecToPred = predicted - localPos
-            local magPred = vecToPred.Magnitude
-            if magPred <= 0 then
-            else
-                local dirUnit = vecToPred.Unit
-                local dot3D = clamp(forward.X * dirUnit.X + forward.Y * dirUnit.Y + forward.Z * dirUnit.Z, -1, 1)
-                local angleDeg = deg(acos(dot3D))
-                if angleDeg <= MAX_ANGLE_DEG then
-                    local startCandidates = {}
-                    local histKey = nil
-                    if cand.player and cand.player.UserId then
-                        histKey = cand.player.UserId
-                    elseif cand.character and cand.character.GetAttribute then
-                        local buid = cand.character:GetAttribute("BotUserId")
-                        if typeof(buid) == "number" then
-                            histKey = buid
-                        end
-                    end
-                    local hist = histKey and lastSuccessfulPoints[histKey] or nil
-
-                    for ii = 1, #baseMuzzleOffsets do
-                        local actualIdx = ((muzzleCycleIndex + ii - 2) % #baseMuzzleOffsets) + 1
-                        local localOffset = baseMuzzleOffsets[actualIdx]
-                        local startPos = (localCFrame * CFrame.new(localOffset)).Position
-                        local dx = predicted.X - startPos.X
-                        local dy = predicted.Y - startPos.Y
-                        local dz = predicted.Z - startPos.Z
-                        local dMagSq = dx*dx + dy*dy + dz*dz
-                        local dMag = math.sqrt(dMagSq)
-                        local fwdDotHoriz = -1
-                        if dMag > 0 then
-                            local horizX = dx
-                            local horizZ = dz
-                            local horizMag = math.sqrt(horizX*horizX + horizZ*horizZ)
-                            if horizMag > 0 then
-                                local fwdHorizX = forward.X
-                                local fwdHorizZ = forward.Z
-                                local horizDot = clamp((fwdHorizX * horizX + fwdHorizZ * horizZ) / horizMag, -1, 1)
-                                fwdDotHoriz = horizDot
-                            else
-                                fwdDotHoriz = 1
-                            end
-                        else
-                            fwdDotHoriz = 1
-                        end
-                        local closeness = 1 - clamp(dMag / (SETTINGS.FireRadius or FIRE_RADIUS), 0, 1)
-                        local score = fwdDotHoriz * 0.7 + closeness * 0.25
-                        local verticalDiff = math.abs(dy)
-                        if verticalDiff <= VERTICAL_MATCH_THRESHOLD then
-                            score = score + 0.05
-                        end
-                        if hist then
-                            local daX = localOffset.X - hist.X
-                            local daY = localOffset.Y - hist.Y
-                            local daZ = localOffset.Z - hist.Z
-                            local daSq = daX*daX + daY*daY + daZ*daZ
-                            if daSq < 2.25 then score = score + 0.1 end
-                        end
-
-                        local occlusionPenalty = 0
-                        if SETTINGS.WallCheck then
-                            local quickRp = RaycastParams.new()
-                            quickRp.FilterType = Enum.RaycastFilterType.Blacklist
-                            quickRp.IgnoreWater = true
-                            quickRp.FilterDescendantsInstances = {LocalPlayer.Character}
-                            local qres = workspace:Raycast(startPos, (predicted - startPos), quickRp)
-                            if qres and not (qres.Instance and qres.Instance:IsDescendantOf(targetCharacter)) then
-                                occlusionPenalty = 0.35
+                local vecToPred = predicted - localPos
+                local magPred = vecToPred.Magnitude
+                if magPred <= 0 then
+                    -- skip invalid
+                else
+                    local dirUnit = vecToPred.Unit
+                    local dot3D = clamp(forward.X * dirUnit.X + forward.Y * dirUnit.Y + forward.Z * dirUnit.Z, -1, 1)
+                    local angleDeg = deg(acos(dot3D))
+                    if angleDeg <= MAX_ANGLE_DEG then
+                        local startCandidates = {}
+                        local histKey = nil
+                        if cand.player and cand.player.UserId then
+                            histKey = cand.player.UserId
+                        elseif cand.character and cand.character.GetAttribute then
+                            local buid = cand.character:GetAttribute("BotUserId")
+                            if typeof(buid) == "number" then
+                                histKey = buid
                             end
                         end
-                        score = score * (1 - occlusionPenalty)
-                        if #startCandidates >= MAX_START_TRIES then
-                            local worstScore = startCandidates[#startCandidates].score
-                            if score <= worstScore then
-                            else
-                                insertTopByScore(startCandidates, {localOffset = localOffset, startPos = startPos, idx = actualIdx}, score, MAX_START_TRIES)
-                            end
-                        else
-                            insertTopByScore(startCandidates, {localOffset = localOffset, startPos = startPos, idx = actualIdx}, score, MAX_START_TRIES)
-                        end
-                    end
+                        local hist = histKey and lastSuccessfulPoints[histKey] or nil
 
-                    local rp = rpTemplate
-                    rp.FilterDescendantsInstances = {LocalPlayer.Character}
-                    local hasLOS = false
-                    local chosenStart = nil
-                    local chosenLocal = nil
-                    local chosenIdx = nil
+                        -- 采样所有 muzzle 偏移点（不再限制小数量）
+                        local MAX_OFFSETS_TO_CHECK = #baseMuzzleOffsets
+                        for sidx = 1, MAX_OFFSETS_TO_CHECK do
+                            local actualIdx = getNextUnusedIndex(muzzleCycleIndex + sidx - 1)
+                            if actualIdx then
+                                -- 跳过在冷却内的偏移点（0.5 秒）
+                                local lastUsed = offsetLastUsed[actualIdx]
+                                if lastUsed and (currentTime - lastUsed) < OFFSET_COOLDOWN then
+                                    -- skip 最近已使用
+                                else
+                                    local localOffset = baseMuzzleOffsets[actualIdx]
+                                    if localOffset then
+                                        local startPos = (localCFrame * CFrame.new(localOffset)).Position
+                                        local dx = predicted.X - startPos.X
+                                        local dy = predicted.Y - startPos.Y
+                                        local dz = predicted.Z - startPos.Z
+                                        local dMagSq = dx*dx + dy*dy + dz*dz
+                                        local dMag = math.sqrt(dMagSq)
+                                        local fwdDotHoriz = -1
+                                        if dMag > 0 then
+                                            local horizX = dx
+                                            local horizZ = dz
+                                            local horizMag = math.sqrt(horizX*horizX + horizZ*horizZ)
+                                            if horizMag > 0 then
+                                                local fwdHorizX = forward.X
+                                                local fwdHorizZ = forward.Z
+                                                local horizDot = clamp((fwdHorizX * horizX + fwdHorizZ * horizZ) / horizMag, -1, 1)
+                                                fwdDotHoriz = horizDot
+                                            else
+                                                fwdDotHoriz = 1
+                                            end
+                                        else
+                                            fwdDotHoriz = 1
+                                        end
+                                        local closeness = 1 - clamp(dMag / (SETTINGS.FireRadius or FIRE_RADIUS), 0, 1)
+                                        local score = fwdDotHoriz * 0.7 + closeness * 0.25
+                                        local verticalDiff = math.abs(dy)
+                                        if verticalDiff <= VERTICAL_MATCH_THRESHOLD then
+                                            score = score + 0.05
+                                        end
+                                        if hist then
+                                            local daX = localOffset.X - hist.X
+                                            local daY = localOffset.Y - hist.Y
+                                            local daZ = localOffset.Z - hist.Z
+                                            local daSq = daX*daX + daY*daY + daZ*daZ
+                                            if daSq < 1.5 then score = score + 0.1 end
+                                        end
 
-                    if SETTINGS.WallCheck == false then
-                        local s = startCandidates[1] and startCandidates[1].elem
-                        if s then
-                            chosenStart = s.startPos
-                            chosenLocal = s.localOffset
-                            chosenIdx = s.idx
-                            hasLOS = true
-                            if histKey then lastSuccessfulPoints[histKey] = chosenLocal end
-                        end
-                    else
-                        for si = 1, #startCandidates do
-                            if hasLOS then break end
-                            local s = startCandidates[si].elem
-                            local okStart, okLocal = findViableStart(localCFrame, s.localOffset, localPos, predicted, rp, targetCharacter, forward)
-                            if okStart then
-                                hasLOS = true
-                                chosenStart = okStart
-                                chosenLocal = okLocal
-                                chosenIdx = s.idx
-                                if histKey then
-                                    local prev = lastSuccessfulPoints[histKey]
-                                    if prev then
-                                        lastSuccessfulPoints[histKey] = Vector3.new(prev.X * 0.6 + chosenLocal.X * 0.4, prev.Y * 0.6 + chosenLocal.Y * 0.4, prev.Z * 0.6 + chosenLocal.Z * 0.4)
-                                    else
-                                        lastSuccessfulPoints[histKey] = chosenLocal
+                                        local occlusionPenalty = 0
+                                        if SETTINGS.WallCheck then
+                                            local quickRp = RaycastParams.new()
+                                            quickRp.FilterType = Enum.RaycastFilterType.Blacklist
+                                            quickRp.IgnoreWater = true
+                                            quickRp.FilterDescendantsInstances = {LocalPlayer.Character}
+                                            local qres = workspace:Raycast(startPos, (predicted - startPos), quickRp)
+                                            if qres and not (qres.Instance and qres.Instance:IsDescendantOf(targetCharacter)) then
+                                                occlusionPenalty = 0.35
+                                            end
+                                        end
+                                        score = score * (1 - occlusionPenalty)
+                                        if #startCandidates >= MAX_START_TRIES then
+                                            local worstScore = startCandidates[#startCandidates].score
+                                            if score <= worstScore then
+                                            else
+                                                insertTopByScore(startCandidates, {localOffset = localOffset, startPos = startPos, idx = actualIdx}, score, MAX_START_TRIES)
+                                            end
+                                        else
+                                            insertTopByScore(startCandidates, {localOffset = localOffset, startPos = startPos, idx = actualIdx}, score, MAX_START_TRIES)
+                                        end
                                     end
                                 end
+                            end
+                        end
+
+                        local rp = rpTemplate
+                        rp.FilterDescendantsInstances = {LocalPlayer.Character}
+                        local hasLOS = false
+                        local chosenStart = nil
+                        local chosenLocal = nil
+                        local chosenIdx = nil
+
+                        if SETTINGS.WallCheck == false then
+                            local s = startCandidates[1] and startCandidates[1].elem
+                            if s then
+                                chosenStart = s.startPos
+                                chosenLocal = s.localOffset
+                                chosenIdx = s.idx
+                                hasLOS = true
+                                if histKey then lastSuccessfulPoints[histKey] = chosenLocal end
+                            end
+                        else
+                            for si = 1, #startCandidates do
+                                if hasLOS then break end
+                                local s = startCandidates[si].elem
+                                local okStart, okLocal = findViableStart(localCFrame, s.localOffset, localPos, predicted, rp, targetCharacter, forward)
+                                if okStart then
+                                    hasLOS = true
+                                    chosenStart = okStart
+                                    chosenLocal = okLocal
+                                    chosenIdx = s.idx
+                                    if histKey then
+                                        local prev = lastSuccessfulPoints[histKey]
+                                        if prev then
+                                            lastSuccessfulPoints[histKey] = Vector3.new(prev.X * 0.5 + chosenLocal.X * 0.5, prev.Y * 0.5 + chosenLocal.Y * 0.5, prev.Z * 0.5 + chosenLocal.Z * 0.5)
+                                        else
+                                            lastSuccessfulPoints[histKey] = chosenLocal
+                                        end
+                                    end
+                                    break
+                                end
+                            end
+                        end
+
+                        if hasLOS and chosenStart then
+                            if chosenIdx and type(chosenIdx) == "number" then
+                                muzzleCycleIndex = (chosenIdx % #baseMuzzleOffsets) + 1
+                            else
+                                muzzleCycleIndex = (muzzleCycleIndex % #baseMuzzleOffsets) + 1
+                            end
+
+                            if chosenIdx and type(chosenIdx) == "number" then markOffsetUsed(chosenIdx) end
+
+                            local ownerId = LocalPlayer.UserId
+                            if weaponType == "knife" then
+                                throwIdCounter = throwIdCounter + 1
+                                local throwTbl = {
+                                    origin = chosenStart,
+                                    target = predicted,
+                                    id = throwIdCounter,
+                                    ownerUserId = ownerId,
+                                    skin = LocalPlayer:GetAttribute("KnifeSkin") or "Default",
+                                    effects = {},
+                                    power = 1
+                                }
+                                spawnKnifeSimple(throwTbl)
+                                if ThrowReplicate and ThrowReplicate:IsA("RemoteEvent") then
+                                    pcall(function() ThrowReplicate:FireServer(throwTbl) end)
+                                end
+                                if ReportHit and ReportHit:IsA("RemoteEvent") then
+                                    local hitReport = {
+                                        kind = "throw",
+                                        throwId = throwIdCounter,
+                                        ownerUserId = ownerId,
+                                        targetUserId = (cand.player and cand.player.UserId) or 0,
+                                        targetModel = targetCharacter,
+                                        at = time(),
+                                        origin = chosenStart,
+                                        to = predicted,
+                                        vel = (predicted - chosenStart),
+                                        hitPart = head,
+                                        hitPos = predicted,
+                                        headshot = (head and head.Name == "Head") and true or false
+                                    }
+                                    pcall(function() ReportHit:FireServer(hitReport) end)
+                                else
+                                    if ShootReplicate and ShootReplicate:IsA("RemoteEvent") then
+                                        local args = {
+                                            [1] = {
+                                                ["hitPos"] = predicted,
+                                                ["to"] = predicted,
+                                                ["hitInstance"] = head,
+                                                ["id"] = 24,
+                                                ["mode"] = "single",
+                                                ["origin"] = chosenStart,
+                                                ["from"] = chosenStart,
+                                                ["hitNormal"] = Vector3.new(1, 0, 0),
+                                                ["effects"] = {
+                                                    ["Frost"] = 0,
+                                                    ["Ricochet"] = 0,
+                                                    ["Barrage"] = 0
+                                                },
+                                                ["ownerUserId"] = ownerId,
+                                                ["kind"] = "bullet",
+                                                ["isCharacterHit"] = true,
+                                                ["isADS"] = false
+                                            }
+                                        }
+                                        pcall(function() ShootReplicate:FireServer(unpack(args)) end)
+                                    end
+                                end
+                                lastFireTimes.knife = currentTime
+                                didFire = true
+                                break
+                            else
+                                local args = {
+                                    [1] = {
+                                        ["hitPos"] = predicted,
+                                        ["to"] = predicted,
+                                        ["hitInstance"] = head,
+                                        ["id"] = 24,
+                                        ["mode"] = "single",
+                                        ["origin"] = chosenStart,
+                                        ["from"] = chosenStart,
+                                        ["hitNormal"] = Vector3.new(1, 0, 0),
+                                        ["effects"] = {
+                                            ["Frost"] = 0,
+                                            ["Ricochet"] = 0,
+                                            ["Barrage"] = 0
+                                        },
+                                        ["ownerUserId"] = ownerId,
+                                        ["kind"] = "bullet",
+                                        ["isCharacterHit"] = true,
+                                        ["isADS"] = false
+                                    }
+                                }
+                                if ShootReplicate and ShootReplicate:IsA("RemoteEvent") then
+                                    pcall(function() ShootReplicate:FireServer(unpack(args)) end)
+                                end
+                                createTracer(chosenStart, predicted, nil, nil, TRACER_FADE_TIME, ownerId, false)
+                                lastFireTimes.gun = currentTime
+                                didFire = true
                                 break
                             end
                         end
                     end
-
-                    if hasLOS and chosenStart then
-                        if chosenIdx and type(chosenIdx) == "number" then
-                            muzzleCycleIndex = (chosenIdx % #baseMuzzleOffsets) + 1
-                        else
-                            muzzleCycleIndex = (muzzleCycleIndex % #baseMuzzleOffsets) + 1
-                        end
-                        local ownerId = LocalPlayer.UserId
-                        if weaponType == "knife" then
-                            throwIdCounter = throwIdCounter + 1
-                            local throwTbl = {
-                                origin = chosenStart,
-                                target = predicted,
-                                id = throwIdCounter,
-                                ownerUserId = ownerId,
-                                skin = LocalPlayer:GetAttribute("KnifeSkin") or "Default",
-                                effects = {},
-                                power = 1
-                            }
-                            spawnKnifeSimple(throwTbl)
-                            if ThrowReplicate and ThrowReplicate:IsA("RemoteEvent") then
-                                pcall(function() ThrowReplicate:FireServer(throwTbl) end)
-                            end
-                            if ReportHit and ReportHit:IsA("RemoteEvent") then
-                                local hitReport = {
-                                    kind = "throw",
-                                    throwId = throwIdCounter,
-                                    ownerUserId = ownerId,
-                                    targetUserId = (cand.player and cand.player.UserId) or 0,
-                                    targetModel = targetCharacter,
-                                    at = time(),
-                                    origin = chosenStart,
-                                    to = predicted,
-                                    vel = (predicted - chosenStart),
-                                    hitPart = head,
-                                    hitPos = predicted,
-                                    headshot = (head and head.Name == "Head") and true or false
-                                }
-                                pcall(function() ReportHit:FireServer(hitReport) end)
-                            else
-                                if ShootReplicate and ShootReplicate:IsA("RemoteEvent") then
-                                    local args = {
-                                        [1] = {
-                                            ["hitPos"] = predicted,
-                                            ["to"] = predicted,
-                                            ["hitInstance"] = head,
-                                            ["id"] = 24,
-                                            ["mode"] = "single",
-                                            ["origin"] = chosenStart,
-                                            ["from"] = chosenStart,
-                                            ["hitNormal"] = Vector3.new(1, 0, 0),
-                                            ["effects"] = {
-                                                ["Frost"] = 0,
-                                                ["Ricochet"] = 0,
-                                                ["Barrage"] = 0
-                                            },
-                                            ["ownerUserId"] = ownerId,
-                                            ["kind"] = "bullet",
-                                            ["isCharacterHit"] = true,
-                                            ["isADS"] = false
-                                        }
-                                    }
-                                    pcall(function() ShootReplicate:FireServer(unpack(args)) end)
-                                end
-                            end
-                            lastFireTimes.knife = currentTime
-                            didFire = true
-                            break
-                        else
-                            local args = {
-                                [1] = {
-                                    ["hitPos"] = predicted,
-                                    ["to"] = predicted,
-                                    ["hitInstance"] = head,
-                                    ["id"] = 24,
-                                    ["mode"] = "single",
-                                    ["origin"] = chosenStart,
-                                    ["from"] = chosenStart,
-                                    ["hitNormal"] = Vector3.new(1, 0, 0),
-                                    ["effects"] = {
-                                        ["Frost"] = 0,
-                                        ["Ricochet"] = 0,
-                                        ["Barrage"] = 0
-                                    },
-                                    ["ownerUserId"] = ownerId,
-                                    ["kind"] = "bullet",
-                                    ["isCharacterHit"] = true,
-                                    ["isADS"] = false
-                                }
-                            }
-                            if ShootReplicate and ShootReplicate:IsA("RemoteEvent") then
-                                pcall(function() ShootReplicate:FireServer(unpack(args)) end)
-                            end
-                            createTracer(chosenStart, predicted, nil, nil, nil, ownerId, false)
-                            lastFireTimes.gun = currentTime
-                            didFire = true
-                            break
-                        end
-                    end
                 end
             end
+        end
+        -- 先做一次内->外尝试
+        tryPredictedList(predictedList)
+        -- 如果未命中且有命中半径，则再做一次外->内回退尝试
+        if not didFire and hr and hr > 0 then
+            local rev = {}
+            for idx = #predictedList, 1, -1 do table.insert(rev, predictedList[idx]) end
+            tryPredictedList(rev)
         end
     end
 end)
@@ -1384,6 +1795,7 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
+-- UI / 控件部分（与之前版本一致——省略修改说明）
 local sliderIsDragging = false
 
 local function makeSwitch(parent, name, labelText, default, callback)
@@ -1792,7 +2204,7 @@ local function createControlsGui()
     s3.Position = UDim2.new(0, sliderContainerPadding, 0, 8 + (sliderHeight + 6) * 2)
     s3.Size = UDim2.new(1, -sliderContainerPadding*2, 0, sliderHeight)
 
-    local s4 = makeSlider(bottomPanel, "SliderHitRadius", "命中半径", 0, 25, math.floor((type(SETTINGS.HitRadius)=="number" and SETTINGS.HitRadius) or 0), function(v)
+    local s4 = makeSlider(bottomPanel, "SliderHitRadius", "命中半径", 0, 150, math.floor((type(SETTINGS.HitRadius)=="number" and SETTINGS.HitRadius) or 0), function(v)
         SETTINGS.HitRadius = v
     end)
     s4.Parent = bottomPanel
