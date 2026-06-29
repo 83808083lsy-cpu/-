@@ -7057,7 +7057,7 @@ local function StartAutoUnlockSafe()
                 local bredMakurz = map and map:FindFirstChild("BredMakurz")
 
                 if bredMakurz then
-                    local closestSafe, minDist = nil, 12  -- 加大感应距离到 12
+                    local closestSafe, minDist = nil, 5  -- 加大感应距离到 12
 
                     for _, obj in ipairs(bredMakurz:GetChildren()) do
                         if string.find(string.lower(obj.Name), "safe") then
