@@ -1,5 +1,5 @@
 -- == [Bypass] ==
-loadstring(game:HttpGet("https://pastefy.app/pDhoQmem/raw"))()
+loadstring(game:HttpGet(""))()
 
 --[[
     scoot ui library
