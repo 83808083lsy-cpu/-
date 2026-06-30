@@ -1378,7 +1378,845 @@ end)
                     FillDirection = Enum.FillDirection.Horizontal,
                     HorizontalFlex = Enum.UIFlexAlignment.Fill,
                     Padding = UDimNew(0, 14),
-                    SortOrder = Enum.SortOrder.LayoutOrder
+     do -- Player page
+    local Page = Window:Page({Name="Player", SubPages=true})
+    local Sub  = Page:SubPage({Name="Physical", Columns=2})
+    local sec  = Sub:Section({Name="Movement", Side=1})
+    sec:Toggle({Name="WalkSpeed", Flag="CAT_WalkSpeed_53", Callback=function(v) SpeedState=v end}):Keybind({Flag="CAT_WalkSpeed_53_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_WalkSpeed_53"] then Library.SetFlags["CAT_WalkSpeed_53"](v) end end})
+    sec:Slider( {Name="Value", Flag="CAT_Value_54", Min=1, Max=100, Default=33.5, Decimals=0.1, Callback=function(v) SpeedValue=v end})
+    sec:Toggle({Name="JumpPower", Flag="CAT_JumpPower_55", Callback=function(v) JumpState=v end}):Keybind({Flag="CAT_JumpPower_55_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_JumpPower_55"] then Library.SetFlags["CAT_JumpPower_55"](v) end end})
+    sec:Slider( {Name="Value", Flag="CAT_Value_56", Min=1, Max=100, Default=73,   Decimals=0.1, Callback=function(v) JumpValue=v end})
+    sec:Toggle({Name="No fall", Flag="CAT_No_fall_57", Default=false, Callback=function(v) NoFallEnabled=v end}):Keybind({Flag="CAT_No_fall_57_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_No_fall_57"] then Library.SetFlags["CAT_No_fall_57"](v) end end})
+    sec:Toggle({Name="Fly", Flag="CAT_PL_Fly", Callback=function(v)
+        FLY.Enabled = v
+        if FLY.MobileMode then
+            -- 手机模式：和原来一样，有GUI
+            if v then
+                FlyCreateUI()
+                FlyOn()
+            else
+                FlyOff()
+                FlyDestroyUI()
+            end
+        else
+            -- 普通模式：直接飞，无任何GUI
+            if v then
+                FlyOn()
+            else
+                FlyOff()
+            end
+        end
+    end}):Keybind({Flag="CAT_PL_Fly_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_Fly"] then Library.SetFlags["CAT_PL_Fly"](v) end end})
+    sec:Slider({Name="Fly speed", Flag="CAT_Fly_speed_58", Min=1, Max=100, Default=60, Callback=function(v) FLY.Speed=v end})
+    sec:Toggle({Name="Mobile mode", Flag="CAT_PL_MobileMode", Default=false, Callback=function(v)
+        FLY.MobileMode = v
+    end}):Keybind({Flag="CAT_PL_MobileMode_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_MobileMode"] then Library.SetFlags["CAT_PL_MobileMode"](v) end end})
+    sec:Toggle({Name="Infinite Stamina", Flag="CAT_PL_InfStamina", Default=false, Callback=function(Value)
+        InfStaminaEnabled=Value
+        if InfStaminaConnection then InfStaminaConnection:Disconnect(); InfStaminaConnection=nil end
+        if Value then
+            local ok=pcall(function()
+                local tgt=getupvalue(getrenv()._G.S_Take,2); local old
+                old=hookfunction(tgt,function(v1,...) if InfStaminaEnabled then v1=0 end return old(v1,...) end)
+            end)
+            if not ok then
+                local tbs={}
+                local function collect() tbs={}; for _,v in pairs(getgc(true)) do if type(v)=="table" and rawget(v,"S") then tbs[#tbs+1]=v end end end
+                pcall(collect)
+                InfStaminaConnection=RunService.RenderStepped:Connect(function()
+                    if InfStaminaEnabled then
+                        if tick()%5<0.1 then pcall(collect) end
+                        for _,t in ipairs(tbs) do pcall(function() t.S=100 end) end
+                        local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+                        if h then h:SetAttribute("ZSPRN_M",true) end
+                    end
+                end)
+            end
+        else
+            local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+            if h then h:SetAttribute("ZSPRN_M",nil) end
+        end
+    end}):Keybind({Flag="CAT_PL_InfStamina_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_InfStamina"] then Library.SetFlags["CAT_PL_InfStamina"](v) end end})
+end
+
+do -- Antis page
+    local Page        = Window:Page({Name="Antis", SubPages=false})
+    local AntiHitSec  = Page:Section({Name="Anti hit", Side=1})
+
+    AntiHitSec:Dropdown({Name="Head mode", Flag="CAT_Head_mode_59", Items={"Hide head","Yaw head","Custom"}, Callback=function(v)
+        if not v and OriginalNeckC0 then
+            local ch = LocalPlayer.Character
+            if ch then
+                local hd = ch:FindFirstChild("Head")
+                local ts = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+                local nk = (hd and hd:FindFirstChild("Neck")) or (ts and ts:FindFirstChild("Neck"))
+                if nk then nk.C0 = OriginalNeckC0; nk.C1 = OriginalNeckC1 end
+            end
+            OriginalNeckC0, OriginalNeckC1 = nil, nil
+        end
+        HeadYawTime = 0
+        HeadMode = v
+    end})
+    AntiHitSec:Slider({Name="Custom yaw", Flag="CAT_Custom_yaw_60",     Min=-90, Max=90, Default=30,  Decimals=0.1, Callback=function(v) HeadYaw=v; HeadCustomYaw=v end})
+    AntiHitSec:Slider({Name="Rotation speed", Flag="CAT_Rotation_speed_61", Min=-50,  Max=50,  Default=30,  Decimals=0.1, Callback=function(v) HeadRotSpeed=v end})
+
+    AntiHitSec:Dropdown({Name="Hands mod", Flag="CAT_Hands_mod_62", Items={"Hands up","Open hands"}, Callback=function(v) HandsModSelection=v end})
+
+    AntiHitSec:Toggle({Name="乱飞", Flag="CAT_AN_LuanFei", Callback=function(v)
+        LF.Enabled = v
+        if not v then
+            if LF.Track1 then pcall(function() LF.Track1:Stop(0) end); LF.Track1 = nil end
+            if LF.Track2 then pcall(function() LF.Track2:Stop(0) end); LF.Track2 = nil end
+            LF.Angle = 0
+        end
+    end}):Keybind({Flag="CAT_AN_LuanFei_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_AN_LuanFei"] then Library.SetFlags["CAT_AN_LuanFei"](v) end end})
+
+    -- Invisible toggle
+    AntiHitSec:Toggle({Name="Invisible", Flag="CAT_AN_Invisible", Callback=function(v)
+        Invis_Enabled=v
+        if not v then
+            if Invis_Track then pcall(function() Invis_Track:Stop() end); Invis_Track=nil end
+            local char=LocalPlayer.Character
+            if char then
+                for _,p in ipairs(char:GetChildren()) do
+                    if p:IsA("BasePart") and p.Transparency==0.5 then p.Transparency=0 end
+                end
+            end
+        end
+    end}):Keybind({Flag="CAT_AN_Invisible_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_AN_Invisible"] then Library.SetFlags["CAT_AN_Invisible"](v) end end})
+
+    do -- Desync
+        local sec=Page:Section({Name="Velocity desync", Side=2})
+        sec:Toggle({Name="Enable", Flag="CAT_Enable_63",    Callback=function(v) DS.Enabled=v end}):Keybind({Flag="CAT_Enable_63_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Enable_63"] then Library.SetFlags["CAT_Enable_63"](v) end end})
+        sec:Toggle({Name="Visualize", Flag="CAT_Visualize_64", Default=true, Callback=function(v) DS.Visualize=v end}):Keybind({Flag="CAT_Visualize_64_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Visualize_64"] then Library.SetFlags["CAT_Visualize_64"](v) end end})
+        sec:Slider({Name="TP Rate", Flag="CAT_TP_Rate_65",  Min=1,  Max=100, Default=60,  Callback=function(v) DS.TPRate=v end})
+        sec:Slider({Name="X Offset", Flag="CAT_X_Offset_66", Min=1,  Max=20,  Default=8.5, Decimals=0.1, Callback=function(v) DS.X=v end})
+        sec:Slider({Name="Y Offset", Flag="CAT_Y_Offset_67", Min=1,  Max=20,  Default=3,   Decimals=0.1, Callback=function(v) DS.Y=v end})
+        sec:Slider({Name="Z Offset", Flag="CAT_Z_Offset_68", Min=1,  Max=20,  Default=8.5, Decimals=0.1, Callback=function(v) DS.Z=v end})
+    end
+end
+
+do -- Misc page
+    local Page = Window:Page({Name="Misc", SubPages=false})
+    
+    local sL   = Page:Section({Name="Shiftlock", Side=1})
+    sL:Toggle({Name="Anti auto shiftlock", Flag="CAT_Anti_auto_shiftlock_69", Callback=function(v) MC.AntiShift=v end}):Keybind({Flag="CAT_Anti_auto_shiftlock_69_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Anti_auto_shiftlock_69"] then Library.SetFlags["CAT_Anti_auto_shiftlock_69"](v) end end})
+    sL:Slider( {Name="Delay", Flag="CAT_Delay_70", Min=0.01, Max=0.50, Default=0.05, Decimals=0.01, Callback=function(v) MC.ShiftDelay=v end})
+    
+    local sFarm = Page:Section({Name="Farm", Side=1})
+    sFarm:Toggle({Name="Auto pick up money", Flag="CAT_MC_AutoPickup", Callback=function(v) 
+        SC.APM_Enabled = v 
+        if v then StartAutoPickUpMoney() end
+    end}):Keybind({Flag="CAT_MC_AutoPickup_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_MC_AutoPickup"] then Library.SetFlags["CAT_MC_AutoPickup"](v) end end})
+    sFarm:Toggle({Name="Auto unlock safe", Flag="CAT_MC_AutoUnlock", Callback=function(v)
+        SC.AUS_Enabled = v
+        if v then StartAutoUnlockSafe() end
+    end}):Keybind({Flag="CAT_MC_AutoUnlock_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_MC_AutoUnlock"] then Library.SetFlags["CAT_MC_AutoUnlock"](v) end end})
+
+    local sR = Page:Section({Name="Camera", Side=2})
+    sR:Toggle({Name="Smooth Camera", Flag="CAT_Smooth_Camera_71", Callback=function(v) MC.SmoothCam=v; if not v then MC.SmoothPos=nil end end}):Keybind({Flag="CAT_Smooth_Camera_71_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Smooth_Camera_71"] then Library.SetFlags["CAT_Smooth_Camera_71"](v) end end})
+    sR:Slider( {Name="Speed", Flag="CAT_Speed_72", Min=1, Max=10, Default=6, Callback=function(v) MC.LerpSpeed=v end})
+end
+
+do -- PlayerList page
+    local Page = Window:Page({Name="PlayerList", SubPages=false})
+    local pL   = Page:Section({Name="Target List", Side=1})
+    PL_TargetSearch = pL:Searchbox({Name="Targets", Items=GetAllPlayerNames(), Multi=true,
+        Callback=function(v) TargetList=(typeof(v)=="table" and v or {v}); if espSets.enabled and espSets.targetOnly then refreshAllESP() end end})
+    pL:Button({Name="Clear Targets", Callback=function() TargetList={}; pcall(function() PL_TargetSearch:Set({}) end); if espSets.enabled and espSets.targetOnly then refreshAllESP() end end})
+    local pR = Page:Section({Name="Whitelist", Side=2})
+    PL_WhiteSearch = pR:Searchbox({Name="Whitelist", Items=GetAllPlayerNames(), Multi=true,
+        Callback=function(v) WhiteList=(typeof(v)=="table" and v or {v}) end})
+    pR:Button({Name="Clear Whitelist", Callback=function() WhiteList={}; pcall(function() PL_WhiteSearch:Set({}) end) end})
+end
+
+Library:CreateSettingsPage(Window, Watermark, KeybindList)
+
+Players.PlayerAdded:Connect(function(p)
+    PL_TargetSearch:Add(p.Name); PL_WhiteSearch:Add(p.Name)
+end)
+Players.PlayerRemoving:Connect(function(p)
+    PL_TargetSearch:Remove(p.Name); PL_WhiteSearch:Remove(p.Name); clearBoxes(p)
+    if p.Character then
+        local t1=p.Character:FindFirstChild("CAT_NameTag")
+        local t2=p.Character:FindFirstChild("CAT_FFTag")
+        local t3=p.Character:FindFirstChild("CAT_HPTag")
+        if t1 then t1:Destroy() end
+        if t2 then t2:Destroy() end
+        if t3 then t3:Destroy() end
+    end
+end)
+end)() -- end UI IIFE
+
+-- =====================================================================
+-- == Invisible: RenderStep restore (priority 200, after Desync's 199)
+-- =====================================================================
+RunService:BindToRenderStep("InvisFix", 199, function()
+    if not Invis_Enabled or DS.Enabled or LF.Enabled then
+        Invis_SavedCF = nil
+        return
+    end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+
+    if hrp and Invis_SavedCF then
+        hrp.CFrame    = Invis_SavedCF
+        Invis_SavedCF = nil
+    end
+
+    if Invis_Track then
+        pcall(function() Invis_Track:Stop() end)
+    end
+
+    if char then
+        for _, p in ipairs(char:GetChildren()) do
+            if p:IsA("BasePart") and (p.Name=="Head" or p.Name=="Torso" or p.Name:match("Arm") or p.Name:match("Leg")) then
+                if p.Transparency ~= 0.5 then p.Transparency = 0.5 end
+            end
+        end
+    end
+end)
+
+-- =====================================================================
+-- == LuanFei (Spin Desync) Local Anim Fix
+-- =====================================================================
+RunService:BindToRenderStep("LuanFeiAnimFix", 199, function()
+    if LF.Enabled and not Invis_Enabled then
+        if LF.Track1 then pcall(function() LF.Track1:Stop(0) end) end
+        if LF.Track2 then pcall(function() LF.Track2:Stop(0) end) end
+    end
+end)
+
+-- =====================================================================
+-- == Smooth Camera
+-- =====================================================================
+RunService:UnbindFromRenderStep("SmoothMovementCamera")
+RunService:BindToRenderStep("SmoothMovementCamera", Enum.RenderPriority.Camera.Value+1, function(dt)
+    if not MC.SmoothCam or not Camera then MC.SmoothPos=nil return end
+    local cf  = Camera.CFrame
+    local pos = cf.Position
+    if not MC.SmoothPos then MC.SmoothPos=pos
+    else MC.SmoothPos=MC.SmoothPos:Lerp(pos, math.clamp(dt*MC.LerpSpeed,0,1)) end
+    Camera.CFrame = CFrame.new(MC.SmoothPos, MC.SmoothPos+cf.LookVector)
+end)
+
+-- =====================================================================
+-- == Main Heartbeat (split into sub-functions to keep register count low)
+-- =====================================================================
+
+local function DoSkinUpdate()
+    local now = tick()
+    if now - FF_S.LastSkin < 1 then return end
+    FF_S.LastSkin = now
+    if FF_S.BodyEnabled then
+        local char = LocalPlayer.Character
+        if char then
+            for _, p in ipairs(char:GetChildren()) do
+                if IsBodyPart(p) then
+                    if not FF_S.BodyProps[p] then
+                        FF_S.BodyProps[p]={Material=p.Material,Color=p.Color}
+                        p.Material=Enum.Material.ForceField; p.Color=FF_S.Color
+                    elseif p.Material~=Enum.Material.ForceField then
+                        p.Material=Enum.Material.ForceField; p.Color=FF_S.Color
+                    end
+                end
+            end
+        end
+    end
+    if FF_S.ToolEnabled then
+        local char = LocalPlayer.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool then
+            for _, p in ipairs(tool:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    if not FF_S.ToolProps[p] then
+                        FF_S.ToolProps[p] = {Material=p.Material, Color=p.Color}
+                    end
+                    p.Material = Enum.Material.ForceField
+                    p.Color    = FF_S.Color
+                end
+            end
+        end
+    end
+end
+
+local function DoDesyncLogic()
+    if not DS.Enabled or Invis_Enabled then
+        DS.AppliedOffset = Vector3.zero
+        if not DS.Enabled and DS.Model.Parent then DS.Model.Parent=nil end
+        return
+    end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local ragebotActive = false
+    if RB_State and Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character then
+        local th=Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+        local tu=Valid_Pair.Target.Character:FindFirstChildOfClass("Humanoid")
+        if th and tu and tu.Health>0 then
+            local tool=char:FindFirstChildOfClass("Tool")
+            if tool and tool:FindFirstChild("IsGun") then ragebotActive=true end
+        end
+    end
+    if ragebotActive then
+        if DS.Model.Parent then DS.Model.Parent=nil end
+        DS.AppliedOffset=Vector3.zero; return
+    end
+    local clk=os.clock()
+    local interval=DS.TPRate>0 and (1/DS.TPRate) or 0
+    if clk-DS.LastTPTime >= interval then
+        DS.LastTPTime=clk
+        DS.Y_Toggle=not DS.Y_Toggle
+        local yOff=DS.Y_Toggle and (math.random(0,DS.Y*10)/10) or 0
+        local tOff=Vector3.new((math.random()-0.5)*2*DS.X, yOff, (math.random()-0.5)*2*DS.Z)
+        local p=RaycastParams.new()
+        p.FilterDescendantsInstances={char,DS.Model,Camera}
+        p.FilterType=Enum.RaycastFilterType.Exclude
+        local rr=workspace:Raycast(hrp.Position, tOff, p)
+        if rr then DS.CurrentOffset=(rr.Position+rr.Normal*1.5)-hrp.Position
+        else DS.CurrentOffset=tOff end
+    end
+    if DS.Visualize then
+        if DS.Model.Parent~=workspace.Terrain then DS.Model.Parent=workspace.Terrain end
+        DS.Model:PivotTo(CFrame.new(hrp.Position+DS.CurrentOffset))
+    else
+        if DS.Model.Parent then DS.Model.Parent=nil end
+    end
+    DS.AppliedOffset = DS.CurrentOffset
+end
+
+local function DoLuanFeiLogic()
+    if not LF.Enabled or Invis_Enabled then return end
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+
+    local animator = hum:FindFirstChildOfClass("Animator") or hum
+    if not LF.Track1 then
+        pcall(function() 
+            LF.Track1 = animator:LoadAnimation(LF.Anim1)
+            LF.Track1.Priority = Enum.AnimationPriority.Action4 
+        end)
+    end
+    if not LF.Track2 then
+        pcall(function() 
+            LF.Track2 = animator:LoadAnimation(LF.Anim2)
+            LF.Track2.Priority = Enum.AnimationPriority.Action4
+            LF.Track2.Looped = true 
+        end)
+    end
+
+    if LF.Track1 then
+        pcall(function()
+            if not LF.Track1.IsPlaying then LF.Track1:Play() end
+            LF.Track1:AdjustSpeed(0)
+            LF.Track1.TimePosition = (LF.Track1.Length > 0 and LF.TimePosRatio * LF.Track1.Length) or LF.TimePosRatio
+        end)
+    end
+    if LF.Track2 then
+        pcall(function()
+            if not LF.Track2.IsPlaying then LF.Track2:Play() end
+            LF.Track2:AdjustSpeed(1)
+        end)
+    end
+
+    LF.Angle = LF.Angle + LF.SpinSpeed
+end
+
+local function ApplySpoofs()
+    local now = tick()
+    if (DS.Enabled or LF.Enabled) and now - DS.LastFFlagTime >= 1 then
+        DS.LastFFlagTime = now
+        pcall(setfflag, "S2PhysicsSenderRate", "99999999")
+    end
+
+    DoDesyncLogic()
+    DoLuanFeiLogic()
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local spoofed = false
+    local realCF = hrp.CFrame
+    local newCF = realCF
+
+    if DS.Enabled and DS.AppliedOffset ~= Vector3.zero then
+        newCF = newCF + DS.AppliedOffset
+        spoofed = true
+    end
+
+    if LF.Enabled and not Invis_Enabled then
+        local smoothRotation = CFrame.Angles(
+            math.rad(LF.Angle), 
+            math.rad(LF.Angle * 1.5), 
+            math.rad(LF.Angle * 0.8)
+        )
+        newCF = newCF * smoothRotation
+        spoofed = true
+    end
+
+    if spoofed then
+        hrp.CFrame = newCF
+        RunService:BindToRenderStep("RestoreSpoofCFrame", 199, function()
+            if char and hrp and hrp.Parent then hrp.CFrame = realCF end
+            if DS.Enabled then DS.AppliedOffset = Vector3.zero end
+            RunService:UnbindFromRenderStep("RestoreSpoofCFrame")
+        end)
+    end
+end
+
+local function DoInvisible()
+    if not Invis_Enabled or DS.Enabled or LF.Enabled then return end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if not (hrp and hum and hum.Health > 0) then return end
+
+    if not Invis_Track then
+        local anim = hum:FindFirstChildOfClass("Animator") or hum
+        pcall(function()
+            Invis_Track = anim:LoadAnimation(Invis_Anim)
+            Invis_Track.Priority = Enum.AnimationPriority.Action
+        end)
+    end
+
+    if Invis_Track then
+        pcall(function()
+            if not Invis_Track.IsPlaying then Invis_Track:Play() end
+            Invis_Track:AdjustSpeed(0)
+            Invis_Track.TimePosition = 0.3
+        end)
+    end
+
+    Invis_SavedCF = hrp.CFrame
+    hrp.CFrame = Invis_SavedCF + Vector3.new(0, -2, 0)
+end
+
+-- =====================================================================
+-- == 解析1：固定25点向量表 + 随机Roll轴旋转
+-- =====================================================================
+local ScanVectors = {
+    Vector3.new(1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0),
+    -Vector3.new(1, 0, 0), -Vector3.new(0, 0, 1), -Vector3.new(0, 1, 0),
+    Vector3.new(1, 1, 0)/math.sqrt(2), Vector3.new(1, 0, 1)/math.sqrt(2), Vector3.new(0, 1, 1)/math.sqrt(2),
+    Vector3.new(-1, 1, 0)/math.sqrt(2), Vector3.new(-1, 0, 1)/math.sqrt(2),
+    -Vector3.new(1, 0, 1)/math.sqrt(2), -Vector3.new(-1, 0, 1)/math.sqrt(2), -Vector3.new(0, -1, 1)/math.sqrt(2),
+    Vector3.new(1, 1, 1)/math.sqrt(3), Vector3.new(-1, 1, 1)/math.sqrt(3), Vector3.new(1, 1, -1)/math.sqrt(3),
+    -Vector3.new(1, 1, 1)/math.sqrt(3), -Vector3.new(1, -1, 1)/math.sqrt(3),
+    Vector3.new(1,2,0)/math.sqrt(5), Vector3.new(-1,2,0)/math.sqrt(5), Vector3.new(1,0,2)/math.sqrt(5), Vector3.new(-1,0,2)/math.sqrt(5),
+    -Vector3.new(-1,0,2)/math.sqrt(5), -Vector3.new(1,0,2)/math.sqrt(5),
+}
+
+local function GetOffsets_Algo1(firePos, targetPos, offset)
+    if not offset or offset <= 0 then return {firePos} end
+    local offsets = {firePos} -- 优先检测中心点
+    local cfOffset = CFrame.new(firePos, targetPos) * CFrame.Angles(0, 0, math.rad(math.random(1, 90)))
+    for _, pos in ipairs(ScanVectors) do
+        table.insert(offsets, cfOffset * (pos * offset))
+    end
+    return offsets
+end
+
+-- =====================================================================
+-- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
+-- == 改动说明：
+-- ==  - 采样在与 poleDir 垂直的平面上进行（即在目标的“屏幕平面”上），
+-- ==  - 使用 concentric disk (r = radius * sqrt(rand)) 来保证圆盘内的均匀分布，
+-- ==  - 这样 radius 始终是世界单位，不会随距离缩减，命中更精确稳定。
+-- =====================================================================
+local function GetOffsets_Algo2(center, poleDir, radius, count)
+    if not radius or radius <= 0 or count <= 0 then return {center} end
+    local offsets = {center} -- 优先检测中心点
+
+    -- 构建正交基：t1, t2 为与 poleDir 垂直的两个单位向量（plane basis）
+    local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+    local t1 = poleDir:Cross(arb)
+    if t1.Magnitude == 0 then
+        arb = Vector3.new(0,0,1)
+        t1 = poleDir:Cross(arb)
+    end
+    t1 = t1.Unit
+    local t2 = poleDir:Cross(t1).Unit
+
+    -- 为了提高命中精度：中心附近点权重更高（可选）
+    -- 使用 concentric disk sampling 保证圆盘上的均匀采样
+    for i = 1, count do
+        -- 极坐标：角度与半径（半径使用 sqrt(rand) 保证面积均匀）
+        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count) -- 带少量角度抖动
+        local r = radius * math.sqrt(math.random())
+        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+        table.insert(offsets, center + offsetVec)
+    end
+
+    return offsets
+end
+
+-- =====================================================================
+-- == 核心 Ragebot 逻辑
+-- =====================================================================
+local function DoRagebot()
+    if not RB_State then Valid_Pair=nil; Locked_Path=nil; return end
+    local target=GetTarget()
+    if not target or not target.Character then Valid_Pair=nil; Locked_Path=nil; return end
+    if Locked_Path and Locked_Path.Target~=target then Locked_Path=nil end
+    
+    local myRoot=LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local tRoot=target.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot or not tRoot then return end
+    local myPos=GetLocalRealPosition()
+    local tPos=tRoot.Position
+
+    -- 1. 缓存机制 (如果上一发的轨迹依然有效，直接复用，不扫描)
+    if Locked_Path then
+        local dO=(myPos-Locked_Path.MyPos).Magnitude
+        local dH=(tPos-Locked_Path.TPos).Magnitude
+        local inRange=(myPos-Locked_Path.AbsO).Magnitude<=Origin_Radius
+                   and (tPos-Locked_Path.AbsH).Magnitude<=Hit_Radius
+        if dO<=WB.Threshold and dH<=WB.Threshold and inRange then
+            if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
+                Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target}
+                WB.Cached=true; return
+            end
+        end
+        Locked_Path=nil
+    end
+
+    -- 2. 扫描速率限制
+    if tick()-WB.LastScan < 1/ScanRate then return end
+    WB.LastScan=tick()
+    WB.Round=WB.Round+1 -- 轮数+1，用于交替算法
+
+    -- 3. 交替使用两种解析算法
+    local newOrigin, newTarget
+    
+    if WB.Round % 2 == 0 then
+        -- 【双数轮】：使用 解析1 (25点固定向量 + 随机旋转)
+        newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
+        newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
+    else
+        -- 【单数轮】：使用 解析2 (圆盘均匀采样，确保 radius 为固定世界单位)
+        local oPole = (tPos - myPos)
+        if oPole.Magnitude < 0.001 then return end
+        oPole = oPole.Unit
+        local hPole = -oPole -- 敌人的半球朝向玩家
+        
+        -- 这里会读取你 UI 菜单里的 Origin_Scans 和 Hit_Scans 数量
+        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
+        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans)
+    end
+
+    -- 4. 双重循环穷举寻找合法弹道 (找到即返回，不再比较距离)
+    local bestPO, bestPH = nil, nil
+
+    for _, pO in ipairs(newOrigin) do
+        for _, pH in ipairs(newTarget) do
+            if CheckWallbang(pO, pH) then
+                -- 找到第一条合法路径，立即锁定并跳出循环
+                bestPO = pO
+                bestPH = pH
+                break
+            end
+        end
+        if bestPO then break end -- 找到就跳出外层循环
+    end
+
+    -- 5. 更新缓存与射击对
+    if bestPO then
+        Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos}
+        Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target}
+        WB.Cached=false
+    else
+        Valid_Pair=nil
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    DoSkinUpdate()
+    ApplySpoofs()
+    DoInvisible()
+    DoRagebot()
+end)
+
+-- == AntiHit RenderStepped (Hide head / Hands up) ==
+RunService:BindToRenderStep("CAM_FOV_Enforce", Enum.RenderPriority.Camera.Value+2, function()
+    if CAM_FOV then Camera.FieldOfView = CAM_FOV end
+    if AMB.Enabled then
+        -- 挂在 Camera 下，游戏不会删它
+        local cc = Camera:FindFirstChild("CATColorCorr")
+        if not cc then
+            cc = Instance.new("ColorCorrectionEffect")
+            cc.Name   = "CATColorCorr"
+            cc.Parent = Camera
+        end
+        cc.TintColor  = AMB.Color
+        cc.Brightness = AMB.Brightness
+        cc.Contrast   = AMB.Density * 0.3
+        cc.Saturation = -(AMB.Density * 0.5)
+        cc.Enabled    = true
+    else
+        local cc = Camera:FindFirstChild("CATColorCorr")
+        if cc then cc.Enabled = false end
+    end
+end)
+
+-- == AntiHit RenderStepped (Head mode / Hands up) ==
+RunService.RenderStepped:Connect(function(dt)
+    if not HeadMode and not HandsModSelection then return end
+    local char = LocalPlayer.Character
+    if not (char and char.Parent) then return end
+    local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+    local head  = char:FindFirstChild("Head")
+    local hrp   = char:FindFirstChild("HumanoidRootPart")
+
+    if HeadMode then
+        local neck = (head and head:FindFirstChild("Neck")) or (torso and torso:FindFirstChild("Neck"))
+        if HeadMode == "Hide head" and neck then
+            if not OriginalNeckC0 then OriginalNeckC0 = neck.C0; OriginalNeckC1 = neck.C1 end
+            neck.C0 = AC.NeckC0
+            neck.C1 = AC.NeckC1
+        elseif (HeadMode == "Yaw head" or HeadMode == "Custom") and hrp then
+            if not DoTweak_fn then
+                for _, v in getgc(true) do
+                    if type(v) == "function" then
+                        local info = debug.getinfo(v)
+                        if info and info.name == "DoTweak" and info.numparams == 11 then
+                            DoTweak_fn = v; break
+                        end
+                    end
+                end
+            end
+            if DoTweak_fn then
+                local angle
+                if HeadMode == "Yaw head" then
+                    HeadYawTime = HeadYawTime + dt
+                    angle = math.sin(HeadYawTime * HeadRotSpeed) * math.rad(HeadYaw)
+                else -- Custom: 固定角度
+                    angle = math.rad(HeadCustomYaw)
+                end
+                local neckRot = CFrame.Angles(angle, 0, 0)
+                pcall(DoTweak_fn,
+                    char,
+                    hrp.Position + Vector3.new(0, 10, 0),
+                    hrp.Position,
+                    neckRot.LookVector,
+                    true, false, true, true, true, -- 第6个参数设为false，不再调整干涉手臂姿态
+                    9e9, true
+                )
+            end
+        end
+    end
+
+    if HandsModSelection and torso then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if HandsModSelection == "Hands up" and tool then
+            local lS = torso:FindFirstChild("Left Shoulder")
+            local rS = torso:FindFirstChild("Right Shoulder")
+            if lS then lS.C0 = AC.LShoulder end
+            if rS then rS.C0 = AC.RShoulder end
+            for _, v in ipairs(tool:GetDescendants()) do
+                if v.Name == "Mag6D_Torso"  and v:IsA("Motor6D") then v.C0 = AC.Mag6D  end
+                if v.Name == "Tool6D_Torso" and v:IsA("Motor6D") then v.C0 = AC.Tool6D end
+            end
+        end
+    end
+end)
+
+-- == CamLock + Speed/Jump RenderStepped ==
+RunService.RenderStepped:Connect(function(dt)
+    local char=LocalPlayer.Character
+    local hum=char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if SpeedState and hum.WalkSpeed~=SpeedValue then hum.WalkSpeed=SpeedValue end
+        if JumpState then
+            if not hum.UseJumpPower then hum.UseJumpPower=true end
+            if hum.JumpPower~=JumpValue then hum.JumpPower=JumpValue end
+        end
+    end
+    if not ShouldLock() then CL.CurrentTarget=nil; CL.LockedPart=nil; return end
+    local origin=Camera.CFrame.Position
+    CL.ScanTimer=CL.ScanTimer+dt
+    if CL.ScanTimer>0.1 then
+        CL.ScanTimer=0
+        local best,bDist,b3D=nil,CL.FOV,math.huge
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p~=LocalPlayer and p.Character then
+                if not table.find(WhiteList,p.Name) and (not CL.TargetOnly or table.find(TargetList,p.Name)) then
+                    local ph=p.Character:FindFirstChild("Humanoid"); local pr=p.Character:FindFirstChild("HumanoidRootPart")
+                    if ph and ph.Health>(CL.DownCheck and 15 or 0) and pr then
+                        local sp,on=Camera:WorldToViewportPoint(pr.Position)
+                        local sd=(Vector2.new(sp.X,sp.Y)-Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
+                        local d3=(pr.Position-origin).Magnitude
+                        if d3<15 then
+                            if d3<b3D and IsVisible(origin,pr) then b3D=d3; best=p.Character; bDist=0 end
+                        elseif on and sd<bDist and IsVisible(origin,pr) then bDist=sd; best=p.Character end
+                    end
+                end
+            end
+        end
+        CL.CurrentTarget=best
+    end
+    if CL.CurrentTarget then
+        if tick()-CL.LastSwitchTime>=CL.Delay then
+            local vp=GetVisibleParts(origin,CL.CurrentTarget)
+            CL.LockedPart=vp[math.random(1,#vp)]; CL.LastSwitchTime=tick()
+        end
+        if CL.LockedPart then
+            local jit=Vector3.new((math.random()-0.5)*CL.Shake,(math.random()-0.5)*CL.Shake,(math.random()-0.5)*CL.Shake)
+            local tPos=CL.LockedPart.Position
+            if CL.AutoPrediction then
+                local ctool=char and char:FindFirstChildOfClass("Tool")
+                if ctool~=CL.CachedTool then
+                    CL.CachedTool=ctool; CL.CachedVel=1100
+                    if ctool and ctool:FindFirstChild("Config") then
+                        pcall(function()
+                            local cfg=require(ctool.Config)
+                            if cfg.BulletSettings and cfg.BulletSettings.Velocity then CL.CachedVel=cfg.BulletSettings.Velocity
+                            elseif cfg.Velocity then CL.CachedVel=cfg.Velocity end
+                        end)
+                    end
+                end
+                tPos=tPos+(CL.LockedPart.AssemblyLinearVelocity*((tPos-origin).Magnitude/CL.CachedVel))
+            end
+            Camera.CFrame=CFrame.lookAt(origin, origin+Camera.CFrame.LookVector:Lerp((tPos+jit-origin).Unit,CL.Power))
+        end
+    end
+end)
+
+-- == Ragebot fire Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not RB_State or not Valid_Pair then return end
+    local char=LocalPlayer.Character
+    local tool=char and char:FindFirstChildOfClass("Tool")
+    if not (tool and tool:FindFirstChild("IsGun")) then return end
+    local waitTime,gunConfig=0,nil
+    if RF_State then
+        local gn=tool.Name
+        if not (gn:find("Beretta") or gn:find("TEC")) then
+            local cfg=tool:FindFirstChild("Config")
+            if cfg and cfg:IsA("ModuleScript") then
+                local ok,gs=pcall(require,cfg)
+                if ok and gs then gunConfig=gs; waitTime=1/(gs.FireRate or 3)
+                else waitTime=0.1 end
+            else waitTime=0.1 end
+        end
+    else waitTime=0.5 end
+    if tick()-Last_Shot < waitTime then return end
+    local vals=tool:FindFirstChild("Values"); local ammo=vals and vals:FindFirstChild("SERVER_Ammo")
+    if not (ammo and ammo.Value>0) then return end
+    local part=Valid_Pair.Target.Character:FindFirstChild("Head") or Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+    if not part then return end
+    local key="K"..math.random(1000,9999)
+    local dir=(Valid_Pair.Hit-Valid_Pair.Origin).Unit
+    GN_S:FireServer(tick(),key,tool,"FDS9I83",Valid_Pair.Origin,{dir},false)
+    if TR.Enabled then task.spawn(CreateTracer,Valid_Pair.Origin,dir) end
+    ZF_H:FireServer("🧈",tool,key,1,part,Valid_Pair.Hit,dir)
+    if tool:FindFirstChild("Hitmarker") then tool.Hitmarker:Fire(part) end
+    if HitLogEnabled then
+        local dmg,mult=17,1.35
+        if gunConfig then dmg=gunConfig.Damage or 17; mult=gunConfig.HeadshotMultiplier or 1.35
+        elseif tool:FindFirstChild("Config") then
+            local ok,c=pcall(require,tool.Config)
+            if ok then dmg=c.Damage or 17; mult=c.HeadshotMultiplier or 1.35 end
+        end
+        local fd=(dmg*mult)-(math.floor((Valid_Pair.Origin-Valid_Pair.Hit).Magnitude/50)*2)
+        local mp=GetLocalRealPosition()
+        local tr=Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+        ProcessHitLog(Valid_Pair.Target.Name,tool.Name,math.floor(fd*100)/100,tr and math.floor((mp-tr.Position).Magnitude) or 0,WB.Cached)
+    end
+    Last_Shot=tick()
+end)
+
+-- == Anti Shiftlock Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not MC.AntiShift then return end
+    local char=LocalPlayer.Character
+    local tool=char and char:FindFirstChildOfClass("Tool")
+    local hasGun=tool~=nil and tool:FindFirstChild("IsGun")~=nil
+    if lastTickHadGun and not hasGun then
+        task.delay(MC.ShiftDelay, function() firesignal(ChangeMouseLockEvent.Event); UIS.MouseBehavior=Enum.MouseBehavior.Default end)
+    end
+    lastTickHadGun=hasGun
+end)
+
+-- == ESP / Nametag Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not (NametagEnabled or DistanceEnabled or HealthEnabled) then return end
+    local myChar=LocalPlayer.Character
+    local myRoot=myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+    local now=tick()
+    if now-LastVisualUpdate >= ((myRoot.Velocity.Magnitude>(CONFIG.VelocityThreshold or 0.5)) and CONFIG.Rate_Active or CONFIG.Rate_Idle) then
+        LastVisualUpdate=now
+        for _,player in pairs(Players:GetPlayers()) do
+            if player~=LocalPlayer and player.Character then
+                local ch=player.Character; local h=ch:FindFirstChildOfClass("Humanoid")
+                local alive=h and h.Health>0
+                local show=alive and (not espSets.targetOnly or table.find(TargetList,player.Name)~=nil)
+                local tag=GetCustomTag(ch,"CAT_NameTag",CONFIG.NameOffset)
+                if tag then
+                    local showName = NametagEnabled and show
+                    local showDist = DistanceEnabled and show
+                    local scaledHP = h and math.ceil(h.Health * (100/115)) or 0
+                    local showHP   = HealthEnabled and show and scaledHP < 100
+                    tag.Enabled = (showName or showDist)
+                    local nameL = tag:FindFirstChild("L")
+                    local distL = tag:FindFirstChild("DL")
+                    if nameL then
+                        nameL.Visible = showName
+                        if showName then
+                            if table.find(WhiteList,player.Name)~=nil then nameL.TextColor3=Color3.fromRGB(135,206,235)
+                            elseif table.find(TargetList,player.Name)~=nil then nameL.TextColor3=Color3.fromRGB(255,0,0)
+                            else nameL.TextColor3=Color3.fromRGB(255,255,255) end
+                        end
+                    end
+                    if distL then distL.Visible = showDist end
+                end
+                -- HP 标签（左边）
+                local hpTag = ch:FindFirstChild("CAT_HPTag")
+                if hpTag then
+                    local scaledHP = h and math.ceil(h.Health * (100/115)) or 0
+                    local showHP   = HealthEnabled and show and scaledHP < 100
+                    hpTag.Enabled  = showHP
+                    if showHP then
+                        local l = hpTag:FindFirstChild("L")
+                        if l then l.Text = tostring(scaledHP) end
+                    end
+                end
+                -- FF 标签（右边）
+                local ffTag = ch:FindFirstChild("CAT_FFTag")
+                if ffTag then
+                    local hasFF = ch:FindFirstChildOfClass("ForceField") ~= nil
+                    ffTag.Enabled = (NametagEnabled or DistanceEnabled or HealthEnabled) and show and hasFF
+                end
+            end
+        end
+    end
+    if now-LastContentUpdate >= CONFIG.ContentRate then
+        LastContentUpdate=now
+        local myPos=GetLocalRealPosition()
+        for _,player in pairs(Players:GetPlayers()) do
+            if player.Character then
+                local tag=player.Character:FindFirstChild("CAT_NameTag")
+                if tag and tag.Enabled then
+                    local nameL=tag:FindFirstChild("L")
+                    local distL=tag:FindFirstChild("DL")
+                    local tr=player.Character:FindFirstChild("HumanoidRootPart")
+                    if nameL and nameL.Visible then nameL.Text=player.Name end
+                    if distL and distL.Visible and tr then
+                        distL.Text=math.floor((myPos-tr.Position).Magnitude).."M"
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local function MonitorChar(c) if c then CurrentHum=c:WaitForChild("Humanoid",10) end end
+MonitorChar(LocalPlayer.Character)
+LocalPlayer.CharacterAdded:Connect(MonitorChar)
+
+return Library               SortOrder = Enum.SortOrder.LayoutOrder
                 })
 
                 for Index = 1, Data.Columns do 
@@ -1418,7 +2256,845 @@ end)
             end
 
             local Debounce = false
+do -- Player page
+    local Page = Window:Page({Name="Player", SubPages=true})
+    local Sub  = Page:SubPage({Name="Physical", Columns=2})
+    local sec  = Sub:Section({Name="Movement", Side=1})
+    sec:Toggle({Name="WalkSpeed", Flag="CAT_WalkSpeed_53", Callback=function(v) SpeedState=v end}):Keybind({Flag="CAT_WalkSpeed_53_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_WalkSpeed_53"] then Library.SetFlags["CAT_WalkSpeed_53"](v) end end})
+    sec:Slider( {Name="Value", Flag="CAT_Value_54", Min=1, Max=100, Default=33.5, Decimals=0.1, Callback=function(v) SpeedValue=v end})
+    sec:Toggle({Name="JumpPower", Flag="CAT_JumpPower_55", Callback=function(v) JumpState=v end}):Keybind({Flag="CAT_JumpPower_55_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_JumpPower_55"] then Library.SetFlags["CAT_JumpPower_55"](v) end end})
+    sec:Slider( {Name="Value", Flag="CAT_Value_56", Min=1, Max=100, Default=73,   Decimals=0.1, Callback=function(v) JumpValue=v end})
+    sec:Toggle({Name="No fall", Flag="CAT_No_fall_57", Default=false, Callback=function(v) NoFallEnabled=v end}):Keybind({Flag="CAT_No_fall_57_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_No_fall_57"] then Library.SetFlags["CAT_No_fall_57"](v) end end})
+    sec:Toggle({Name="Fly", Flag="CAT_PL_Fly", Callback=function(v)
+        FLY.Enabled = v
+        if FLY.MobileMode then
+            -- 手机模式：和原来一样，有GUI
+            if v then
+                FlyCreateUI()
+                FlyOn()
+            else
+                FlyOff()
+                FlyDestroyUI()
+            end
+        else
+            -- 普通模式：直接飞，无任何GUI
+            if v then
+                FlyOn()
+            else
+                FlyOff()
+            end
+        end
+    end}):Keybind({Flag="CAT_PL_Fly_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_Fly"] then Library.SetFlags["CAT_PL_Fly"](v) end end})
+    sec:Slider({Name="Fly speed", Flag="CAT_Fly_speed_58", Min=1, Max=100, Default=60, Callback=function(v) FLY.Speed=v end})
+    sec:Toggle({Name="Mobile mode", Flag="CAT_PL_MobileMode", Default=false, Callback=function(v)
+        FLY.MobileMode = v
+    end}):Keybind({Flag="CAT_PL_MobileMode_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_MobileMode"] then Library.SetFlags["CAT_PL_MobileMode"](v) end end})
+    sec:Toggle({Name="Infinite Stamina", Flag="CAT_PL_InfStamina", Default=false, Callback=function(Value)
+        InfStaminaEnabled=Value
+        if InfStaminaConnection then InfStaminaConnection:Disconnect(); InfStaminaConnection=nil end
+        if Value then
+            local ok=pcall(function()
+                local tgt=getupvalue(getrenv()._G.S_Take,2); local old
+                old=hookfunction(tgt,function(v1,...) if InfStaminaEnabled then v1=0 end return old(v1,...) end)
+            end)
+            if not ok then
+                local tbs={}
+                local function collect() tbs={}; for _,v in pairs(getgc(true)) do if type(v)=="table" and rawget(v,"S") then tbs[#tbs+1]=v end end end
+                pcall(collect)
+                InfStaminaConnection=RunService.RenderStepped:Connect(function()
+                    if InfStaminaEnabled then
+                        if tick()%5<0.1 then pcall(collect) end
+                        for _,t in ipairs(tbs) do pcall(function() t.S=100 end) end
+                        local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+                        if h then h:SetAttribute("ZSPRN_M",true) end
+                    end
+                end)
+            end
+        else
+            local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+            if h then h:SetAttribute("ZSPRN_M",nil) end
+        end
+    end}):Keybind({Flag="CAT_PL_InfStamina_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_InfStamina"] then Library.SetFlags["CAT_PL_InfStamina"](v) end end})
+end
 
+do -- Antis page
+    local Page        = Window:Page({Name="Antis", SubPages=false})
+    local AntiHitSec  = Page:Section({Name="Anti hit", Side=1})
+
+    AntiHitSec:Dropdown({Name="Head mode", Flag="CAT_Head_mode_59", Items={"Hide head","Yaw head","Custom"}, Callback=function(v)
+        if not v and OriginalNeckC0 then
+            local ch = LocalPlayer.Character
+            if ch then
+                local hd = ch:FindFirstChild("Head")
+                local ts = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+                local nk = (hd and hd:FindFirstChild("Neck")) or (ts and ts:FindFirstChild("Neck"))
+                if nk then nk.C0 = OriginalNeckC0; nk.C1 = OriginalNeckC1 end
+            end
+            OriginalNeckC0, OriginalNeckC1 = nil, nil
+        end
+        HeadYawTime = 0
+        HeadMode = v
+    end})
+    AntiHitSec:Slider({Name="Custom yaw", Flag="CAT_Custom_yaw_60",     Min=-90, Max=90, Default=30,  Decimals=0.1, Callback=function(v) HeadYaw=v; HeadCustomYaw=v end})
+    AntiHitSec:Slider({Name="Rotation speed", Flag="CAT_Rotation_speed_61", Min=-50,  Max=50,  Default=30,  Decimals=0.1, Callback=function(v) HeadRotSpeed=v end})
+
+    AntiHitSec:Dropdown({Name="Hands mod", Flag="CAT_Hands_mod_62", Items={"Hands up","Open hands"}, Callback=function(v) HandsModSelection=v end})
+
+    AntiHitSec:Toggle({Name="乱飞", Flag="CAT_AN_LuanFei", Callback=function(v)
+        LF.Enabled = v
+        if not v then
+            if LF.Track1 then pcall(function() LF.Track1:Stop(0) end); LF.Track1 = nil end
+            if LF.Track2 then pcall(function() LF.Track2:Stop(0) end); LF.Track2 = nil end
+            LF.Angle = 0
+        end
+    end}):Keybind({Flag="CAT_AN_LuanFei_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_AN_LuanFei"] then Library.SetFlags["CAT_AN_LuanFei"](v) end end})
+
+    -- Invisible toggle
+    AntiHitSec:Toggle({Name="Invisible", Flag="CAT_AN_Invisible", Callback=function(v)
+        Invis_Enabled=v
+        if not v then
+            if Invis_Track then pcall(function() Invis_Track:Stop() end); Invis_Track=nil end
+            local char=LocalPlayer.Character
+            if char then
+                for _,p in ipairs(char:GetChildren()) do
+                    if p:IsA("BasePart") and p.Transparency==0.5 then p.Transparency=0 end
+                end
+            end
+        end
+    end}):Keybind({Flag="CAT_AN_Invisible_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_AN_Invisible"] then Library.SetFlags["CAT_AN_Invisible"](v) end end})
+
+    do -- Desync
+        local sec=Page:Section({Name="Velocity desync", Side=2})
+        sec:Toggle({Name="Enable", Flag="CAT_Enable_63",    Callback=function(v) DS.Enabled=v end}):Keybind({Flag="CAT_Enable_63_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Enable_63"] then Library.SetFlags["CAT_Enable_63"](v) end end})
+        sec:Toggle({Name="Visualize", Flag="CAT_Visualize_64", Default=true, Callback=function(v) DS.Visualize=v end}):Keybind({Flag="CAT_Visualize_64_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Visualize_64"] then Library.SetFlags["CAT_Visualize_64"](v) end end})
+        sec:Slider({Name="TP Rate", Flag="CAT_TP_Rate_65",  Min=1,  Max=100, Default=60,  Callback=function(v) DS.TPRate=v end})
+        sec:Slider({Name="X Offset", Flag="CAT_X_Offset_66", Min=1,  Max=20,  Default=8.5, Decimals=0.1, Callback=function(v) DS.X=v end})
+        sec:Slider({Name="Y Offset", Flag="CAT_Y_Offset_67", Min=1,  Max=20,  Default=3,   Decimals=0.1, Callback=function(v) DS.Y=v end})
+        sec:Slider({Name="Z Offset", Flag="CAT_Z_Offset_68", Min=1,  Max=20,  Default=8.5, Decimals=0.1, Callback=function(v) DS.Z=v end})
+    end
+end
+
+do -- Misc page
+    local Page = Window:Page({Name="Misc", SubPages=false})
+    
+    local sL   = Page:Section({Name="Shiftlock", Side=1})
+    sL:Toggle({Name="Anti auto shiftlock", Flag="CAT_Anti_auto_shiftlock_69", Callback=function(v) MC.AntiShift=v end}):Keybind({Flag="CAT_Anti_auto_shiftlock_69_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Anti_auto_shiftlock_69"] then Library.SetFlags["CAT_Anti_auto_shiftlock_69"](v) end end})
+    sL:Slider( {Name="Delay", Flag="CAT_Delay_70", Min=0.01, Max=0.50, Default=0.05, Decimals=0.01, Callback=function(v) MC.ShiftDelay=v end})
+    
+    local sFarm = Page:Section({Name="Farm", Side=1})
+    sFarm:Toggle({Name="Auto pick up money", Flag="CAT_MC_AutoPickup", Callback=function(v) 
+        SC.APM_Enabled = v 
+        if v then StartAutoPickUpMoney() end
+    end}):Keybind({Flag="CAT_MC_AutoPickup_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_MC_AutoPickup"] then Library.SetFlags["CAT_MC_AutoPickup"](v) end end})
+    sFarm:Toggle({Name="Auto unlock safe", Flag="CAT_MC_AutoUnlock", Callback=function(v)
+        SC.AUS_Enabled = v
+        if v then StartAutoUnlockSafe() end
+    end}):Keybind({Flag="CAT_MC_AutoUnlock_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_MC_AutoUnlock"] then Library.SetFlags["CAT_MC_AutoUnlock"](v) end end})
+
+    local sR = Page:Section({Name="Camera", Side=2})
+    sR:Toggle({Name="Smooth Camera", Flag="CAT_Smooth_Camera_71", Callback=function(v) MC.SmoothCam=v; if not v then MC.SmoothPos=nil end end}):Keybind({Flag="CAT_Smooth_Camera_71_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Smooth_Camera_71"] then Library.SetFlags["CAT_Smooth_Camera_71"](v) end end})
+    sR:Slider( {Name="Speed", Flag="CAT_Speed_72", Min=1, Max=10, Default=6, Callback=function(v) MC.LerpSpeed=v end})
+end
+
+do -- PlayerList page
+    local Page = Window:Page({Name="PlayerList", SubPages=false})
+    local pL   = Page:Section({Name="Target List", Side=1})
+    PL_TargetSearch = pL:Searchbox({Name="Targets", Items=GetAllPlayerNames(), Multi=true,
+        Callback=function(v) TargetList=(typeof(v)=="table" and v or {v}); if espSets.enabled and espSets.targetOnly then refreshAllESP() end end})
+    pL:Button({Name="Clear Targets", Callback=function() TargetList={}; pcall(function() PL_TargetSearch:Set({}) end); if espSets.enabled and espSets.targetOnly then refreshAllESP() end end})
+    local pR = Page:Section({Name="Whitelist", Side=2})
+    PL_WhiteSearch = pR:Searchbox({Name="Whitelist", Items=GetAllPlayerNames(), Multi=true,
+        Callback=function(v) WhiteList=(typeof(v)=="table" and v or {v}) end})
+    pR:Button({Name="Clear Whitelist", Callback=function() WhiteList={}; pcall(function() PL_WhiteSearch:Set({}) end) end})
+end
+
+Library:CreateSettingsPage(Window, Watermark, KeybindList)
+
+Players.PlayerAdded:Connect(function(p)
+    PL_TargetSearch:Add(p.Name); PL_WhiteSearch:Add(p.Name)
+end)
+Players.PlayerRemoving:Connect(function(p)
+    PL_TargetSearch:Remove(p.Name); PL_WhiteSearch:Remove(p.Name); clearBoxes(p)
+    if p.Character then
+        local t1=p.Character:FindFirstChild("CAT_NameTag")
+        local t2=p.Character:FindFirstChild("CAT_FFTag")
+        local t3=p.Character:FindFirstChild("CAT_HPTag")
+        if t1 then t1:Destroy() end
+        if t2 then t2:Destroy() end
+        if t3 then t3:Destroy() end
+    end
+end)
+end)() -- end UI IIFE
+
+-- =====================================================================
+-- == Invisible: RenderStep restore (priority 200, after Desync's 199)
+-- =====================================================================
+RunService:BindToRenderStep("InvisFix", 199, function()
+    if not Invis_Enabled or DS.Enabled or LF.Enabled then
+        Invis_SavedCF = nil
+        return
+    end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+
+    if hrp and Invis_SavedCF then
+        hrp.CFrame    = Invis_SavedCF
+        Invis_SavedCF = nil
+    end
+
+    if Invis_Track then
+        pcall(function() Invis_Track:Stop() end)
+    end
+
+    if char then
+        for _, p in ipairs(char:GetChildren()) do
+            if p:IsA("BasePart") and (p.Name=="Head" or p.Name=="Torso" or p.Name:match("Arm") or p.Name:match("Leg")) then
+                if p.Transparency ~= 0.5 then p.Transparency = 0.5 end
+            end
+        end
+    end
+end)
+
+-- =====================================================================
+-- == LuanFei (Spin Desync) Local Anim Fix
+-- =====================================================================
+RunService:BindToRenderStep("LuanFeiAnimFix", 199, function()
+    if LF.Enabled and not Invis_Enabled then
+        if LF.Track1 then pcall(function() LF.Track1:Stop(0) end) end
+        if LF.Track2 then pcall(function() LF.Track2:Stop(0) end) end
+    end
+end)
+
+-- =====================================================================
+-- == Smooth Camera
+-- =====================================================================
+RunService:UnbindFromRenderStep("SmoothMovementCamera")
+RunService:BindToRenderStep("SmoothMovementCamera", Enum.RenderPriority.Camera.Value+1, function(dt)
+    if not MC.SmoothCam or not Camera then MC.SmoothPos=nil return end
+    local cf  = Camera.CFrame
+    local pos = cf.Position
+    if not MC.SmoothPos then MC.SmoothPos=pos
+    else MC.SmoothPos=MC.SmoothPos:Lerp(pos, math.clamp(dt*MC.LerpSpeed,0,1)) end
+    Camera.CFrame = CFrame.new(MC.SmoothPos, MC.SmoothPos+cf.LookVector)
+end)
+
+-- =====================================================================
+-- == Main Heartbeat (split into sub-functions to keep register count low)
+-- =====================================================================
+
+local function DoSkinUpdate()
+    local now = tick()
+    if now - FF_S.LastSkin < 1 then return end
+    FF_S.LastSkin = now
+    if FF_S.BodyEnabled then
+        local char = LocalPlayer.Character
+        if char then
+            for _, p in ipairs(char:GetChildren()) do
+                if IsBodyPart(p) then
+                    if not FF_S.BodyProps[p] then
+                        FF_S.BodyProps[p]={Material=p.Material,Color=p.Color}
+                        p.Material=Enum.Material.ForceField; p.Color=FF_S.Color
+                    elseif p.Material~=Enum.Material.ForceField then
+                        p.Material=Enum.Material.ForceField; p.Color=FF_S.Color
+                    end
+                end
+            end
+        end
+    end
+    if FF_S.ToolEnabled then
+        local char = LocalPlayer.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool then
+            for _, p in ipairs(tool:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    if not FF_S.ToolProps[p] then
+                        FF_S.ToolProps[p] = {Material=p.Material, Color=p.Color}
+                    end
+                    p.Material = Enum.Material.ForceField
+                    p.Color    = FF_S.Color
+                end
+            end
+        end
+    end
+end
+
+local function DoDesyncLogic()
+    if not DS.Enabled or Invis_Enabled then
+        DS.AppliedOffset = Vector3.zero
+        if not DS.Enabled and DS.Model.Parent then DS.Model.Parent=nil end
+        return
+    end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local ragebotActive = false
+    if RB_State and Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character then
+        local th=Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+        local tu=Valid_Pair.Target.Character:FindFirstChildOfClass("Humanoid")
+        if th and tu and tu.Health>0 then
+            local tool=char:FindFirstChildOfClass("Tool")
+            if tool and tool:FindFirstChild("IsGun") then ragebotActive=true end
+        end
+    end
+    if ragebotActive then
+        if DS.Model.Parent then DS.Model.Parent=nil end
+        DS.AppliedOffset=Vector3.zero; return
+    end
+    local clk=os.clock()
+    local interval=DS.TPRate>0 and (1/DS.TPRate) or 0
+    if clk-DS.LastTPTime >= interval then
+        DS.LastTPTime=clk
+        DS.Y_Toggle=not DS.Y_Toggle
+        local yOff=DS.Y_Toggle and (math.random(0,DS.Y*10)/10) or 0
+        local tOff=Vector3.new((math.random()-0.5)*2*DS.X, yOff, (math.random()-0.5)*2*DS.Z)
+        local p=RaycastParams.new()
+        p.FilterDescendantsInstances={char,DS.Model,Camera}
+        p.FilterType=Enum.RaycastFilterType.Exclude
+        local rr=workspace:Raycast(hrp.Position, tOff, p)
+        if rr then DS.CurrentOffset=(rr.Position+rr.Normal*1.5)-hrp.Position
+        else DS.CurrentOffset=tOff end
+    end
+    if DS.Visualize then
+        if DS.Model.Parent~=workspace.Terrain then DS.Model.Parent=workspace.Terrain end
+        DS.Model:PivotTo(CFrame.new(hrp.Position+DS.CurrentOffset))
+    else
+        if DS.Model.Parent then DS.Model.Parent=nil end
+    end
+    DS.AppliedOffset = DS.CurrentOffset
+end
+
+local function DoLuanFeiLogic()
+    if not LF.Enabled or Invis_Enabled then return end
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+
+    local animator = hum:FindFirstChildOfClass("Animator") or hum
+    if not LF.Track1 then
+        pcall(function() 
+            LF.Track1 = animator:LoadAnimation(LF.Anim1)
+            LF.Track1.Priority = Enum.AnimationPriority.Action4 
+        end)
+    end
+    if not LF.Track2 then
+        pcall(function() 
+            LF.Track2 = animator:LoadAnimation(LF.Anim2)
+            LF.Track2.Priority = Enum.AnimationPriority.Action4
+            LF.Track2.Looped = true 
+        end)
+    end
+
+    if LF.Track1 then
+        pcall(function()
+            if not LF.Track1.IsPlaying then LF.Track1:Play() end
+            LF.Track1:AdjustSpeed(0)
+            LF.Track1.TimePosition = (LF.Track1.Length > 0 and LF.TimePosRatio * LF.Track1.Length) or LF.TimePosRatio
+        end)
+    end
+    if LF.Track2 then
+        pcall(function()
+            if not LF.Track2.IsPlaying then LF.Track2:Play() end
+            LF.Track2:AdjustSpeed(1)
+        end)
+    end
+
+    LF.Angle = LF.Angle + LF.SpinSpeed
+end
+
+local function ApplySpoofs()
+    local now = tick()
+    if (DS.Enabled or LF.Enabled) and now - DS.LastFFlagTime >= 1 then
+        DS.LastFFlagTime = now
+        pcall(setfflag, "S2PhysicsSenderRate", "99999999")
+    end
+
+    DoDesyncLogic()
+    DoLuanFeiLogic()
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local spoofed = false
+    local realCF = hrp.CFrame
+    local newCF = realCF
+
+    if DS.Enabled and DS.AppliedOffset ~= Vector3.zero then
+        newCF = newCF + DS.AppliedOffset
+        spoofed = true
+    end
+
+    if LF.Enabled and not Invis_Enabled then
+        local smoothRotation = CFrame.Angles(
+            math.rad(LF.Angle), 
+            math.rad(LF.Angle * 1.5), 
+            math.rad(LF.Angle * 0.8)
+        )
+        newCF = newCF * smoothRotation
+        spoofed = true
+    end
+
+    if spoofed then
+        hrp.CFrame = newCF
+        RunService:BindToRenderStep("RestoreSpoofCFrame", 199, function()
+            if char and hrp and hrp.Parent then hrp.CFrame = realCF end
+            if DS.Enabled then DS.AppliedOffset = Vector3.zero end
+            RunService:UnbindFromRenderStep("RestoreSpoofCFrame")
+        end)
+    end
+end
+
+local function DoInvisible()
+    if not Invis_Enabled or DS.Enabled or LF.Enabled then return end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if not (hrp and hum and hum.Health > 0) then return end
+
+    if not Invis_Track then
+        local anim = hum:FindFirstChildOfClass("Animator") or hum
+        pcall(function()
+            Invis_Track = anim:LoadAnimation(Invis_Anim)
+            Invis_Track.Priority = Enum.AnimationPriority.Action
+        end)
+    end
+
+    if Invis_Track then
+        pcall(function()
+            if not Invis_Track.IsPlaying then Invis_Track:Play() end
+            Invis_Track:AdjustSpeed(0)
+            Invis_Track.TimePosition = 0.3
+        end)
+    end
+
+    Invis_SavedCF = hrp.CFrame
+    hrp.CFrame = Invis_SavedCF + Vector3.new(0, -2, 0)
+end
+
+-- =====================================================================
+-- == 解析1：固定25点向量表 + 随机Roll轴旋转
+-- =====================================================================
+local ScanVectors = {
+    Vector3.new(1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0),
+    -Vector3.new(1, 0, 0), -Vector3.new(0, 0, 1), -Vector3.new(0, 1, 0),
+    Vector3.new(1, 1, 0)/math.sqrt(2), Vector3.new(1, 0, 1)/math.sqrt(2), Vector3.new(0, 1, 1)/math.sqrt(2),
+    Vector3.new(-1, 1, 0)/math.sqrt(2), Vector3.new(-1, 0, 1)/math.sqrt(2),
+    -Vector3.new(1, 0, 1)/math.sqrt(2), -Vector3.new(-1, 0, 1)/math.sqrt(2), -Vector3.new(0, -1, 1)/math.sqrt(2),
+    Vector3.new(1, 1, 1)/math.sqrt(3), Vector3.new(-1, 1, 1)/math.sqrt(3), Vector3.new(1, 1, -1)/math.sqrt(3),
+    -Vector3.new(1, 1, 1)/math.sqrt(3), -Vector3.new(1, -1, 1)/math.sqrt(3),
+    Vector3.new(1,2,0)/math.sqrt(5), Vector3.new(-1,2,0)/math.sqrt(5), Vector3.new(1,0,2)/math.sqrt(5), Vector3.new(-1,0,2)/math.sqrt(5),
+    -Vector3.new(-1,0,2)/math.sqrt(5), -Vector3.new(1,0,2)/math.sqrt(5),
+}
+
+local function GetOffsets_Algo1(firePos, targetPos, offset)
+    if not offset or offset <= 0 then return {firePos} end
+    local offsets = {firePos} -- 优先检测中心点
+    local cfOffset = CFrame.new(firePos, targetPos) * CFrame.Angles(0, 0, math.rad(math.random(1, 90)))
+    for _, pos in ipairs(ScanVectors) do
+        table.insert(offsets, cfOffset * (pos * offset))
+    end
+    return offsets
+end
+
+-- =====================================================================
+-- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
+-- == 改动说明：
+-- ==  - 采样在与 poleDir 垂直的平面上进行（即在目标的“屏幕平面”上），
+-- ==  - 使用 concentric disk (r = radius * sqrt(rand)) 来保证圆盘内的均匀分布，
+-- ==  - 这样 radius 始终是世界单位，不会随距离缩减，命中更精确稳定。
+-- =====================================================================
+local function GetOffsets_Algo2(center, poleDir, radius, count)
+    if not radius or radius <= 0 or count <= 0 then return {center} end
+    local offsets = {center} -- 优先检测中心点
+
+    -- 构建正交基：t1, t2 为与 poleDir 垂直的两个单位向量（plane basis）
+    local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+    local t1 = poleDir:Cross(arb)
+    if t1.Magnitude == 0 then
+        arb = Vector3.new(0,0,1)
+        t1 = poleDir:Cross(arb)
+    end
+    t1 = t1.Unit
+    local t2 = poleDir:Cross(t1).Unit
+
+    -- 为了提高命中精度：中心附近点权重更高（可选）
+    -- 使用 concentric disk sampling 保证圆盘上的均匀采样
+    for i = 1, count do
+        -- 极坐标：角度与半径（半径使用 sqrt(rand) 保证面积均匀）
+        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count) -- 带少量角度抖动
+        local r = radius * math.sqrt(math.random())
+        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+        table.insert(offsets, center + offsetVec)
+    end
+
+    return offsets
+end
+
+-- =====================================================================
+-- == 核心 Ragebot 逻辑
+-- =====================================================================
+local function DoRagebot()
+    if not RB_State then Valid_Pair=nil; Locked_Path=nil; return end
+    local target=GetTarget()
+    if not target or not target.Character then Valid_Pair=nil; Locked_Path=nil; return end
+    if Locked_Path and Locked_Path.Target~=target then Locked_Path=nil end
+    
+    local myRoot=LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local tRoot=target.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot or not tRoot then return end
+    local myPos=GetLocalRealPosition()
+    local tPos=tRoot.Position
+
+    -- 1. 缓存机制 (如果上一发的轨迹依然有效，直接复用，不扫描)
+    if Locked_Path then
+        local dO=(myPos-Locked_Path.MyPos).Magnitude
+        local dH=(tPos-Locked_Path.TPos).Magnitude
+        local inRange=(myPos-Locked_Path.AbsO).Magnitude<=Origin_Radius
+                   and (tPos-Locked_Path.AbsH).Magnitude<=Hit_Radius
+        if dO<=WB.Threshold and dH<=WB.Threshold and inRange then
+            if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
+                Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target}
+                WB.Cached=true; return
+            end
+        end
+        Locked_Path=nil
+    end
+
+    -- 2. 扫描速率限制
+    if tick()-WB.LastScan < 1/ScanRate then return end
+    WB.LastScan=tick()
+    WB.Round=WB.Round+1 -- 轮数+1，用于交替算法
+
+    -- 3. 交替使用两种解析算法
+    local newOrigin, newTarget
+    
+    if WB.Round % 2 == 0 then
+        -- 【双数轮】：使用 解析1 (25点固定向量 + 随机旋转)
+        newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
+        newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
+    else
+        -- 【单数轮】：使用 解析2 (圆盘均匀采样，确保 radius 为固定世界单位)
+        local oPole = (tPos - myPos)
+        if oPole.Magnitude < 0.001 then return end
+        oPole = oPole.Unit
+        local hPole = -oPole -- 敌人的半球朝向玩家
+        
+        -- 这里会读取你 UI 菜单里的 Origin_Scans 和 Hit_Scans 数量
+        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
+        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans)
+    end
+
+    -- 4. 双重循环穷举寻找合法弹道 (找到即返回，不再比较距离)
+    local bestPO, bestPH = nil, nil
+
+    for _, pO in ipairs(newOrigin) do
+        for _, pH in ipairs(newTarget) do
+            if CheckWallbang(pO, pH) then
+                -- 找到第一条合法路径，立即锁定并跳出循环
+                bestPO = pO
+                bestPH = pH
+                break
+            end
+        end
+        if bestPO then break end -- 找到就跳出外层循环
+    end
+
+    -- 5. 更新缓存与射击对
+    if bestPO then
+        Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos}
+        Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target}
+        WB.Cached=false
+    else
+        Valid_Pair=nil
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    DoSkinUpdate()
+    ApplySpoofs()
+    DoInvisible()
+    DoRagebot()
+end)
+
+-- == AntiHit RenderStepped (Hide head / Hands up) ==
+RunService:BindToRenderStep("CAM_FOV_Enforce", Enum.RenderPriority.Camera.Value+2, function()
+    if CAM_FOV then Camera.FieldOfView = CAM_FOV end
+    if AMB.Enabled then
+        -- 挂在 Camera 下，游戏不会删它
+        local cc = Camera:FindFirstChild("CATColorCorr")
+        if not cc then
+            cc = Instance.new("ColorCorrectionEffect")
+            cc.Name   = "CATColorCorr"
+            cc.Parent = Camera
+        end
+        cc.TintColor  = AMB.Color
+        cc.Brightness = AMB.Brightness
+        cc.Contrast   = AMB.Density * 0.3
+        cc.Saturation = -(AMB.Density * 0.5)
+        cc.Enabled    = true
+    else
+        local cc = Camera:FindFirstChild("CATColorCorr")
+        if cc then cc.Enabled = false end
+    end
+end)
+
+-- == AntiHit RenderStepped (Head mode / Hands up) ==
+RunService.RenderStepped:Connect(function(dt)
+    if not HeadMode and not HandsModSelection then return end
+    local char = LocalPlayer.Character
+    if not (char and char.Parent) then return end
+    local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+    local head  = char:FindFirstChild("Head")
+    local hrp   = char:FindFirstChild("HumanoidRootPart")
+
+    if HeadMode then
+        local neck = (head and head:FindFirstChild("Neck")) or (torso and torso:FindFirstChild("Neck"))
+        if HeadMode == "Hide head" and neck then
+            if not OriginalNeckC0 then OriginalNeckC0 = neck.C0; OriginalNeckC1 = neck.C1 end
+            neck.C0 = AC.NeckC0
+            neck.C1 = AC.NeckC1
+        elseif (HeadMode == "Yaw head" or HeadMode == "Custom") and hrp then
+            if not DoTweak_fn then
+                for _, v in getgc(true) do
+                    if type(v) == "function" then
+                        local info = debug.getinfo(v)
+                        if info and info.name == "DoTweak" and info.numparams == 11 then
+                            DoTweak_fn = v; break
+                        end
+                    end
+                end
+            end
+            if DoTweak_fn then
+                local angle
+                if HeadMode == "Yaw head" then
+                    HeadYawTime = HeadYawTime + dt
+                    angle = math.sin(HeadYawTime * HeadRotSpeed) * math.rad(HeadYaw)
+                else -- Custom: 固定角度
+                    angle = math.rad(HeadCustomYaw)
+                end
+                local neckRot = CFrame.Angles(angle, 0, 0)
+                pcall(DoTweak_fn,
+                    char,
+                    hrp.Position + Vector3.new(0, 10, 0),
+                    hrp.Position,
+                    neckRot.LookVector,
+                    true, false, true, true, true, -- 第6个参数设为false，不再调整干涉手臂姿态
+                    9e9, true
+                )
+            end
+        end
+    end
+
+    if HandsModSelection and torso then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if HandsModSelection == "Hands up" and tool then
+            local lS = torso:FindFirstChild("Left Shoulder")
+            local rS = torso:FindFirstChild("Right Shoulder")
+            if lS then lS.C0 = AC.LShoulder end
+            if rS then rS.C0 = AC.RShoulder end
+            for _, v in ipairs(tool:GetDescendants()) do
+                if v.Name == "Mag6D_Torso"  and v:IsA("Motor6D") then v.C0 = AC.Mag6D  end
+                if v.Name == "Tool6D_Torso" and v:IsA("Motor6D") then v.C0 = AC.Tool6D end
+            end
+        end
+    end
+end)
+
+-- == CamLock + Speed/Jump RenderStepped ==
+RunService.RenderStepped:Connect(function(dt)
+    local char=LocalPlayer.Character
+    local hum=char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if SpeedState and hum.WalkSpeed~=SpeedValue then hum.WalkSpeed=SpeedValue end
+        if JumpState then
+            if not hum.UseJumpPower then hum.UseJumpPower=true end
+            if hum.JumpPower~=JumpValue then hum.JumpPower=JumpValue end
+        end
+    end
+    if not ShouldLock() then CL.CurrentTarget=nil; CL.LockedPart=nil; return end
+    local origin=Camera.CFrame.Position
+    CL.ScanTimer=CL.ScanTimer+dt
+    if CL.ScanTimer>0.1 then
+        CL.ScanTimer=0
+        local best,bDist,b3D=nil,CL.FOV,math.huge
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p~=LocalPlayer and p.Character then
+                if not table.find(WhiteList,p.Name) and (not CL.TargetOnly or table.find(TargetList,p.Name)) then
+                    local ph=p.Character:FindFirstChild("Humanoid"); local pr=p.Character:FindFirstChild("HumanoidRootPart")
+                    if ph and ph.Health>(CL.DownCheck and 15 or 0) and pr then
+                        local sp,on=Camera:WorldToViewportPoint(pr.Position)
+                        local sd=(Vector2.new(sp.X,sp.Y)-Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
+                        local d3=(pr.Position-origin).Magnitude
+                        if d3<15 then
+                            if d3<b3D and IsVisible(origin,pr) then b3D=d3; best=p.Character; bDist=0 end
+                        elseif on and sd<bDist and IsVisible(origin,pr) then bDist=sd; best=p.Character end
+                    end
+                end
+            end
+        end
+        CL.CurrentTarget=best
+    end
+    if CL.CurrentTarget then
+        if tick()-CL.LastSwitchTime>=CL.Delay then
+            local vp=GetVisibleParts(origin,CL.CurrentTarget)
+            CL.LockedPart=vp[math.random(1,#vp)]; CL.LastSwitchTime=tick()
+        end
+        if CL.LockedPart then
+            local jit=Vector3.new((math.random()-0.5)*CL.Shake,(math.random()-0.5)*CL.Shake,(math.random()-0.5)*CL.Shake)
+            local tPos=CL.LockedPart.Position
+            if CL.AutoPrediction then
+                local ctool=char and char:FindFirstChildOfClass("Tool")
+                if ctool~=CL.CachedTool then
+                    CL.CachedTool=ctool; CL.CachedVel=1100
+                    if ctool and ctool:FindFirstChild("Config") then
+                        pcall(function()
+                            local cfg=require(ctool.Config)
+                            if cfg.BulletSettings and cfg.BulletSettings.Velocity then CL.CachedVel=cfg.BulletSettings.Velocity
+                            elseif cfg.Velocity then CL.CachedVel=cfg.Velocity end
+                        end)
+                    end
+                end
+                tPos=tPos+(CL.LockedPart.AssemblyLinearVelocity*((tPos-origin).Magnitude/CL.CachedVel))
+            end
+            Camera.CFrame=CFrame.lookAt(origin, origin+Camera.CFrame.LookVector:Lerp((tPos+jit-origin).Unit,CL.Power))
+        end
+    end
+end)
+
+-- == Ragebot fire Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not RB_State or not Valid_Pair then return end
+    local char=LocalPlayer.Character
+    local tool=char and char:FindFirstChildOfClass("Tool")
+    if not (tool and tool:FindFirstChild("IsGun")) then return end
+    local waitTime,gunConfig=0,nil
+    if RF_State then
+        local gn=tool.Name
+        if not (gn:find("Beretta") or gn:find("TEC")) then
+            local cfg=tool:FindFirstChild("Config")
+            if cfg and cfg:IsA("ModuleScript") then
+                local ok,gs=pcall(require,cfg)
+                if ok and gs then gunConfig=gs; waitTime=1/(gs.FireRate or 3)
+                else waitTime=0.1 end
+            else waitTime=0.1 end
+        end
+    else waitTime=0.5 end
+    if tick()-Last_Shot < waitTime then return end
+    local vals=tool:FindFirstChild("Values"); local ammo=vals and vals:FindFirstChild("SERVER_Ammo")
+    if not (ammo and ammo.Value>0) then return end
+    local part=Valid_Pair.Target.Character:FindFirstChild("Head") or Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+    if not part then return end
+    local key="K"..math.random(1000,9999)
+    local dir=(Valid_Pair.Hit-Valid_Pair.Origin).Unit
+    GN_S:FireServer(tick(),key,tool,"FDS9I83",Valid_Pair.Origin,{dir},false)
+    if TR.Enabled then task.spawn(CreateTracer,Valid_Pair.Origin,dir) end
+    ZF_H:FireServer("🧈",tool,key,1,part,Valid_Pair.Hit,dir)
+    if tool:FindFirstChild("Hitmarker") then tool.Hitmarker:Fire(part) end
+    if HitLogEnabled then
+        local dmg,mult=17,1.35
+        if gunConfig then dmg=gunConfig.Damage or 17; mult=gunConfig.HeadshotMultiplier or 1.35
+        elseif tool:FindFirstChild("Config") then
+            local ok,c=pcall(require,tool.Config)
+            if ok then dmg=c.Damage or 17; mult=c.HeadshotMultiplier or 1.35 end
+        end
+        local fd=(dmg*mult)-(math.floor((Valid_Pair.Origin-Valid_Pair.Hit).Magnitude/50)*2)
+        local mp=GetLocalRealPosition()
+        local tr=Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+        ProcessHitLog(Valid_Pair.Target.Name,tool.Name,math.floor(fd*100)/100,tr and math.floor((mp-tr.Position).Magnitude) or 0,WB.Cached)
+    end
+    Last_Shot=tick()
+end)
+
+-- == Anti Shiftlock Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not MC.AntiShift then return end
+    local char=LocalPlayer.Character
+    local tool=char and char:FindFirstChildOfClass("Tool")
+    local hasGun=tool~=nil and tool:FindFirstChild("IsGun")~=nil
+    if lastTickHadGun and not hasGun then
+        task.delay(MC.ShiftDelay, function() firesignal(ChangeMouseLockEvent.Event); UIS.MouseBehavior=Enum.MouseBehavior.Default end)
+    end
+    lastTickHadGun=hasGun
+end)
+
+-- == ESP / Nametag Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not (NametagEnabled or DistanceEnabled or HealthEnabled) then return end
+    local myChar=LocalPlayer.Character
+    local myRoot=myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+    local now=tick()
+    if now-LastVisualUpdate >= ((myRoot.Velocity.Magnitude>(CONFIG.VelocityThreshold or 0.5)) and CONFIG.Rate_Active or CONFIG.Rate_Idle) then
+        LastVisualUpdate=now
+        for _,player in pairs(Players:GetPlayers()) do
+            if player~=LocalPlayer and player.Character then
+                local ch=player.Character; local h=ch:FindFirstChildOfClass("Humanoid")
+                local alive=h and h.Health>0
+                local show=alive and (not espSets.targetOnly or table.find(TargetList,player.Name)~=nil)
+                local tag=GetCustomTag(ch,"CAT_NameTag",CONFIG.NameOffset)
+                if tag then
+                    local showName = NametagEnabled and show
+                    local showDist = DistanceEnabled and show
+                    local scaledHP = h and math.ceil(h.Health * (100/115)) or 0
+                    local showHP   = HealthEnabled and show and scaledHP < 100
+                    tag.Enabled = (showName or showDist)
+                    local nameL = tag:FindFirstChild("L")
+                    local distL = tag:FindFirstChild("DL")
+                    if nameL then
+                        nameL.Visible = showName
+                        if showName then
+                            if table.find(WhiteList,player.Name)~=nil then nameL.TextColor3=Color3.fromRGB(135,206,235)
+                            elseif table.find(TargetList,player.Name)~=nil then nameL.TextColor3=Color3.fromRGB(255,0,0)
+                            else nameL.TextColor3=Color3.fromRGB(255,255,255) end
+                        end
+                    end
+                    if distL then distL.Visible = showDist end
+                end
+                -- HP 标签（左边）
+                local hpTag = ch:FindFirstChild("CAT_HPTag")
+                if hpTag then
+                    local scaledHP = h and math.ceil(h.Health * (100/115)) or 0
+                    local showHP   = HealthEnabled and show and scaledHP < 100
+                    hpTag.Enabled  = showHP
+                    if showHP then
+                        local l = hpTag:FindFirstChild("L")
+                        if l then l.Text = tostring(scaledHP) end
+                    end
+                end
+                -- FF 标签（右边）
+                local ffTag = ch:FindFirstChild("CAT_FFTag")
+                if ffTag then
+                    local hasFF = ch:FindFirstChildOfClass("ForceField") ~= nil
+                    ffTag.Enabled = (NametagEnabled or DistanceEnabled or HealthEnabled) and show and hasFF
+                end
+            end
+        end
+    end
+    if now-LastContentUpdate >= CONFIG.ContentRate then
+        LastContentUpdate=now
+        local myPos=GetLocalRealPosition()
+        for _,player in pairs(Players:GetPlayers()) do
+            if player.Character then
+                local tag=player.Character:FindFirstChild("CAT_NameTag")
+                if tag and tag.Enabled then
+                    local nameL=tag:FindFirstChild("L")
+                    local distL=tag:FindFirstChild("DL")
+                    local tr=player.Character:FindFirstChild("HumanoidRootPart")
+                    if nameL and nameL.Visible then nameL.Text=player.Name end
+                    if distL and distL.Visible and tr then
+                        distL.Text=math.floor((myPos-tr.Position).Magnitude).."M"
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local function MonitorChar(c) if c then CurrentHum=c:WaitForChild("Humanoid",10) end end
+MonitorChar(LocalPlayer.Character)
+LocalPlayer.CharacterAdded:Connect(MonitorChar)
+
+return Library
             Library.SearchItems[SubPage] = { }
 
             function SubPage:Turn(Bool)
@@ -1522,7 +3198,845 @@ end)
                     Size = UDim2New(0, 12, 0, 12),
                     BorderSizePixel = 2,
                     BackgroundColor3 = FromRGB(30, 36, 31)
-                })  Items["Indicator"]:AddToTheme({BackgroundColor3 = "Element", BorderColor3 = "Border"})
+                })  do -- Player page
+    local Page = Window:Page({Name="Player", SubPages=true})
+    local Sub  = Page:SubPage({Name="Physical", Columns=2})
+    local sec  = Sub:Section({Name="Movement", Side=1})
+    sec:Toggle({Name="WalkSpeed", Flag="CAT_WalkSpeed_53", Callback=function(v) SpeedState=v end}):Keybind({Flag="CAT_WalkSpeed_53_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_WalkSpeed_53"] then Library.SetFlags["CAT_WalkSpeed_53"](v) end end})
+    sec:Slider( {Name="Value", Flag="CAT_Value_54", Min=1, Max=100, Default=33.5, Decimals=0.1, Callback=function(v) SpeedValue=v end})
+    sec:Toggle({Name="JumpPower", Flag="CAT_JumpPower_55", Callback=function(v) JumpState=v end}):Keybind({Flag="CAT_JumpPower_55_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_JumpPower_55"] then Library.SetFlags["CAT_JumpPower_55"](v) end end})
+    sec:Slider( {Name="Value", Flag="CAT_Value_56", Min=1, Max=100, Default=73,   Decimals=0.1, Callback=function(v) JumpValue=v end})
+    sec:Toggle({Name="No fall", Flag="CAT_No_fall_57", Default=false, Callback=function(v) NoFallEnabled=v end}):Keybind({Flag="CAT_No_fall_57_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_No_fall_57"] then Library.SetFlags["CAT_No_fall_57"](v) end end})
+    sec:Toggle({Name="Fly", Flag="CAT_PL_Fly", Callback=function(v)
+        FLY.Enabled = v
+        if FLY.MobileMode then
+            -- 手机模式：和原来一样，有GUI
+            if v then
+                FlyCreateUI()
+                FlyOn()
+            else
+                FlyOff()
+                FlyDestroyUI()
+            end
+        else
+            -- 普通模式：直接飞，无任何GUI
+            if v then
+                FlyOn()
+            else
+                FlyOff()
+            end
+        end
+    end}):Keybind({Flag="CAT_PL_Fly_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_Fly"] then Library.SetFlags["CAT_PL_Fly"](v) end end})
+    sec:Slider({Name="Fly speed", Flag="CAT_Fly_speed_58", Min=1, Max=100, Default=60, Callback=function(v) FLY.Speed=v end})
+    sec:Toggle({Name="Mobile mode", Flag="CAT_PL_MobileMode", Default=false, Callback=function(v)
+        FLY.MobileMode = v
+    end}):Keybind({Flag="CAT_PL_MobileMode_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_MobileMode"] then Library.SetFlags["CAT_PL_MobileMode"](v) end end})
+    sec:Toggle({Name="Infinite Stamina", Flag="CAT_PL_InfStamina", Default=false, Callback=function(Value)
+        InfStaminaEnabled=Value
+        if InfStaminaConnection then InfStaminaConnection:Disconnect(); InfStaminaConnection=nil end
+        if Value then
+            local ok=pcall(function()
+                local tgt=getupvalue(getrenv()._G.S_Take,2); local old
+                old=hookfunction(tgt,function(v1,...) if InfStaminaEnabled then v1=0 end return old(v1,...) end)
+            end)
+            if not ok then
+                local tbs={}
+                local function collect() tbs={}; for _,v in pairs(getgc(true)) do if type(v)=="table" and rawget(v,"S") then tbs[#tbs+1]=v end end end
+                pcall(collect)
+                InfStaminaConnection=RunService.RenderStepped:Connect(function()
+                    if InfStaminaEnabled then
+                        if tick()%5<0.1 then pcall(collect) end
+                        for _,t in ipairs(tbs) do pcall(function() t.S=100 end) end
+                        local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+                        if h then h:SetAttribute("ZSPRN_M",true) end
+                    end
+                end)
+            end
+        else
+            local c=LocalPlayer.Character; local h=c and c:FindFirstChildOfClass("Humanoid")
+            if h then h:SetAttribute("ZSPRN_M",nil) end
+        end
+    end}):Keybind({Flag="CAT_PL_InfStamina_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_PL_InfStamina"] then Library.SetFlags["CAT_PL_InfStamina"](v) end end})
+end
+
+do -- Antis page
+    local Page        = Window:Page({Name="Antis", SubPages=false})
+    local AntiHitSec  = Page:Section({Name="Anti hit", Side=1})
+
+    AntiHitSec:Dropdown({Name="Head mode", Flag="CAT_Head_mode_59", Items={"Hide head","Yaw head","Custom"}, Callback=function(v)
+        if not v and OriginalNeckC0 then
+            local ch = LocalPlayer.Character
+            if ch then
+                local hd = ch:FindFirstChild("Head")
+                local ts = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+                local nk = (hd and hd:FindFirstChild("Neck")) or (ts and ts:FindFirstChild("Neck"))
+                if nk then nk.C0 = OriginalNeckC0; nk.C1 = OriginalNeckC1 end
+            end
+            OriginalNeckC0, OriginalNeckC1 = nil, nil
+        end
+        HeadYawTime = 0
+        HeadMode = v
+    end})
+    AntiHitSec:Slider({Name="Custom yaw", Flag="CAT_Custom_yaw_60",     Min=-90, Max=90, Default=30,  Decimals=0.1, Callback=function(v) HeadYaw=v; HeadCustomYaw=v end})
+    AntiHitSec:Slider({Name="Rotation speed", Flag="CAT_Rotation_speed_61", Min=-50,  Max=50,  Default=30,  Decimals=0.1, Callback=function(v) HeadRotSpeed=v end})
+
+    AntiHitSec:Dropdown({Name="Hands mod", Flag="CAT_Hands_mod_62", Items={"Hands up","Open hands"}, Callback=function(v) HandsModSelection=v end})
+
+    AntiHitSec:Toggle({Name="乱飞", Flag="CAT_AN_LuanFei", Callback=function(v)
+        LF.Enabled = v
+        if not v then
+            if LF.Track1 then pcall(function() LF.Track1:Stop(0) end); LF.Track1 = nil end
+            if LF.Track2 then pcall(function() LF.Track2:Stop(0) end); LF.Track2 = nil end
+            LF.Angle = 0
+        end
+    end}):Keybind({Flag="CAT_AN_LuanFei_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_AN_LuanFei"] then Library.SetFlags["CAT_AN_LuanFei"](v) end end})
+
+    -- Invisible toggle
+    AntiHitSec:Toggle({Name="Invisible", Flag="CAT_AN_Invisible", Callback=function(v)
+        Invis_Enabled=v
+        if not v then
+            if Invis_Track then pcall(function() Invis_Track:Stop() end); Invis_Track=nil end
+            local char=LocalPlayer.Character
+            if char then
+                for _,p in ipairs(char:GetChildren()) do
+                    if p:IsA("BasePart") and p.Transparency==0.5 then p.Transparency=0 end
+                end
+            end
+        end
+    end}):Keybind({Flag="CAT_AN_Invisible_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_AN_Invisible"] then Library.SetFlags["CAT_AN_Invisible"](v) end end})
+
+    do -- Desync
+        local sec=Page:Section({Name="Velocity desync", Side=2})
+        sec:Toggle({Name="Enable", Flag="CAT_Enable_63",    Callback=function(v) DS.Enabled=v end}):Keybind({Flag="CAT_Enable_63_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Enable_63"] then Library.SetFlags["CAT_Enable_63"](v) end end})
+        sec:Toggle({Name="Visualize", Flag="CAT_Visualize_64", Default=true, Callback=function(v) DS.Visualize=v end}):Keybind({Flag="CAT_Visualize_64_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Visualize_64"] then Library.SetFlags["CAT_Visualize_64"](v) end end})
+        sec:Slider({Name="TP Rate", Flag="CAT_TP_Rate_65",  Min=1,  Max=100, Default=60,  Callback=function(v) DS.TPRate=v end})
+        sec:Slider({Name="X Offset", Flag="CAT_X_Offset_66", Min=1,  Max=20,  Default=8.5, Decimals=0.1, Callback=function(v) DS.X=v end})
+        sec:Slider({Name="Y Offset", Flag="CAT_Y_Offset_67", Min=1,  Max=20,  Default=3,   Decimals=0.1, Callback=function(v) DS.Y=v end})
+        sec:Slider({Name="Z Offset", Flag="CAT_Z_Offset_68", Min=1,  Max=20,  Default=8.5, Decimals=0.1, Callback=function(v) DS.Z=v end})
+    end
+end
+
+do -- Misc page
+    local Page = Window:Page({Name="Misc", SubPages=false})
+    
+    local sL   = Page:Section({Name="Shiftlock", Side=1})
+    sL:Toggle({Name="Anti auto shiftlock", Flag="CAT_Anti_auto_shiftlock_69", Callback=function(v) MC.AntiShift=v end}):Keybind({Flag="CAT_Anti_auto_shiftlock_69_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Anti_auto_shiftlock_69"] then Library.SetFlags["CAT_Anti_auto_shiftlock_69"](v) end end})
+    sL:Slider( {Name="Delay", Flag="CAT_Delay_70", Min=0.01, Max=0.50, Default=0.05, Decimals=0.01, Callback=function(v) MC.ShiftDelay=v end})
+    
+    local sFarm = Page:Section({Name="Farm", Side=1})
+    sFarm:Toggle({Name="Auto pick up money", Flag="CAT_MC_AutoPickup", Callback=function(v) 
+        SC.APM_Enabled = v 
+        if v then StartAutoPickUpMoney() end
+    end}):Keybind({Flag="CAT_MC_AutoPickup_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_MC_AutoPickup"] then Library.SetFlags["CAT_MC_AutoPickup"](v) end end})
+    sFarm:Toggle({Name="Auto unlock safe", Flag="CAT_MC_AutoUnlock", Callback=function(v)
+        SC.AUS_Enabled = v
+        if v then StartAutoUnlockSafe() end
+    end}):Keybind({Flag="CAT_MC_AutoUnlock_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_MC_AutoUnlock"] then Library.SetFlags["CAT_MC_AutoUnlock"](v) end end})
+
+    local sR = Page:Section({Name="Camera", Side=2})
+    sR:Toggle({Name="Smooth Camera", Flag="CAT_Smooth_Camera_71", Callback=function(v) MC.SmoothCam=v; if not v then MC.SmoothPos=nil end end}):Keybind({Flag="CAT_Smooth_Camera_71_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Smooth_Camera_71"] then Library.SetFlags["CAT_Smooth_Camera_71"](v) end end})
+    sR:Slider( {Name="Speed", Flag="CAT_Speed_72", Min=1, Max=10, Default=6, Callback=function(v) MC.LerpSpeed=v end})
+end
+
+do -- PlayerList page
+    local Page = Window:Page({Name="PlayerList", SubPages=false})
+    local pL   = Page:Section({Name="Target List", Side=1})
+    PL_TargetSearch = pL:Searchbox({Name="Targets", Items=GetAllPlayerNames(), Multi=true,
+        Callback=function(v) TargetList=(typeof(v)=="table" and v or {v}); if espSets.enabled and espSets.targetOnly then refreshAllESP() end end})
+    pL:Button({Name="Clear Targets", Callback=function() TargetList={}; pcall(function() PL_TargetSearch:Set({}) end); if espSets.enabled and espSets.targetOnly then refreshAllESP() end end})
+    local pR = Page:Section({Name="Whitelist", Side=2})
+    PL_WhiteSearch = pR:Searchbox({Name="Whitelist", Items=GetAllPlayerNames(), Multi=true,
+        Callback=function(v) WhiteList=(typeof(v)=="table" and v or {v}) end})
+    pR:Button({Name="Clear Whitelist", Callback=function() WhiteList={}; pcall(function() PL_WhiteSearch:Set({}) end) end})
+end
+
+Library:CreateSettingsPage(Window, Watermark, KeybindList)
+
+Players.PlayerAdded:Connect(function(p)
+    PL_TargetSearch:Add(p.Name); PL_WhiteSearch:Add(p.Name)
+end)
+Players.PlayerRemoving:Connect(function(p)
+    PL_TargetSearch:Remove(p.Name); PL_WhiteSearch:Remove(p.Name); clearBoxes(p)
+    if p.Character then
+        local t1=p.Character:FindFirstChild("CAT_NameTag")
+        local t2=p.Character:FindFirstChild("CAT_FFTag")
+        local t3=p.Character:FindFirstChild("CAT_HPTag")
+        if t1 then t1:Destroy() end
+        if t2 then t2:Destroy() end
+        if t3 then t3:Destroy() end
+    end
+end)
+end)() -- end UI IIFE
+
+-- =====================================================================
+-- == Invisible: RenderStep restore (priority 200, after Desync's 199)
+-- =====================================================================
+RunService:BindToRenderStep("InvisFix", 199, function()
+    if not Invis_Enabled or DS.Enabled or LF.Enabled then
+        Invis_SavedCF = nil
+        return
+    end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+
+    if hrp and Invis_SavedCF then
+        hrp.CFrame    = Invis_SavedCF
+        Invis_SavedCF = nil
+    end
+
+    if Invis_Track then
+        pcall(function() Invis_Track:Stop() end)
+    end
+
+    if char then
+        for _, p in ipairs(char:GetChildren()) do
+            if p:IsA("BasePart") and (p.Name=="Head" or p.Name=="Torso" or p.Name:match("Arm") or p.Name:match("Leg")) then
+                if p.Transparency ~= 0.5 then p.Transparency = 0.5 end
+            end
+        end
+    end
+end)
+
+-- =====================================================================
+-- == LuanFei (Spin Desync) Local Anim Fix
+-- =====================================================================
+RunService:BindToRenderStep("LuanFeiAnimFix", 199, function()
+    if LF.Enabled and not Invis_Enabled then
+        if LF.Track1 then pcall(function() LF.Track1:Stop(0) end) end
+        if LF.Track2 then pcall(function() LF.Track2:Stop(0) end) end
+    end
+end)
+
+-- =====================================================================
+-- == Smooth Camera
+-- =====================================================================
+RunService:UnbindFromRenderStep("SmoothMovementCamera")
+RunService:BindToRenderStep("SmoothMovementCamera", Enum.RenderPriority.Camera.Value+1, function(dt)
+    if not MC.SmoothCam or not Camera then MC.SmoothPos=nil return end
+    local cf  = Camera.CFrame
+    local pos = cf.Position
+    if not MC.SmoothPos then MC.SmoothPos=pos
+    else MC.SmoothPos=MC.SmoothPos:Lerp(pos, math.clamp(dt*MC.LerpSpeed,0,1)) end
+    Camera.CFrame = CFrame.new(MC.SmoothPos, MC.SmoothPos+cf.LookVector)
+end)
+
+-- =====================================================================
+-- == Main Heartbeat (split into sub-functions to keep register count low)
+-- =====================================================================
+
+local function DoSkinUpdate()
+    local now = tick()
+    if now - FF_S.LastSkin < 1 then return end
+    FF_S.LastSkin = now
+    if FF_S.BodyEnabled then
+        local char = LocalPlayer.Character
+        if char then
+            for _, p in ipairs(char:GetChildren()) do
+                if IsBodyPart(p) then
+                    if not FF_S.BodyProps[p] then
+                        FF_S.BodyProps[p]={Material=p.Material,Color=p.Color}
+                        p.Material=Enum.Material.ForceField; p.Color=FF_S.Color
+                    elseif p.Material~=Enum.Material.ForceField then
+                        p.Material=Enum.Material.ForceField; p.Color=FF_S.Color
+                    end
+                end
+            end
+        end
+    end
+    if FF_S.ToolEnabled then
+        local char = LocalPlayer.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool then
+            for _, p in ipairs(tool:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    if not FF_S.ToolProps[p] then
+                        FF_S.ToolProps[p] = {Material=p.Material, Color=p.Color}
+                    end
+                    p.Material = Enum.Material.ForceField
+                    p.Color    = FF_S.Color
+                end
+            end
+        end
+    end
+end
+
+local function DoDesyncLogic()
+    if not DS.Enabled or Invis_Enabled then
+        DS.AppliedOffset = Vector3.zero
+        if not DS.Enabled and DS.Model.Parent then DS.Model.Parent=nil end
+        return
+    end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local ragebotActive = false
+    if RB_State and Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character then
+        local th=Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+        local tu=Valid_Pair.Target.Character:FindFirstChildOfClass("Humanoid")
+        if th and tu and tu.Health>0 then
+            local tool=char:FindFirstChildOfClass("Tool")
+            if tool and tool:FindFirstChild("IsGun") then ragebotActive=true end
+        end
+    end
+    if ragebotActive then
+        if DS.Model.Parent then DS.Model.Parent=nil end
+        DS.AppliedOffset=Vector3.zero; return
+    end
+    local clk=os.clock()
+    local interval=DS.TPRate>0 and (1/DS.TPRate) or 0
+    if clk-DS.LastTPTime >= interval then
+        DS.LastTPTime=clk
+        DS.Y_Toggle=not DS.Y_Toggle
+        local yOff=DS.Y_Toggle and (math.random(0,DS.Y*10)/10) or 0
+        local tOff=Vector3.new((math.random()-0.5)*2*DS.X, yOff, (math.random()-0.5)*2*DS.Z)
+        local p=RaycastParams.new()
+        p.FilterDescendantsInstances={char,DS.Model,Camera}
+        p.FilterType=Enum.RaycastFilterType.Exclude
+        local rr=workspace:Raycast(hrp.Position, tOff, p)
+        if rr then DS.CurrentOffset=(rr.Position+rr.Normal*1.5)-hrp.Position
+        else DS.CurrentOffset=tOff end
+    end
+    if DS.Visualize then
+        if DS.Model.Parent~=workspace.Terrain then DS.Model.Parent=workspace.Terrain end
+        DS.Model:PivotTo(CFrame.new(hrp.Position+DS.CurrentOffset))
+    else
+        if DS.Model.Parent then DS.Model.Parent=nil end
+    end
+    DS.AppliedOffset = DS.CurrentOffset
+end
+
+local function DoLuanFeiLogic()
+    if not LF.Enabled or Invis_Enabled then return end
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+
+    local animator = hum:FindFirstChildOfClass("Animator") or hum
+    if not LF.Track1 then
+        pcall(function() 
+            LF.Track1 = animator:LoadAnimation(LF.Anim1)
+            LF.Track1.Priority = Enum.AnimationPriority.Action4 
+        end)
+    end
+    if not LF.Track2 then
+        pcall(function() 
+            LF.Track2 = animator:LoadAnimation(LF.Anim2)
+            LF.Track2.Priority = Enum.AnimationPriority.Action4
+            LF.Track2.Looped = true 
+        end)
+    end
+
+    if LF.Track1 then
+        pcall(function()
+            if not LF.Track1.IsPlaying then LF.Track1:Play() end
+            LF.Track1:AdjustSpeed(0)
+            LF.Track1.TimePosition = (LF.Track1.Length > 0 and LF.TimePosRatio * LF.Track1.Length) or LF.TimePosRatio
+        end)
+    end
+    if LF.Track2 then
+        pcall(function()
+            if not LF.Track2.IsPlaying then LF.Track2:Play() end
+            LF.Track2:AdjustSpeed(1)
+        end)
+    end
+
+    LF.Angle = LF.Angle + LF.SpinSpeed
+end
+
+local function ApplySpoofs()
+    local now = tick()
+    if (DS.Enabled or LF.Enabled) and now - DS.LastFFlagTime >= 1 then
+        DS.LastFFlagTime = now
+        pcall(setfflag, "S2PhysicsSenderRate", "99999999")
+    end
+
+    DoDesyncLogic()
+    DoLuanFeiLogic()
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local spoofed = false
+    local realCF = hrp.CFrame
+    local newCF = realCF
+
+    if DS.Enabled and DS.AppliedOffset ~= Vector3.zero then
+        newCF = newCF + DS.AppliedOffset
+        spoofed = true
+    end
+
+    if LF.Enabled and not Invis_Enabled then
+        local smoothRotation = CFrame.Angles(
+            math.rad(LF.Angle), 
+            math.rad(LF.Angle * 1.5), 
+            math.rad(LF.Angle * 0.8)
+        )
+        newCF = newCF * smoothRotation
+        spoofed = true
+    end
+
+    if spoofed then
+        hrp.CFrame = newCF
+        RunService:BindToRenderStep("RestoreSpoofCFrame", 199, function()
+            if char and hrp and hrp.Parent then hrp.CFrame = realCF end
+            if DS.Enabled then DS.AppliedOffset = Vector3.zero end
+            RunService:UnbindFromRenderStep("RestoreSpoofCFrame")
+        end)
+    end
+end
+
+local function DoInvisible()
+    if not Invis_Enabled or DS.Enabled or LF.Enabled then return end
+    local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if not (hrp and hum and hum.Health > 0) then return end
+
+    if not Invis_Track then
+        local anim = hum:FindFirstChildOfClass("Animator") or hum
+        pcall(function()
+            Invis_Track = anim:LoadAnimation(Invis_Anim)
+            Invis_Track.Priority = Enum.AnimationPriority.Action
+        end)
+    end
+
+    if Invis_Track then
+        pcall(function()
+            if not Invis_Track.IsPlaying then Invis_Track:Play() end
+            Invis_Track:AdjustSpeed(0)
+            Invis_Track.TimePosition = 0.3
+        end)
+    end
+
+    Invis_SavedCF = hrp.CFrame
+    hrp.CFrame = Invis_SavedCF + Vector3.new(0, -2, 0)
+end
+
+-- =====================================================================
+-- == 解析1：固定25点向量表 + 随机Roll轴旋转
+-- =====================================================================
+local ScanVectors = {
+    Vector3.new(1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0),
+    -Vector3.new(1, 0, 0), -Vector3.new(0, 0, 1), -Vector3.new(0, 1, 0),
+    Vector3.new(1, 1, 0)/math.sqrt(2), Vector3.new(1, 0, 1)/math.sqrt(2), Vector3.new(0, 1, 1)/math.sqrt(2),
+    Vector3.new(-1, 1, 0)/math.sqrt(2), Vector3.new(-1, 0, 1)/math.sqrt(2),
+    -Vector3.new(1, 0, 1)/math.sqrt(2), -Vector3.new(-1, 0, 1)/math.sqrt(2), -Vector3.new(0, -1, 1)/math.sqrt(2),
+    Vector3.new(1, 1, 1)/math.sqrt(3), Vector3.new(-1, 1, 1)/math.sqrt(3), Vector3.new(1, 1, -1)/math.sqrt(3),
+    -Vector3.new(1, 1, 1)/math.sqrt(3), -Vector3.new(1, -1, 1)/math.sqrt(3),
+    Vector3.new(1,2,0)/math.sqrt(5), Vector3.new(-1,2,0)/math.sqrt(5), Vector3.new(1,0,2)/math.sqrt(5), Vector3.new(-1,0,2)/math.sqrt(5),
+    -Vector3.new(-1,0,2)/math.sqrt(5), -Vector3.new(1,0,2)/math.sqrt(5),
+}
+
+local function GetOffsets_Algo1(firePos, targetPos, offset)
+    if not offset or offset <= 0 then return {firePos} end
+    local offsets = {firePos} -- 优先检测中心点
+    local cfOffset = CFrame.new(firePos, targetPos) * CFrame.Angles(0, 0, math.rad(math.random(1, 90)))
+    for _, pos in ipairs(ScanVectors) do
+        table.insert(offsets, cfOffset * (pos * offset))
+    end
+    return offsets
+end
+
+-- =====================================================================
+-- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
+-- == 改动说明：
+-- ==  - 采样在与 poleDir 垂直的平面上进行（即在目标的“屏幕平面”上），
+-- ==  - 使用 concentric disk (r = radius * sqrt(rand)) 来保证圆盘内的均匀分布，
+-- ==  - 这样 radius 始终是世界单位，不会随距离缩减，命中更精确稳定。
+-- =====================================================================
+local function GetOffsets_Algo2(center, poleDir, radius, count)
+    if not radius or radius <= 0 or count <= 0 then return {center} end
+    local offsets = {center} -- 优先检测中心点
+
+    -- 构建正交基：t1, t2 为与 poleDir 垂直的两个单位向量（plane basis）
+    local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+    local t1 = poleDir:Cross(arb)
+    if t1.Magnitude == 0 then
+        arb = Vector3.new(0,0,1)
+        t1 = poleDir:Cross(arb)
+    end
+    t1 = t1.Unit
+    local t2 = poleDir:Cross(t1).Unit
+
+    -- 为了提高命中精度：中心附近点权重更高（可选）
+    -- 使用 concentric disk sampling 保证圆盘上的均匀采样
+    for i = 1, count do
+        -- 极坐标：角度与半径（半径使用 sqrt(rand) 保证面积均匀）
+        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count) -- 带少量角度抖动
+        local r = radius * math.sqrt(math.random())
+        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+        table.insert(offsets, center + offsetVec)
+    end
+
+    return offsets
+end
+
+-- =====================================================================
+-- == 核心 Ragebot 逻辑
+-- =====================================================================
+local function DoRagebot()
+    if not RB_State then Valid_Pair=nil; Locked_Path=nil; return end
+    local target=GetTarget()
+    if not target or not target.Character then Valid_Pair=nil; Locked_Path=nil; return end
+    if Locked_Path and Locked_Path.Target~=target then Locked_Path=nil end
+    
+    local myRoot=LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local tRoot=target.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot or not tRoot then return end
+    local myPos=GetLocalRealPosition()
+    local tPos=tRoot.Position
+
+    -- 1. 缓存机制 (如果上一发的轨迹依然有效，直接复用，不扫描)
+    if Locked_Path then
+        local dO=(myPos-Locked_Path.MyPos).Magnitude
+        local dH=(tPos-Locked_Path.TPos).Magnitude
+        local inRange=(myPos-Locked_Path.AbsO).Magnitude<=Origin_Radius
+                   and (tPos-Locked_Path.AbsH).Magnitude<=Hit_Radius
+        if dO<=WB.Threshold and dH<=WB.Threshold and inRange then
+            if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
+                Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target}
+                WB.Cached=true; return
+            end
+        end
+        Locked_Path=nil
+    end
+
+    -- 2. 扫描速率限制
+    if tick()-WB.LastScan < 1/ScanRate then return end
+    WB.LastScan=tick()
+    WB.Round=WB.Round+1 -- 轮数+1，用于交替算法
+
+    -- 3. 交替使用两种解析算法
+    local newOrigin, newTarget
+    
+    if WB.Round % 2 == 0 then
+        -- 【双数轮】：使用 解析1 (25点固定向量 + 随机旋转)
+        newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
+        newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
+    else
+        -- 【单数轮】：使用 解析2 (圆盘均匀采样，确保 radius 为固定世界单位)
+        local oPole = (tPos - myPos)
+        if oPole.Magnitude < 0.001 then return end
+        oPole = oPole.Unit
+        local hPole = -oPole -- 敌人的半球朝向玩家
+        
+        -- 这里会读取你 UI 菜单里的 Origin_Scans 和 Hit_Scans 数量
+        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
+        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans)
+    end
+
+    -- 4. 双重循环穷举寻找合法弹道 (找到即返回，不再比较距离)
+    local bestPO, bestPH = nil, nil
+
+    for _, pO in ipairs(newOrigin) do
+        for _, pH in ipairs(newTarget) do
+            if CheckWallbang(pO, pH) then
+                -- 找到第一条合法路径，立即锁定并跳出循环
+                bestPO = pO
+                bestPH = pH
+                break
+            end
+        end
+        if bestPO then break end -- 找到就跳出外层循环
+    end
+
+    -- 5. 更新缓存与射击对
+    if bestPO then
+        Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos}
+        Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target}
+        WB.Cached=false
+    else
+        Valid_Pair=nil
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    DoSkinUpdate()
+    ApplySpoofs()
+    DoInvisible()
+    DoRagebot()
+end)
+
+-- == AntiHit RenderStepped (Hide head / Hands up) ==
+RunService:BindToRenderStep("CAM_FOV_Enforce", Enum.RenderPriority.Camera.Value+2, function()
+    if CAM_FOV then Camera.FieldOfView = CAM_FOV end
+    if AMB.Enabled then
+        -- 挂在 Camera 下，游戏不会删它
+        local cc = Camera:FindFirstChild("CATColorCorr")
+        if not cc then
+            cc = Instance.new("ColorCorrectionEffect")
+            cc.Name   = "CATColorCorr"
+            cc.Parent = Camera
+        end
+        cc.TintColor  = AMB.Color
+        cc.Brightness = AMB.Brightness
+        cc.Contrast   = AMB.Density * 0.3
+        cc.Saturation = -(AMB.Density * 0.5)
+        cc.Enabled    = true
+    else
+        local cc = Camera:FindFirstChild("CATColorCorr")
+        if cc then cc.Enabled = false end
+    end
+end)
+
+-- == AntiHit RenderStepped (Head mode / Hands up) ==
+RunService.RenderStepped:Connect(function(dt)
+    if not HeadMode and not HandsModSelection then return end
+    local char = LocalPlayer.Character
+    if not (char and char.Parent) then return end
+    local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+    local head  = char:FindFirstChild("Head")
+    local hrp   = char:FindFirstChild("HumanoidRootPart")
+
+    if HeadMode then
+        local neck = (head and head:FindFirstChild("Neck")) or (torso and torso:FindFirstChild("Neck"))
+        if HeadMode == "Hide head" and neck then
+            if not OriginalNeckC0 then OriginalNeckC0 = neck.C0; OriginalNeckC1 = neck.C1 end
+            neck.C0 = AC.NeckC0
+            neck.C1 = AC.NeckC1
+        elseif (HeadMode == "Yaw head" or HeadMode == "Custom") and hrp then
+            if not DoTweak_fn then
+                for _, v in getgc(true) do
+                    if type(v) == "function" then
+                        local info = debug.getinfo(v)
+                        if info and info.name == "DoTweak" and info.numparams == 11 then
+                            DoTweak_fn = v; break
+                        end
+                    end
+                end
+            end
+            if DoTweak_fn then
+                local angle
+                if HeadMode == "Yaw head" then
+                    HeadYawTime = HeadYawTime + dt
+                    angle = math.sin(HeadYawTime * HeadRotSpeed) * math.rad(HeadYaw)
+                else -- Custom: 固定角度
+                    angle = math.rad(HeadCustomYaw)
+                end
+                local neckRot = CFrame.Angles(angle, 0, 0)
+                pcall(DoTweak_fn,
+                    char,
+                    hrp.Position + Vector3.new(0, 10, 0),
+                    hrp.Position,
+                    neckRot.LookVector,
+                    true, false, true, true, true, -- 第6个参数设为false，不再调整干涉手臂姿态
+                    9e9, true
+                )
+            end
+        end
+    end
+
+    if HandsModSelection and torso then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if HandsModSelection == "Hands up" and tool then
+            local lS = torso:FindFirstChild("Left Shoulder")
+            local rS = torso:FindFirstChild("Right Shoulder")
+            if lS then lS.C0 = AC.LShoulder end
+            if rS then rS.C0 = AC.RShoulder end
+            for _, v in ipairs(tool:GetDescendants()) do
+                if v.Name == "Mag6D_Torso"  and v:IsA("Motor6D") then v.C0 = AC.Mag6D  end
+                if v.Name == "Tool6D_Torso" and v:IsA("Motor6D") then v.C0 = AC.Tool6D end
+            end
+        end
+    end
+end)
+
+-- == CamLock + Speed/Jump RenderStepped ==
+RunService.RenderStepped:Connect(function(dt)
+    local char=LocalPlayer.Character
+    local hum=char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if SpeedState and hum.WalkSpeed~=SpeedValue then hum.WalkSpeed=SpeedValue end
+        if JumpState then
+            if not hum.UseJumpPower then hum.UseJumpPower=true end
+            if hum.JumpPower~=JumpValue then hum.JumpPower=JumpValue end
+        end
+    end
+    if not ShouldLock() then CL.CurrentTarget=nil; CL.LockedPart=nil; return end
+    local origin=Camera.CFrame.Position
+    CL.ScanTimer=CL.ScanTimer+dt
+    if CL.ScanTimer>0.1 then
+        CL.ScanTimer=0
+        local best,bDist,b3D=nil,CL.FOV,math.huge
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p~=LocalPlayer and p.Character then
+                if not table.find(WhiteList,p.Name) and (not CL.TargetOnly or table.find(TargetList,p.Name)) then
+                    local ph=p.Character:FindFirstChild("Humanoid"); local pr=p.Character:FindFirstChild("HumanoidRootPart")
+                    if ph and ph.Health>(CL.DownCheck and 15 or 0) and pr then
+                        local sp,on=Camera:WorldToViewportPoint(pr.Position)
+                        local sd=(Vector2.new(sp.X,sp.Y)-Vector2.new(Camera.ViewportSize.X/2,Camera.ViewportSize.Y/2)).Magnitude
+                        local d3=(pr.Position-origin).Magnitude
+                        if d3<15 then
+                            if d3<b3D and IsVisible(origin,pr) then b3D=d3; best=p.Character; bDist=0 end
+                        elseif on and sd<bDist and IsVisible(origin,pr) then bDist=sd; best=p.Character end
+                    end
+                end
+            end
+        end
+        CL.CurrentTarget=best
+    end
+    if CL.CurrentTarget then
+        if tick()-CL.LastSwitchTime>=CL.Delay then
+            local vp=GetVisibleParts(origin,CL.CurrentTarget)
+            CL.LockedPart=vp[math.random(1,#vp)]; CL.LastSwitchTime=tick()
+        end
+        if CL.LockedPart then
+            local jit=Vector3.new((math.random()-0.5)*CL.Shake,(math.random()-0.5)*CL.Shake,(math.random()-0.5)*CL.Shake)
+            local tPos=CL.LockedPart.Position
+            if CL.AutoPrediction then
+                local ctool=char and char:FindFirstChildOfClass("Tool")
+                if ctool~=CL.CachedTool then
+                    CL.CachedTool=ctool; CL.CachedVel=1100
+                    if ctool and ctool:FindFirstChild("Config") then
+                        pcall(function()
+                            local cfg=require(ctool.Config)
+                            if cfg.BulletSettings and cfg.BulletSettings.Velocity then CL.CachedVel=cfg.BulletSettings.Velocity
+                            elseif cfg.Velocity then CL.CachedVel=cfg.Velocity end
+                        end)
+                    end
+                end
+                tPos=tPos+(CL.LockedPart.AssemblyLinearVelocity*((tPos-origin).Magnitude/CL.CachedVel))
+            end
+            Camera.CFrame=CFrame.lookAt(origin, origin+Camera.CFrame.LookVector:Lerp((tPos+jit-origin).Unit,CL.Power))
+        end
+    end
+end)
+
+-- == Ragebot fire Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not RB_State or not Valid_Pair then return end
+    local char=LocalPlayer.Character
+    local tool=char and char:FindFirstChildOfClass("Tool")
+    if not (tool and tool:FindFirstChild("IsGun")) then return end
+    local waitTime,gunConfig=0,nil
+    if RF_State then
+        local gn=tool.Name
+        if not (gn:find("Beretta") or gn:find("TEC")) then
+            local cfg=tool:FindFirstChild("Config")
+            if cfg and cfg:IsA("ModuleScript") then
+                local ok,gs=pcall(require,cfg)
+                if ok and gs then gunConfig=gs; waitTime=1/(gs.FireRate or 3)
+                else waitTime=0.1 end
+            else waitTime=0.1 end
+        end
+    else waitTime=0.5 end
+    if tick()-Last_Shot < waitTime then return end
+    local vals=tool:FindFirstChild("Values"); local ammo=vals and vals:FindFirstChild("SERVER_Ammo")
+    if not (ammo and ammo.Value>0) then return end
+    local part=Valid_Pair.Target.Character:FindFirstChild("Head") or Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+    if not part then return end
+    local key="K"..math.random(1000,9999)
+    local dir=(Valid_Pair.Hit-Valid_Pair.Origin).Unit
+    GN_S:FireServer(tick(),key,tool,"FDS9I83",Valid_Pair.Origin,{dir},false)
+    if TR.Enabled then task.spawn(CreateTracer,Valid_Pair.Origin,dir) end
+    ZF_H:FireServer("🧈",tool,key,1,part,Valid_Pair.Hit,dir)
+    if tool:FindFirstChild("Hitmarker") then tool.Hitmarker:Fire(part) end
+    if HitLogEnabled then
+        local dmg,mult=17,1.35
+        if gunConfig then dmg=gunConfig.Damage or 17; mult=gunConfig.HeadshotMultiplier or 1.35
+        elseif tool:FindFirstChild("Config") then
+            local ok,c=pcall(require,tool.Config)
+            if ok then dmg=c.Damage or 17; mult=c.HeadshotMultiplier or 1.35 end
+        end
+        local fd=(dmg*mult)-(math.floor((Valid_Pair.Origin-Valid_Pair.Hit).Magnitude/50)*2)
+        local mp=GetLocalRealPosition()
+        local tr=Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+        ProcessHitLog(Valid_Pair.Target.Name,tool.Name,math.floor(fd*100)/100,tr and math.floor((mp-tr.Position).Magnitude) or 0,WB.Cached)
+    end
+    Last_Shot=tick()
+end)
+
+-- == Anti Shiftlock Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not MC.AntiShift then return end
+    local char=LocalPlayer.Character
+    local tool=char and char:FindFirstChildOfClass("Tool")
+    local hasGun=tool~=nil and tool:FindFirstChild("IsGun")~=nil
+    if lastTickHadGun and not hasGun then
+        task.delay(MC.ShiftDelay, function() firesignal(ChangeMouseLockEvent.Event); UIS.MouseBehavior=Enum.MouseBehavior.Default end)
+    end
+    lastTickHadGun=hasGun
+end)
+
+-- == ESP / Nametag Heartbeat ==
+RunService.Heartbeat:Connect(function()
+    if not (NametagEnabled or DistanceEnabled or HealthEnabled) then return end
+    local myChar=LocalPlayer.Character
+    local myRoot=myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+    local now=tick()
+    if now-LastVisualUpdate >= ((myRoot.Velocity.Magnitude>(CONFIG.VelocityThreshold or 0.5)) and CONFIG.Rate_Active or CONFIG.Rate_Idle) then
+        LastVisualUpdate=now
+        for _,player in pairs(Players:GetPlayers()) do
+            if player~=LocalPlayer and player.Character then
+                local ch=player.Character; local h=ch:FindFirstChildOfClass("Humanoid")
+                local alive=h and h.Health>0
+                local show=alive and (not espSets.targetOnly or table.find(TargetList,player.Name)~=nil)
+                local tag=GetCustomTag(ch,"CAT_NameTag",CONFIG.NameOffset)
+                if tag then
+                    local showName = NametagEnabled and show
+                    local showDist = DistanceEnabled and show
+                    local scaledHP = h and math.ceil(h.Health * (100/115)) or 0
+                    local showHP   = HealthEnabled and show and scaledHP < 100
+                    tag.Enabled = (showName or showDist)
+                    local nameL = tag:FindFirstChild("L")
+                    local distL = tag:FindFirstChild("DL")
+                    if nameL then
+                        nameL.Visible = showName
+                        if showName then
+                            if table.find(WhiteList,player.Name)~=nil then nameL.TextColor3=Color3.fromRGB(135,206,235)
+                            elseif table.find(TargetList,player.Name)~=nil then nameL.TextColor3=Color3.fromRGB(255,0,0)
+                            else nameL.TextColor3=Color3.fromRGB(255,255,255) end
+                        end
+                    end
+                    if distL then distL.Visible = showDist end
+                end
+                -- HP 标签（左边）
+                local hpTag = ch:FindFirstChild("CAT_HPTag")
+                if hpTag then
+                    local scaledHP = h and math.ceil(h.Health * (100/115)) or 0
+                    local showHP   = HealthEnabled and show and scaledHP < 100
+                    hpTag.Enabled  = showHP
+                    if showHP then
+                        local l = hpTag:FindFirstChild("L")
+                        if l then l.Text = tostring(scaledHP) end
+                    end
+                end
+                -- FF 标签（右边）
+                local ffTag = ch:FindFirstChild("CAT_FFTag")
+                if ffTag then
+                    local hasFF = ch:FindFirstChildOfClass("ForceField") ~= nil
+                    ffTag.Enabled = (NametagEnabled or DistanceEnabled or HealthEnabled) and show and hasFF
+                end
+            end
+        end
+    end
+    if now-LastContentUpdate >= CONFIG.ContentRate then
+        LastContentUpdate=now
+        local myPos=GetLocalRealPosition()
+        for _,player in pairs(Players:GetPlayers()) do
+            if player.Character then
+                local tag=player.Character:FindFirstChild("CAT_NameTag")
+                if tag and tag.Enabled then
+                    local nameL=tag:FindFirstChild("L")
+                    local distL=tag:FindFirstChild("DL")
+                    local tr=player.Character:FindFirstChild("HumanoidRootPart")
+                    if nameL and nameL.Visible then nameL.Text=player.Name end
+                    if distL and distL.Visible and tr then
+                        distL.Text=math.floor((myPos-tr.Position).Magnitude).."M"
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local function MonitorChar(c) if c then CurrentHum=c:WaitForChild("Humanoid",10) end end
+MonitorChar(LocalPlayer.Character)
+LocalPlayer.CharacterAdded:Connect(MonitorChar)
+
+return Library["Indicator"]:AddToTheme({BackgroundColor3 = "Element", BorderColor3 = "Border"})
 
                 Instances:Create("UIStroke", {
                     Parent = Items["Indicator"].Instance,
