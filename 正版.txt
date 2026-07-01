@@ -7057,7 +7057,7 @@ local function StartAutoUnlockSafe()
                 local bredMakurz = map and map:FindFirstChild("BredMakurz")
 
                 if bredMakurz then
-                    local closestSafe, minDist = nil, 4  -- 加大感应距离到 12
+                    local closestSafe, minDist = nil, 3  -- 加大感应距离到 12
 
                     for _, obj in ipairs(bredMakurz:GetChildren()) do
                         if string.find(string.lower(obj.Name), "safe") then
@@ -8228,6 +8228,23 @@ local function DoSkinUpdate()
     end
 end
 
+-- =====================================================================
+-- == Performance + Scan tuning (added)
+-- ==  - SCAN_DEPTH_MULTIPLIER: multiplies number of samples to increase depth
+-- ==  - MIN_*_SCANS: ensure minimum samples even if UI lower
+-- ==  - HIGH_SCAN_RATE: minimum scan frequency (scans/sec) to speed up sampling
+-- ==  - ALGO1_SCALE_STEPS: extra scales for Algo1 to expand search density
+-- =====================================================================
+local SCAN_DEPTH_MULTIPLIER = 3
+local MIN_ORIGIN_SCANS     = 16
+local MIN_HIT_SCANS        = 16
+local HIGH_SCAN_RATE       = 60
+local ALGO1_SCALE_STEPS    = {0.5, 1, 1.5}
+
+-- =====================================================================
+-- == Desync & LuanFei logic (unchanged)
+-- =====================================================================
+
 local function DoDesyncLogic()
     if not DS.Enabled or Invis_Enabled then
         DS.AppliedOffset = Vector3.zero
@@ -8382,7 +8399,7 @@ local function DoInvisible()
 end
 
 -- =====================================================================
--- == 解析1：固定25点向量表 + 随机Roll轴旋转
+-- == 解析1：固定25点向量表 + 随机Roll轴旋转 (增强：增加scale steps以扩展深度)
 -- =====================================================================
 local ScanVectors = {
     Vector3.new(1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0),
@@ -8400,18 +8417,17 @@ local function GetOffsets_Algo1(firePos, targetPos, offset)
     if not offset or offset <= 0 then return {firePos} end
     local offsets = {firePos} -- 优先检测中心点
     local cfOffset = CFrame.new(firePos, targetPos) * CFrame.Angles(0, 0, math.rad(math.random(1, 90)))
+    -- 扩展采样：对每个基础方向使用多个scale steps以增加扫描深度
     for _, pos in ipairs(ScanVectors) do
-        table.insert(offsets, cfOffset * (pos * offset))
+        for _, scale in ipairs(ALGO1_SCALE_STEPS) do
+            table.insert(offsets, cfOffset * (pos * offset * scale))
+        end
     end
     return offsets
 end
 
 -- =====================================================================
--- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
--- == 改动说明：
--- ==  - 采样在与 poleDir 垂直的平面上进行（即在目标的“屏幕平面”上），
--- ==  - 使用 concentric disk (r = radius * sqrt(rand)) 来保证圆盘内的均匀分布，
--- ==  - 这样 radius 始终是世界单位，不会随距离缩减，命中更精确稳定。
+-- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样（增强：更高采样计数、均匀分布、少量抖动）
 -- =====================================================================
 local function GetOffsets_Algo2(center, poleDir, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
@@ -8429,6 +8445,7 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
 
     -- 为了提高命中精度：中心附近点权重更高（可选）
     -- 使用 concentric disk sampling 保证圆盘上的均匀采样
+    -- 为了高速采样：尽量减少每次循环中的额外开销
     for i = 1, count do
         -- 极坐标：角度与半径（半径使用 sqrt(rand) 保证面积均匀）
         local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count) -- 带少量角度抖动
@@ -8441,7 +8458,7 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
 end
 
 -- =====================================================================
--- == 核心 Ragebot 逻辑
+-- == 核心 Ragebot 逻辑（增强：更高扫描速率 + 更深采样）
 -- =====================================================================
 local function DoRagebot()
     if not RB_State then Valid_Pair=nil; Locked_Path=nil; return end
@@ -8470,8 +8487,9 @@ local function DoRagebot()
         Locked_Path=nil
     end
 
-    -- 2. 扫描速率限制
-    if tick()-WB.LastScan < 1/ScanRate then return end
+    -- 2. 扫描速率限制（增强：使用更高的最小扫描频率以提升采样速度）
+    local effectiveScanRate = math.max((WB.ScanRate or 8), HIGH_SCAN_RATE)
+    if tick()-WB.LastScan < 1/effectiveScanRate then return end
     WB.LastScan=tick()
     WB.Round=WB.Round+1 -- 轮数+1，用于交替算法
 
@@ -8490,8 +8508,14 @@ local function DoRagebot()
         local hPole = -oPole -- 敌人的半球朝向玩家
         
         -- 这里会读取你 UI 菜单里的 Origin_Scans 和 Hit_Scans 数量
-        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
-        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans)
+        -- 增强：对 UI 设置做下限并乘以深度倍增器以加大采样数量
+        local origin_ui = Origin_Scans or MIN_ORIGIN_SCANS
+        local hit_ui    = Hit_Scans or MIN_HIT_SCANS
+        local oCount = math.max(origin_ui, math.floor(origin_ui * SCAN_DEPTH_MULTIPLIER), MIN_ORIGIN_SCANS)
+        local hCount = math.max(hit_ui,    math.floor(hit_ui    * SCAN_DEPTH_MULTIPLIER), MIN_HIT_SCANS)
+
+        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, oCount)
+        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, hCount)
     end
 
     -- 4. 双重循环穷举寻找合法弹道 (找到即返回，不再比较距离)
