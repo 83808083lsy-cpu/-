@@ -1,4 +1,4 @@
--- 竞争终极版.lua（已修改：移除轨迹夜光（PointLight），保留 Beam 视觉）
+-- 竞争终极版.lua（已修改：移除轨迹夜光（PointLight），保留 Beam 视觉，已删除墙内扫描功能）
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -68,6 +68,10 @@ local function getColorForOwner(ownerUserId)
     end
 end
 
+local function randomColor()
+    return Color3.fromHSV(math.random(), 0.6 + math.random()*0.4, 0.8 + math.random()*0.2)
+end
+
 local SETTINGS = {
     AutoFire = false,
     AutoKnife = false,
@@ -91,12 +95,19 @@ local SETTINGS = {
     HitSoundId3 = "rbxassetid://4817809188",
     ShieldCheck = true,
     ScanRange = MUZZLE_OFFSET,
-    PlayMusic = true,
+    -- 默认不自动播放音乐（脚本运行时会停止音乐）
+    PlayMusic = false,
     MusicSoundId = "rbxassetid://133363390219538",
     MusicVolume = 2.5,
-    MusicIndex = 2,
-    MusicEnabled = { false, true, false },
-    OneSecondTest = false
+    MusicIndex = 1,
+    -- 取消自动开启歌曲2：默认只启用曲目1
+    MusicEnabled = { true, false, false },
+    OneSecondTest = false,
+
+    -- 新增开关
+    RandomizeTracerColor = false,   -- 随机子弹轨迹颜色（悬浮窗开关）
+    RandomizeThrowTracer = false,   -- 随机飞刀轨迹颜色
+    AutoStopMusicOnRun = true       -- 脚本启动时自动停止音乐
 }
 
 local MUSIC_OPTIONS = {
@@ -234,6 +245,9 @@ local function rebuildBaseMuzzleOffsets(scanRange)
     scanRange = scanRange or SETTINGS.MuzzleOffset
     baseMuzzleOffsets = {}
 
+    -- 新增：将每次优先的向前偏移 10 单位放在列表开头（并保持其为首选）
+    table.insert(baseMuzzleOffsets, Vector3.new(0, 0, 10))
+
     -- 保留一些中心/轴向点，保证近距离与垂直目标的覆盖
     -- 前后
     table.insert(baseMuzzleOffsets, Vector3.new(0, 0, math.clamp(scanRange * 0.5, 6, 20)))
@@ -250,7 +264,6 @@ local function rebuildBaseMuzzleOffsets(scanRange)
     table.insert(baseMuzzleOffsets, Vector3.new(-lr, 0, 0))
 
     -- 补上原本八角中“剩余的四个角” —— 按你的要求，这四个角的偏移采用“左右”的偏移值（即使用与左右相同的 X 偏移）
-    -- 因为你要求“那四个角的偏移就是左右”，这里把四个角点设置为左右的重复项（以满足要求且保持行为一致）。
     table.insert(baseMuzzleOffsets, Vector3.new(lr, 0, 0))
     table.insert(baseMuzzleOffsets, Vector3.new(-lr, 0, 0))
     table.insert(baseMuzzleOffsets, Vector3.new(lr, 0, 0))
@@ -375,6 +388,13 @@ local function createTracer(startPos, endPos, color, thickness, fadeTime, ownerU
         return nil
     end
 
+    local useColor = color
+    if SETTINGS.RandomizeTracerColor and not isKnife then
+        useColor = randomColor()
+    elseif not useColor then
+        useColor = getColorForOwner(ownerUserId)
+    end
+
     local cam = workspace.CurrentCamera
     if not cam then
         local dir = endPos - startPos
@@ -388,11 +408,7 @@ local function createTracer(startPos, endPos, color, thickness, fadeTime, ownerU
         part.CanTouch = false
         part.Size = Vector3.new(thickness or TRACER_THICKNESS, thickness or TRACER_THICKNESS, dist)
         part.Material = Enum.Material.Neon
-        if color then
-            part.Color = color
-        else
-            part.Color = getColorForOwner(ownerUserId)
-        end
+        part.Color = useColor
         part.Transparency = 0
         part.CastShadow = false
         part.CFrame = CFrame.new(startPos, endPos) * CFrame.new(0, 0, -dist/2)
@@ -451,7 +467,7 @@ local function createTracer(startPos, endPos, color, thickness, fadeTime, ownerU
     beam.FaceCamera = true
     beam.TextureMode = Enum.TextureMode.Stretch
     beam.LightInfluence = 1
-    local beamColor = color or getColorForOwner(ownerUserId)
+    local beamColor = useColor or getColorForOwner(ownerUserId)
     beam.Color = ColorSequence.new(beamColor)
     beam.Transparency = NumberSequence.new(0)
 
@@ -659,6 +675,9 @@ local function findViableStart(localCFrame, localOffset, localPos, hitPos, rp, t
         if hitInstance and hitInstance:IsDescendantOf(targetCharacter) then
             return trialStart, trialLocal
         end
+
+        -- 已删除：不再支持“从墙内扫描”的分支（不会在此处接受 nudged 起点）
+
         local reverseDir = trialStart - hitPos
         local reverseRes = workspace:Raycast(hitPos, reverseDir, rp)
         if reverseRes and reverseRes.Instance == hitInstance then
@@ -1052,8 +1071,14 @@ local function spawnKnifeSimple(tbl)
     visual.Parent = workspace:FindFirstChild("Bin") or workspace
     Debris:AddItem(visual, time + 4)
 
+    -- 若启用随机飞刀轨迹色，则覆盖颜色
+    local tracerColor = visual.Color
+    if SETTINGS.RandomizeThrowTracer then
+        tracerColor = randomColor()
+    end
+
     -- 强制轨迹持续时间为 TRACER_FADE_TIME（即 10 秒）
-    createTracer(origin, target, visual.Color, 0.12, TRACER_FADE_TIME, ownerUserId, true)
+    createTracer(origin, target, tracerColor, 0.12, TRACER_FADE_TIME, ownerUserId, true)
     safeRunEffect("ThrowEffects.Default", {["Knife"] = visual, ["Origin"] = origin, ["HitPos"] = target})
 
     spawn(function()
@@ -1598,6 +1623,11 @@ RunService.Heartbeat:Connect(function()
                                         if verticalDiff <= VERTICAL_MATCH_THRESHOLD then
                                             score = score + 0.05
                                         end
+                                        -- 偏好：如果偏移在本地坐标系中接近向前10单位，则显著提升分数（最高优先级）
+                                        if math.abs(localOffset.Z - 10) <= 1 then
+                                            -- 大幅加分以确保最优先被选择
+                                            score = score + 2.5
+                                        end
                                         if hist then
                                             local daX = localOffset.X - hist.X
                                             local daY = localOffset.Y - hist.Y
@@ -1712,31 +1742,6 @@ RunService.Heartbeat:Connect(function()
                                         headshot = (head and head.Name == "Head") and true or false
                                     }
                                     pcall(function() ReportHit:FireServer(hitReport) end)
-                                else
-                                    if ShootReplicate and ShootReplicate:IsA("RemoteEvent") then
-                                        local args = {
-                                            [1] = {
-                                                ["hitPos"] = predicted,
-                                                ["to"] = predicted,
-                                                ["hitInstance"] = head,
-                                                ["id"] = 24,
-                                                ["mode"] = "single",
-                                                ["origin"] = chosenStart,
-                                                ["from"] = chosenStart,
-                                                ["hitNormal"] = Vector3.new(1, 0, 0),
-                                                ["effects"] = {
-                                                    ["Frost"] = 0,
-                                                    ["Ricochet"] = 0,
-                                                    ["Barrage"] = 0
-                                                },
-                                                ["ownerUserId"] = ownerId,
-                                                ["kind"] = "bullet",
-                                                ["isCharacterHit"] = true,
-                                                ["isADS"] = false
-                                            }
-                                        }
-                                        pcall(function() ShootReplicate:FireServer(unpack(args)) end)
-                                    end
                                 end
                                 lastFireTimes.knife = currentTime
                                 didFire = true
@@ -1795,7 +1800,7 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- UI / 控件部分（与之前版本一致——省略修改说明）
+-- UI / 控件部分（新增开关：随机轨迹颜色、随机飞刀轨迹、脚本运行自动停止音乐）
 local sliderIsDragging = false
 
 local function makeSwitch(parent, name, labelText, default, callback)
@@ -2139,6 +2144,11 @@ local function createControlsGui()
             stopMusic()
         end
     end)
+
+    -- 新增开关：随机子弹轨迹颜色、随机飞刀轨迹、脚本运行自动停止音乐
+    local swRandBullet = makeSwitch(listFrame, "SwitchRandBullet", "随机轨迹颜色", SETTINGS.RandomizeTracerColor, function(s) SETTINGS.RandomizeTracerColor = s end)
+    local swRandThrow = makeSwitch(listFrame, "SwitchRandThrow", "随机飞刀轨迹", SETTINGS.RandomizeThrowTracer, function(s) SETTINGS.RandomizeThrowTracer = s end)
+    local swAutoStopMusic = makeSwitch(listFrame, "SwitchAutoStopMusic", "启动时停止音乐", SETTINGS.AutoStopMusicOnRun, function(s) SETTINGS.AutoStopMusicOnRun = s end)
 
     local swMusic1 = makeSwitch(listFrame, "SwitchMusic1", "曲目1", SETTINGS.MusicEnabled[1], function(s)
         SETTINGS.MusicEnabled[1] = s
@@ -2681,6 +2691,11 @@ local function ensureAutoRun()
             spawnLoaderIfMissing()
         end
     end)
+
+    -- 启动时根据设置自动停止音乐（如果设置为 auto stop）
+    if SETTINGS.AutoStopMusicOnRun then
+        pcall(stopMusic)
+    end
 end
 
 ensureAutoRun()
