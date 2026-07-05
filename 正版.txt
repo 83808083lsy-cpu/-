@@ -1,3 +1,4 @@
+
 --[[
     scoot ui library
     made by samet
@@ -7054,7 +7055,7 @@ local function StartAutoUnlockSafe()
                 local bredMakurz = map and map:FindFirstChild("BredMakurz")
 
                 if bredMakurz then
-                    local closestSafe, minDist = nil, 4  -- 加大感应距离到 12
+                    local closestSafe, minDist = nil, 3  -- 加大感应距离到 12
 
                     for _, obj in ipairs(bredMakurz:GetChildren()) do
                         if string.find(string.lower(obj.Name), "safe") then
@@ -8438,7 +8439,12 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
 end
 
 -- =====================================================================
--- == 核心 Ragebot 逻辑
+-- == 核心 Ragebot 逻辑（已按要求调整）
+-- == 说明：
+-- ==  - 删除会在平地/无掩体时把偏移设置为零的逻辑，保持原有响应速度
+-- ==  - 减少 19 单位前向偏移被优先使用的频率（仅每 4 轮尝试一次）
+-- ==  - 如果找到可用偏移点，会在该点附近做持续/局部精化扫描并在后续轮次优先验证与精化
+-- ==  - 命中点如果是采样点，则在最终射击时在该采样点附近做小幅随机（在需要的范围内随机化）
 -- =====================================================================
 local function DoRagebot()
     if not RB_State then Valid_Pair=nil; Locked_Path=nil; return end
@@ -8452,18 +8458,45 @@ local function DoRagebot()
     local myPos=GetLocalRealPosition()
     local tPos=tRoot.Position
 
-    -- 1. 缓存机制 (如果上一发的轨迹依然有效，直接复用，不扫描)
+    -- 1. 缓存机制（加强：在缓存命中时做局部持续精化扫描）
     if Locked_Path then
         local dO=(myPos-Locked_Path.MyPos).Magnitude
         local dH=(tPos-Locked_Path.TPos).Magnitude
         local inRange=(myPos-Locked_Path.AbsO).Magnitude<=Origin_Radius
                    and (tPos-Locked_Path.AbsH).Magnitude<=Hit_Radius
         if dO<=WB.Threshold and dH<=WB.Threshold and inRange then
+            -- 如果原先路径仍然可用，优先复用，但同时做局部精化（持续扫描附近）
             if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
+                -- 局部精化：在命中点周围做少量随机采样以寻找更稳定或更优的点
+                local refined = false
+                local refineRadius = math.min(3, Hit_Radius * 0.2)
+                for i = 1, 8 do
+                    local theta = math.random() * 2 * math.pi
+                    local r = refineRadius * math.sqrt(math.random())
+                    -- 基于目标法线平面构建局部偏移方向
+                    local pole = (tPos - myPos)
+                    local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+                    local t1 = pole:Cross(arb)
+                    if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
+                    t1 = t1.Unit
+                    local t2 = pole:Cross(t1).Unit
+                    local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                    local tryH = Locked_Path.AbsH + offsetVec
+                    if CheckWallbang(Locked_Path.AbsO, tryH) then
+                        Locked_Path.AbsH = tryH
+                        Locked_Path.RefinedAt = tick()
+                        refined = true
+                        break
+                    end
+                end
+
+                -- 更新 Valid_Pair 并返回（继续使用缓存，但会在后续轮次继续做精化）
                 Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target}
-                WB.Cached=true; return
+                WB.Cached=true
+                return
             end
         end
+        -- 如果缓存失效则丢弃并继续完整扫描（注意：不将偏移置零）
         Locked_Path=nil
     end
 
@@ -8482,13 +8515,46 @@ local function DoRagebot()
     else
         -- 【单数轮】：使用 解析2 (圆盘均匀采样，确保 radius 为固定世界单位)
         local oPole = (tPos - myPos)
-        if oPole.Magnitude < 0.001 then return end
-        oPole = oPole.Unit
+        local oMag = oPole.Magnitude
+        if oMag < 0.001 then
+            -- 使用一个默认前向向量继续采样（避免直接返回/置零）
+            oPole = Vector3.new(0,0,1)
+        else
+            oPole = oPole.Unit
+        end
         local hPole = -oPole -- 敌人的半球朝向玩家
         
-        -- 这里会读取你 UI 菜单里的 Origin_Scans 和 Hit_Scans 数量
+        -- 优化：减少 19 单位前向偏移被优先使用的频率（仅每 4 轮尝试一次）
+        local forward_offset = myPos + oPole * math.min(Origin_Radius, 19)
         newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
-        newTarget = GetOffsets_Algo2(tPos, hPole, Hit_Radius, Hit_Scans)
+        -- 将 forward_offset 放到备选列表末尾（低优先级），并仅在每 4 轮尝试一次加入
+        if WB.Round % 4 == 0 then
+            -- 去重
+            local inserted = false
+            for i,v in ipairs(newOrigin) do
+                if (v - forward_offset).Magnitude < 0.001 then inserted = true; break end
+            end
+            if not inserted then table.insert(newOrigin, forward_offset) end
+        end
+
+        -- 对命中点采用完全随机采样（在目标的屏幕平面圆盘内随机点）
+        newTarget = { tPos } -- 保证中心点首先被检测
+        -- 构建与 poleDir 垂直的平面基向量
+        local arb = math.abs(hPole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+        local t1 = hPole:Cross(arb)
+        if t1.Magnitude == 0 then
+            arb = Vector3.new(0,0,1)
+            t1 = hPole:Cross(arb)
+        end
+        t1 = t1.Unit
+        local t2 = hPole:Cross(t1).Unit
+        -- 随机采样 Hit_Scans 个点（均匀分布）
+        for i = 1, Hit_Scans do
+            local theta = math.random() * 2 * math.pi
+            local r = Hit_Radius * math.sqrt(math.random())
+            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+            table.insert(newTarget, tPos + offsetVec)
+        end
     end
 
     -- 4. 双重循环穷举寻找合法弹道 (找到即返回，不再比较距离)
@@ -8506,10 +8572,44 @@ local function DoRagebot()
         if bestPO then break end -- 找到就跳出外层循环
     end
 
-    -- 5. 更新缓存与射击对
-    if bestPO then
-        Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos}
-        Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target}
+    -- 5. 局部精化：如果找到初步路径，尝试在该路径附近做更密集的随机扫描以提高稳定性
+    if bestPO and bestPH then
+        local refineDone = false
+        local refineRadius = math.min(3, Hit_Radius * 0.25)
+        -- 在命中点附近进行小范围采样（优先保持原有bestPO，再微调bestPH）
+        for i = 1, 12 do
+            local theta = math.random() * 2 * math.pi
+            local r = refineRadius * math.sqrt(math.random())
+            local pole = (tPos - myPos)
+            local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+            local tt1 = pole:Cross(arb)
+            if tt1.Magnitude == 0 then arb = Vector3.new(0,0,1); tt1 = pole:Cross(arb) end
+            tt1 = tt1.Unit
+            local tt2 = pole:Cross(tt1).Unit
+            local offsetVec = tt1 * (math.cos(theta) * r) + tt2 * (math.sin(theta) * r)
+            local tryPH = bestPH + offsetVec
+            if CheckWallbang(bestPO, tryPH) then
+                bestPH = tryPH
+                refineDone = true
+                break
+            end
+        end
+
+        -- 如果精化失败，也尝试微调发射点（少量）
+        if not refineDone then
+            for i = 1, 6 do
+                local randOff = GetRandomOffset(1.0)
+                local tryPO = bestPO + randOff
+                if CheckWallbang(tryPO, bestPH) then
+                    bestPO = tryPO
+                    break
+                end
+            end
+        end
+
+        -- 6. 更新缓存与射击对（并标记是否为采样点）
+        Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick()}
+        Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=(bestPH - tPos).Magnitude>0.001}
         WB.Cached=false
     else
         Valid_Pair=nil
@@ -8668,7 +8768,7 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
--- == Ragebot fire Heartbeat ==
+-- == Ragebot fire Heartbeat (已优化：在最终射击时对采样点进行局部随机化以模拟随机命中) ==
 RunService.Heartbeat:Connect(function()
     if not RB_State or not Valid_Pair then return end
     local char=LocalPlayer.Character
@@ -8692,10 +8792,32 @@ RunService.Heartbeat:Connect(function()
     local part=Valid_Pair.Target.Character:FindFirstChild("Head") or Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
     if not part then return end
     local key="K"..math.random(1000,9999)
-    local dir=(Valid_Pair.Hit-Valid_Pair.Origin).Unit
+
+    -- 选择最终命中点：如果是采样点，则在采样点附近进行小范围随机（仅在需要时进行）
+    local finalHit = Valid_Pair.Hit
+    if Valid_Pair.Sampled and Valid_Pair.Target and Valid_Pair.Target.Character then
+        local myPos = GetLocalRealPosition()
+        local tPos = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart") and Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart").Position or Valid_Pair.Hit
+        local pole = (tPos - myPos)
+        if pole.Magnitude > 0.001 then
+            local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+            local t1 = pole:Cross(arb)
+            if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
+            t1 = t1.Unit
+            local t2 = pole:Cross(t1).Unit
+            -- 随机半径按命中半径的一小部分（越近越小）
+            local rmax = math.min(Hit_Radius * 0.2, 3)
+            local theta = math.random() * 2 * math.pi
+            local r = rmax * math.sqrt(math.random())
+            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+            finalHit = Valid_Pair.Hit + offsetVec
+        end
+    end
+
+    local dir=(finalHit-Valid_Pair.Origin).Unit
     GN_S:FireServer(tick(),key,tool,"FDS9I83",Valid_Pair.Origin,{dir},false)
     if TR.Enabled then task.spawn(CreateTracer,Valid_Pair.Origin,dir) end
-    ZF_H:FireServer("🧈",tool,key,1,part,Valid_Pair.Hit,dir)
+    ZF_H:FireServer("🧈",tool,key,1,part,finalHit,dir)
     if tool:FindFirstChild("Hitmarker") then tool.Hitmarker:Fire(part) end
     if HitLogEnabled then
         local dmg,mult=17,1.35
