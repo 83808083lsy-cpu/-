@@ -8467,6 +8467,9 @@ local function DoRagebot()
         if dO<=WB.Threshold and dH<=WB.Threshold and inRange then
             -- 如果原先路径仍然可用，优先复用，但同时做局部精化（持续扫描附近）
             if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
+                -- 延长快速扫描窗口，使后续若干帧内优先验证/精化该点（提高反应速度）
+                Locked_Path.FastScanUntil = tick() + 0.6
+
                 -- 局部精化：在命中点周围做少量随机采样以寻找更稳定或更优的点
                 local refined = false
                 local refineRadius = math.min(3, Hit_Radius * 0.2)
@@ -8500,8 +8503,14 @@ local function DoRagebot()
         Locked_Path=nil
     end
 
-    -- 2. 扫描速率限制
-    if tick()-WB.LastScan < 1/ScanRate then return end
+    -- 2. 扫描速率限制（支持当已锁定路径时短时快速复检）
+    local FAST_SCAN_INTERVAL = 0.02 -- 快速扫描间隔（秒），用于锁定点的高频验证
+    local baseInterval = ScanRate>0 and (1/ScanRate) or 0
+    local minInterval = baseInterval
+    if Locked_Path and Locked_Path.FastScanUntil and tick() < Locked_Path.FastScanUntil then
+        minInterval = math.min(minInterval, FAST_SCAN_INTERVAL)
+    end
+    if tick()-WB.LastScan < minInterval then return end
     WB.LastScan=tick()
     WB.Round=WB.Round+1 -- 轮数+1，用于交替算法
 
@@ -8628,12 +8637,12 @@ local function DoRagebot()
 
         -- 最终处理：若以上都没找到更稳定点，但原始 bestPO/bestPH 仍有效，则保留；否则放弃
         if refined then
-            Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick()}
+            Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick(), FastScanUntil = tick() + 0.6}
             Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=(bestPH - tPos).Magnitude>0.001}
             WB.Cached=false
         else
             if CheckWallbang(bestPO, bestPH) then
-                Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick()}
+                Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick(), FastScanUntil = tick() + 0.6}
                 Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=(bestPH - tPos).Magnitude>0.001}
                 WB.Cached=false
             else
@@ -8820,6 +8829,17 @@ RunService.Heartbeat:Connect(function()
     if not (ammo and ammo.Value>0) then return end
     local part=Valid_Pair.Target.Character:FindFirstChild("Head") or Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
     if not part then return end
+
+    -- 新增：射击距离限制（只在目标在限定距离内才发射），单位：世界单位（米）
+    -- 若需要调整为最小射程/其他逻辑，请修改阈值或条件
+    local targetRoot = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+    if targetRoot then
+        local shotDist = (targetRoot.Position - GetLocalRealPosition()).Magnitude
+        if shotDist > 820 then
+            return -- 目标过远，跳过本次发射
+        end
+    end
+
     local key="K"..math.random(1000,9999)
 
     -- 选择最终命中点：如果是采样点，则在采样点附近进行小范围随机（仅在需要时进行）
