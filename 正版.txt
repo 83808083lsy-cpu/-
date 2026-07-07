@@ -8439,6 +8439,29 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
 end
 
 -- =====================================================================
+-- == 新增：Sphere 模式（在三维球体体积内均匀采样）
+-- == 默认启用 ScanMode = "Sphere"，Sphere_Radius = 30
+-- =====================================================================
+ScanMode = ScanMode or "Sphere"
+Sphere_Radius = Sphere_Radius or 30
+
+local function GetOffsets_Sphere(center, radius, count)
+    if not radius or radius <= 0 or count <= 0 then return {center} end
+    local offsets = {center}
+    for i = 1, count do
+        -- 均匀体积分布：r = R * rand^(1/3)
+        local r = radius * math.pow(math.random(), 1/3)
+        -- 方向均匀分布：cos(theta) 从 -1 到 1，phi 从 0 到 2pi
+        local costheta = 2 * math.random() - 1
+        local sintheta = math.sqrt(math.max(0, 1 - costheta * costheta))
+        local phi = 2 * math.pi * math.random()
+        local dir = Vector3.new(sintheta * math.cos(phi), sintheta * math.sin(phi), costheta)
+        table.insert(offsets, center + dir * r)
+    end
+    return offsets
+end
+
+-- =====================================================================
 -- == 核心 Ragebot 逻辑（已按要求调整）
 -- == 说明：
 -- ==  - 删除会在平地/无掩体时把偏移设置为零的逻辑，保持原有响应速度
@@ -8517,55 +8540,61 @@ local function DoRagebot()
     WB.LastScan=tick()
     WB.Round=WB.Round+1 -- 轮数+1，用于交替算法
 
-    -- 3. 交替使用兩種解析算法
+    -- 3. 交替使用兩種解析算法 / 支持 Sphere 模式
     local newOrigin, newTarget
     
-    if WB.Round % 2 == 0 then
-        -- 【雙數輪】：使用 解析1 (25點固定向量 + 隨機旋轉)
-        newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
-        newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
+    if ScanMode == "Sphere" then
+        -- Sphere 模式：在发射点与命中点周围的球体内均匀采样
+        newOrigin = GetOffsets_Sphere(myPos, Origin_Radius or Sphere_Radius, Origin_Scans)
+        newTarget = GetOffsets_Sphere(tPos, Sphere_Radius or Hit_Radius, Hit_Scans)
     else
-        -- 【單數輪】：使用 解析2 (圓盤均勻采樣，確保 radius 為固定世界單位)
-        local oPole = (tPos - myPos)
-        local oMag = oPole.Magnitude
-        if oMag < 0.001 then
-            -- 使用一個默認前向向量繼續采樣（避免直接返回/置零）
-            oPole = Vector3.new(0,0,1)
+        if WB.Round % 2 == 0 then
+            -- 【雙數輪】：使用 解析1 (25點固定向量 + 隨機旋轉)
+            newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
+            newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
         else
-            oPole = oPole.Unit
-        end
-        local hPole = -oPole -- 敵人的半球朝向玩家
-        
-        -- 優化：減少 19 單位前向偏移被優先使用的頻率（僅每 4 輪嘗試一次）
-        local forward_offset = myPos + oPole * math.min(Origin_Radius, 19)
-        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
-        -- 將 forward_offset 放到備選列表末尾（低優先級），並僅在每 4 輪嘗試一次加入
-        if WB.Round % 4 == 0 then
-            -- 去重
-            local inserted = false
-            for i,v in ipairs(newOrigin) do
-                if (v - forward_offset).Magnitude < 0.001 then inserted = true; break end
+            -- 【單數輪】：使用 解析2 (圓盤均勻采樣，確保 radius 為固定世界單位)
+            local oPole = (tPos - myPos)
+            local oMag = oPole.Magnitude
+            if oMag < 0.001 then
+                -- 使用一個默認前向向量繼續采樣（避免直接返回/置零）
+                oPole = Vector3.new(0,0,1)
+            else
+                oPole = oPole.Unit
             end
-            if not inserted then table.insert(newOrigin, forward_offset) end
-        end
+            local hPole = -oPole -- 敵人的半球朝向玩家
+            
+            -- 優化：減少 19 單位前向偏移被優先使用的頻率（僅每 4 輪嘗試一次）
+            local forward_offset = myPos + oPole * math.min(Origin_Radius, 19)
+            newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
+            -- 將 forward_offset 放到備選列表末尾（低優先級），並僅在每 4 輪嘗試一次加入
+            if WB.Round % 4 == 0 then
+                -- 去重
+                local inserted = false
+                for i,v in ipairs(newOrigin) do
+                    if (v - forward_offset).Magnitude < 0.001 then inserted = true; break end
+                end
+                if not inserted then table.insert(newOrigin, forward_offset) end
+            end
 
-        -- 對命中點採用完全隨機采樣（在目標的屏幕平面圓盤內隨機點）
-        newTarget = { tPos } -- 保證中心點首先被檢測
-        -- 構建與 poleDir 垂直的平面基向量
-        local arb = math.abs(hPole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
-        local t1 = hPole:Cross(arb)
-        if t1.Magnitude == 0 then
-            arb = Vector3.new(0,0,1)
-            t1 = hPole:Cross(arb)
-        end
-        t1 = t1.Unit
-        local t2 = hPole:Cross(t1).Unit
-        -- 隨機采樣 Hit_Scans 個點（均勻分布）
-        for i = 1, Hit_Scans do
-            local theta = math.random() * 2 * math.pi
-            local r = Hit_Radius * math.sqrt(math.random())
-            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-            table.insert(newTarget, tPos + offsetVec)
+            -- 對命中點採用完全隨機采樣（在目標的屏幕平面圓盤內隨機點）
+            newTarget = { tPos } -- 保證中心點首先被檢測
+            -- 構建與 poleDir 垂直的平面基向量
+            local arb = math.abs(hPole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+            local t1 = hPole:Cross(arb)
+            if t1.Magnitude == 0 then
+                arb = Vector3.new(0,0,1)
+                t1 = hPole:Cross(arb)
+            end
+            t1 = t1.Unit
+            local t2 = hPole:Cross(t1).Unit
+            -- 隨機采樣 Hit_Scans 個點（均勻分布）
+            for i = 1, Hit_Scans do
+                local theta = math.random() * 2 * math.pi
+                local r = Hit_Radius * math.sqrt(math.random())
+                local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                table.insert(newTarget, tPos + offsetVec)
+            end
         end
     end
 
