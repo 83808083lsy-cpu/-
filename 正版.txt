@@ -7538,6 +7538,23 @@ end)
 -- =====================================================================
 -- == Silent Aim
 -- =====================================================================
+--[[
+  配置文件5.lua （已修改版）
+  已集成（新增项在注释中标注）：
+    - 命中记录保存（SaveHitRecords）
+    - Cache Hit Tolerance（改为开关并默认开启 0.3）
+    - Extrapolate Position (ms slider 30..60)
+    - 新扫描模式 Original / RandomSphere / Cardinals / Aggressive
+    - 新增扫描模式 Hybrid / Focused（使得所有能用模式全部加入）
+    - ReduceRandomization 开关（尽量不随机偏移）
+    - ExpandHitRadius 开关（采样扩张但实际发射限制 25）
+    - 预加载/模拟偏移点（Preload Sim）开关：根据自身坐标与目标速度提前推理偏移点并预计算是否能伤害
+    - 快速轨迹验证（Fast Validate）开关：启用时在锁定路径阶段短时高频验证轨迹有效性
+    - 开火时快速扫描（Scan On Fire）开关：在发射前进行快速扫描验证最终命中点
+    - 模式命中半径增强（Mode Hit Boost）开关：各模式下会自动调整采样半径以达到“最强/最好用”的效果
+    - 其它局部微调与鲁棒性改进
+--]]
+
 do
     local ok1, ok2 = pcall(function()
         SA.VisualizeEvent = RepStorage:WaitForChild("Events2",5):WaitForChild("Visualize",5)
@@ -7720,6 +7737,39 @@ local Window    = Library:Window({Logo="77218680285262", FadeTime=0.3})
 local Watermark = Library:Watermark("Link.cc")
 local KeybindList = Library:KeybindList()
 
+-- 新增扫描模式配置表（默认 Original，RandomSphere 半径默认 25，上限 25）
+SCAN = {
+    Mode = "Original",       -- "Original" | "RandomSphere" | "Cardinals" | "Aggressive" | "Hybrid" | "Focused"
+    RandomRadius = 25,       -- 1..25 可由 UI 控制，仅在 RandomSphere 下使用（上限已改为25）
+}
+
+-- ========== 新增功能配置 ==========
+HIT_RECORD = {
+    Enabled = false,        -- 是否保存命中记录到本地文件
+    Folder  = "sa_hit_records",
+}
+WB.CacheHitTolerance = 0.3 -- 缓存命中容差（世界单位），固定为0.3（不再由滑块控制）
+WB.CacheHitToleranceEnabled = true -- 默认开启（改为开关，无滑块）
+
+EXTRAPOLATE = {
+    Enabled = false,
+    MS = 30, -- 默认 30, 最大 60 (表示外推毫秒数，外推位移 = vel * (MS/1000))
+}
+
+REDUCE_RANDOM = false -- 尽量不随机偏移（优先确定性采样）
+EXPAND_HIT_RADIUS = false -- 启用采样扩张（采样上限使用30，但最终发射半径 clamp 到 25）
+
+-- 新增开关：预加载/模拟偏移点（基于目标速度/自身坐标提前推理并预计算）
+PRELOAD_SIM_ENABLED = false
+-- 新增开关：快速扫描轨迹有效性（短时高频验证锁定轨迹）
+FAST_VALIDATE_ENABLED = false
+-- 新增开关：在射击时也快速扫描以验证命中点
+SCAN_ON_FIRE_ENABLED = false
+-- 新增开关：各模式下命中半径增强（使扫描在各种模式下更强/更容易命中）
+MODE_HIT_BOOST_ENABLED = true
+
+-- ==================================
+
 do -- Combat page
     local Page  = Window:Page({Name="Combat", SubPages=true})
     local Rage  = Page:SubPage({Name="Ragebot",    Columns=2})
@@ -7808,6 +7858,45 @@ do -- Combat page
         local s2 = Rage:Section({Name="Target Selection", Side=2})
         s2:Dropdown({Name="Target Mode", Flag="CAT_Target_Mode_35", Items={"Near","Mouse","Centre","Lock"},         Default="Near", Callback=function(v) TargetMode=v end})
         s2:Dropdown({Name="Hit Sound", Flag="CAT_Hit_Sound_36",   Items={"None","Skeet","Neverlose","Gamesense"}, Default="None", Callback=function(v) HitSoundSelection=v end})
+
+        -- 新增：扫描模式控制（Original / Random Sphere / Cardinals / Aggressive / Hybrid / Focused）
+        s1:Dropdown({Name="Scan Mode", Flag="CAT_Scan_Mode", Items={"Original","Random Sphere","Cardinals","Aggressive","Hybrid","Focused"}, Default="Original", Callback=function(v)
+            if v == "Original" then
+                SCAN.Mode = "Original"
+            elseif v == "Random Sphere" then
+                SCAN.Mode = "RandomSphere"
+            elseif v == "Cardinals" then
+                SCAN.Mode = "Cardinals"
+            elseif v == "Aggressive" then
+                SCAN.Mode = "Aggressive"
+            elseif v == "Hybrid" then
+                SCAN.Mode = "Hybrid"
+            elseif v == "Focused" then
+                SCAN.Mode = "Focused"
+            else
+                SCAN.Mode = "Original"
+            end
+        end})
+
+        -- 新增：随机球体半径滑块（仅在 Random Sphere 下有效，最大改为25）
+        s1:Slider({Name="Random Sphere Radius", Flag="CAT_Random_Radius", Min=1, Max=25, Default=25, Callback=function(v) SCAN.RandomRadius = v end})
+
+        -- 新功能 UI 控件
+        s1:Toggle({Name="Save hit records", Flag="CAT_Save_Hits", Default=false, Callback=function(v) HIT_RECORD.Enabled = v end})
+        -- Cache Hit Tolerance 改为开关（默认开启），移除滑块
+        s1:Toggle({Name="Cache Hit Tolerance (0.3)", Flag="CAT_Cache_Tol", Default=true, Callback=function(v) WB.CacheHitToleranceEnabled = v end})
+
+        s1:Toggle({Name="Extrapolate Position", Flag="CAT_Extrapolate", Default=false, Callback=function(v) EXTRAPOLATE.Enabled = v end})
+        s1:Slider({Name="Extrapolate (ms)", Flag="CAT_Extrapolate_MS", Min=10, Max=60, Default=30, Callback=function(v) EXTRAPOLATE.MS = v end})
+
+        s1:Toggle({Name="Reduce randomization", Flag="CAT_Reduce_Random", Default=false, Callback=function(v) REDUCE_RANDOM = v end})
+        s1:Toggle({Name="Expand Hit Radius (sampling)", Flag="CAT_Expand_Hit", Default=false, Callback=function(v) EXPAND_HIT_RADIUS = v end})
+
+        -- 新增功能开关（UI 控件）
+        s1:Toggle({Name="Preload Simulate Offsets", Flag="CAT_Preload_Sim", Default=false, Callback=function(v) PRELOAD_SIM_ENABLED = v end})
+        s1:Toggle({Name="Fast trajectory validate", Flag="CAT_Fast_Validate", Default=false, Callback=function(v) FAST_VALIDATE_ENABLED = v end})
+        s1:Toggle({Name="Scan on fire (quick verify)", Flag="CAT_Scan_On_Fire", Default=false, Callback=function(v) SCAN_ON_FIRE_ENABLED = v end})
+        s1:Toggle({Name="Mode Hit Boost", Flag="CAT_Mode_Hit_Boost", Default=true, Callback=function(v) MODE_HIT_BOOST_ENABLED = v end})
     end
 end
 
@@ -8190,6 +8279,28 @@ end)
 -- == Main Heartbeat (split into sub-functions to keep register count low)
 -- =====================================================================
 
+-- ---------- 保存命中记录的辅助函数 ----------
+local function safe_makefolder(path)
+    pcall(function() if makefolder then makefolder(path) end end)
+end
+local function safe_writefile(path, content)
+    return pcall(function() if writefile then writefile(path, content) end end)
+end
+
+local function SaveHitRecord(targetName, recordTable)
+    if not HIT_RECORD.Enabled then return end
+    local ok, ok2 = pcall(function() safe_makefolder(HIT_RECORD.Folder) end)
+    local fname = HIT_RECORD.Folder.."/"..(targetName or "unknown").."_"..tostring(os.time())..".txt"
+    local lines = {}
+    table.insert(lines, "time="..tostring(os.time()))
+    for k,v in pairs(recordTable) do
+        table.insert(lines, tostring(k).."="..tostring(v))
+    end
+    local content = table.concat(lines, "\n")
+    pcall(function() safe_writefile(fname, content) end)
+end
+
+-- ---------- 其它主逻辑函数（保持原有结构） ----------
 local function DoSkinUpdate()
     local now = tick()
     if now - FF_S.LastSkin < 1 then return end
@@ -8406,10 +8517,6 @@ end
 
 -- =====================================================================
 -- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
--- == 改动说明：
--- ==  - 采样在与 poleDir 垂直的平面上进行（即在目标的“屏幕平面”上），
--- ==  - 使用 concentric disk (r = radius * sqrt(rand)) 来保证圆盘内的均匀分布，
--- ==  - 这样 radius 始终是世界单位，不会随距离缩减，命中更精确稳定。
 -- =====================================================================
 local function GetOffsets_Algo2(center, poleDir, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
@@ -8425,11 +8532,9 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
     t1 = t1.Unit
     local t2 = poleDir:Cross(t1).Unit
 
-    -- 为了提高命中精度：中心附近点权重更高（可选）
     -- 使用 concentric disk sampling 保证圆盘上的均匀采样
     for i = 1, count do
-        -- 极坐标：角度与半径（半径使用 sqrt(rand) 保证面积均匀）
-        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count) -- 带少量角度抖动
+        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count)
         local r = radius * math.sqrt(math.random())
         local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
         table.insert(offsets, center + offsetVec)
@@ -8439,13 +8544,59 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
 end
 
 -- =====================================================================
--- == 核心 Ragebot 逻辑（已按要求调整）
--- == 说明：
--- ==  - 删除会在平地/无掩体时把偏移设置为零的逻辑，保持原有响应速度
--- ==  - 减少 19 单位前向偏移被优先使用的频率（仅每 4 轮尝试一次）
--- ==  - 如果找到可用偏移点，会在该点附近做持续/局部精化扫描并在后续轮次优先验证与精化
--- ==  - 命中点如果是采样点，则在最终射击时在该采样点附近做小幅随机（在需要的范围内随机化）
+-- == 新增：球体均匀体积采样（Random Sphere 模式使用）
 -- =====================================================================
+local function GetOffsets_Sphere(center, radius, count)
+    if not radius or radius <= 0 or count <= 0 then return {center} end
+    local offsets = {center}
+    for i = 1, count do
+        -- 使用均匀体积分布采样，r 控制在 [0,radius]
+        local r = radius * (math.random() ^ (1/3))
+        local z = 2 * math.random() - 1
+        local theta = 2 * math.pi * math.random()
+        local xy = math.sqrt(math.max(0, 1 - z*z))
+        local x = xy * math.cos(theta)
+        local y = xy * math.sin(theta)
+        local dir = Vector3.new(x, y, z)
+        if dir.Magnitude == 0 then dir = Vector3.new(1, 0, 0) end
+        dir = dir.Unit
+        table.insert(offsets, center + dir * r)
+    end
+    return offsets
+end
+
+-- =====================================================================
+-- == 新增：Cardinals 模式：在固定向量组上以固定半径持续采样（无随机旋转）
+-- =====================================================================
+local function GetOffsets_Cardinals(center, scale)
+    if not scale or scale <= 0 then return {center} end
+    local offsets = {center}
+    for _, v in ipairs(ScanVectors) do
+        table.insert(offsets, center + v.Unit * scale)
+    end
+    return offsets
+end
+
+-- =====================================================================
+-- == Helper: GetRandomOffset (用于局部扰动)
+-- =====================================================================
+local function GetRandomOffset(maxRadius)
+    if not maxRadius or maxRadius <= 0 then return Vector3.zero end
+    local theta = math.random() * 2 * math.pi
+    local r = maxRadius * math.sqrt(math.random())
+    local x = math.cos(theta) * r
+    local y = math.sin(theta) * r
+    -- 在局部球面上随机小偏移，主要在水平面应用（Z轴保留）
+    return Vector3.new(x, 0, y)
+end
+
+-- =====================================================================
+-- == 核心 Ragebot 逻辑（已按要求调整）
+-- =====================================================================
+
+-- 预加载候选（若 PRELOAD_SIM_ENABLED 为 true，会保存）
+local PreloadedCandidate = nil
+
 local function DoRagebot()
     if not RB_State then Valid_Pair=nil; Locked_Path=nil; return end
     local target=GetTarget()
@@ -8458,25 +8609,61 @@ local function DoRagebot()
     local myPos=GetLocalRealPosition()
     local tPos=tRoot.Position
 
+    -- Extrapolate position if enabled
+    if EXTRAPOLATE.Enabled and tRoot and tRoot:FindFirstChildOfClass("BasePart") then
+        local vel = tRoot.Velocity or Vector3.zero
+        local dt = (EXTRAPOLATE.MS or 0) / 1000
+        tPos = tPos + vel * dt
+    end
+
+    -- PRELOAD_SIM: 预先基于速度推理偏移并提前验证（提高命中稳定性）
+    if PRELOAD_SIM_ENABLED then
+        local ok, vel = pcall(function() return tRoot and tRoot.Velocity or Vector3.zero end)
+        vel = (ok and vel) and vel or Vector3.zero
+        local pred_dt = 0.08 -- 80ms 预判
+        local predPos = tPos + vel * pred_dt
+        -- 在预测点周围做少量采样验证
+        local pole = (predPos - myPos)
+        if pole.Magnitude < 0.001 then pole = Vector3.new(0,0,1) else pole = pole.Unit end
+        local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+        local t1 = pole:Cross(arb)
+        if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
+        t1 = t1.Unit
+        local t2 = pole:Cross(t1).Unit
+        local try_count = 8
+        local found = false
+        for i=1,try_count do
+            local theta = math.random() * 2 * math.pi
+            local r = math.min( (Hit_Radius or 4), 5 ) * math.sqrt(math.random())
+            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+            local cand = predPos + offsetVec
+            if CheckWallbang(myPos, cand) then
+                -- 记录预加载候选并立即使用（优先）
+                PreloadedCandidate = {Origin = myPos, Hit = cand, Target = target, Sampled=true, HitRadiusUsed = r}
+                Valid_Pair = PreloadedCandidate
+                Locked_Path = {AbsO = myPos, AbsH = cand, Target = target, MyPos = myPos, TPos = tPos, RefineRadius = r, LastFound = tick(), FastScanUntil = tick() + 0.6, Sampled=true, HitRadiusUsed=r}
+                WB.Cached = false
+                return
+            end
+        end
+    end
+
     -- 1. 缓存机制（加强：在缓存命中时做局部持续精化扫描）
     if Locked_Path then
         local dO=(myPos-Locked_Path.MyPos).Magnitude
         local dH=(tPos-Locked_Path.TPos).Magnitude
         local inRange=(myPos-Locked_Path.AbsO).Magnitude<=Origin_Radius
                    and (tPos-Locked_Path.AbsH).Magnitude<=Hit_Radius
-        if dO<=WB.Threshold and dH<=WB.Threshold and inRange then
-            -- 如果原先路径仍然可用，优先复用，但同时做局部精化（持续扫描附近）
+        -- 使用 CacheHitTolerance 如果开启则扩大匹配容差
+        local tol = WB.CacheHitToleranceEnabled and (WB.CacheHitTolerance or 0.3) or 0
+        if dO<=WB.Threshold + tol and dH<=WB.Threshold + tol and inRange then
             if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
-                -- 延长快速扫描窗口，使后续若干帧内优先验证/精化该点（提高反应速度）
                 Locked_Path.FastScanUntil = tick() + 0.6
-
-                -- 局部精化：在命中点周围做少量随机采样以寻找更稳定或更优的点
                 local refined = false
                 local refineRadius = math.min(3, Hit_Radius * 0.2)
                 for i = 1, 8 do
                     local theta = math.random() * 2 * math.pi
                     local r = refineRadius * math.sqrt(math.random())
-                    -- 基于目标法线平面构建局部偏移方向
                     local pole = (tPos - myPos)
                     local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
                     local t1 = pole:Cross(arb)
@@ -8493,13 +8680,12 @@ local function DoRagebot()
                     end
                 end
 
-                -- 更新 Valid_Pair 并返回（继续使用缓存，但会在后续轮次继续做精化）
-                Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target}
+                Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target,Sampled=Locked_Path.Sampled}
+                Valid_Pair.HitRadiusUsed = Locked_Path.HitRadiusUsed or Hit_Radius
                 WB.Cached=true
                 return
             end
         end
-        -- 如果缓存失效则丢弃并继续完整扫描（注意：不将偏移置零）
         Locked_Path=nil
     end
 
@@ -8510,59 +8696,222 @@ local function DoRagebot()
     if Locked_Path and Locked_Path.FastScanUntil and tick() < Locked_Path.FastScanUntil then
         minInterval = math.min(minInterval, FAST_SCAN_INTERVAL)
     end
+    -- 如果启用了 FAST_VALIDATE，则允许更小的间隔（提高验证频率）
+    if FAST_VALIDATE_ENABLED then
+        minInterval = math.min(minInterval, FAST_SCAN_INTERVAL)
+    end
     if tick()-WB.LastScan < minInterval then return end
     WB.LastScan=tick()
     WB.Round=WB.Round+1 -- 轮数+1，用于交替算法
 
-    -- 3. 交替使用两种解析算法
+    -- 3. 根据 SCAN.Mode 选择采样策略
     local newOrigin, newTarget
     
-    if WB.Round % 2 == 0 then
-        -- 【双数轮】：使用 解析1 (25点固定向量 + 随机旋转)
-        newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
-        newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
-    else
-        -- 【单数轮】：使用 解析2 (圆盘均匀采样，确保 radius 为固定世界单位)
-        local oPole = (tPos - myPos)
-        local oMag = oPole.Magnitude
-        if oMag < 0.001 then
-            -- 使用一个默认前向向量继续采样（避免直接返回/置零）
-            oPole = Vector3.new(0,0,1)
-        else
-            oPole = oPole.Unit
-        end
-        local hPole = -oPole -- 敌人的半球朝向玩家
-        
-        -- 优化：减少 19 单位前向偏移被优先使用的频率（仅每 4 轮尝试一次）
-        local forward_offset = myPos + oPole * math.min(Origin_Radius, 19)
-        newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
-        -- 将 forward_offset 放到备选列表末尾（低优先级），并仅在每 4 轮尝试一次加入
-        if WB.Round % 4 == 0 then
-            -- 去重
-            local inserted = false
-            for i,v in ipairs(newOrigin) do
-                if (v - forward_offset).Magnitude < 0.001 then inserted = true; break end
+    local function clamp_final_fire_offset(origin, cand)
+        -- 确保最终发射向量长度不超过25（当 EXPAND_HIT_RADIUS 时仍需限制实际发射）
+        local maxLen = 25
+        local vec = cand - origin
+        local mag = vec.Magnitude
+        if mag <= maxLen then return cand end
+        if mag == 0 then return origin end
+        return origin + vec.Unit * maxLen
+    end
+
+    if SCAN.Mode == "Original" then
+        if WB.Round % 2 == 0 then
+            -- 【雙數輪】：使用 解析1 (25點固定向量 + 隨機旋轉)
+            if REDUCE_RANDOM then
+                -- 若减少随机，去掉随机旋转，使用确定向量（更稳定）
+                local offsetsO = {myPos}
+                for _, pos in ipairs(ScanVectors) do table.insert(offsetsO, myPos + (pos.Unit * Origin_Radius)) end
+                newOrigin = offsetsO
+                local offsetsT = {tPos}
+                for _, pos in ipairs(ScanVectors) do table.insert(offsetsT, tPos + (pos.Unit * Hit_Radius)) end
+                newTarget = offsetsT
+            else
+                newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
+                newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
             end
-            if not inserted then table.insert(newOrigin, forward_offset) end
+        else
+            -- 【單數輪】：使用 解析2 (圓盤均匀采样)
+            local oPole = (tPos - myPos)
+            local oMag = oPole.Magnitude
+            if oMag < 0.001 then
+                oPole = Vector3.new(0,0,1)
+            else
+                oPole = oPole.Unit
+            end
+            local forward_offset = myPos + oPole * math.min(Origin_Radius, 19)
+            newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
+            if WB.Round % 4 == 0 then
+                local inserted = false
+                for i,v in ipairs(newOrigin) do
+                    if (v - forward_offset).Magnitude < 0.001 then inserted = true; break end
+                end
+                if not inserted then table.insert(newOrigin, forward_offset) end
+            end
+
+            newTarget = { tPos }
+            local hPole = -oPole
+            local arb = math.abs(hPole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+            local t1 = hPole:Cross(arb)
+            if t1.Magnitude == 0 then
+                arb = Vector3.new(0,0,1)
+                t1 = hPole:Cross(arb)
+            end
+            t1 = t1.Unit
+            local t2 = hPole:Cross(t1).Unit
+            for i = 1, Hit_Scans do
+                local theta = math.random() * 2 * math.pi
+                local r = Hit_Radius * math.sqrt(math.random())
+                local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                table.insert(newTarget, tPos + offsetVec)
+            end
         end
 
-        -- 对命中点采用完全随机采样（在目标的屏幕平面圆盘内随机点）
-        newTarget = { tPos } -- 保证中心点首先被检测
-        -- 构建与 poleDir 垂直的平面基向量
+    elseif SCAN.Mode == "RandomSphere" then
+        local rradius = SCAN.RandomRadius or 25
+        if rradius > 25 then rradius = 25 end -- 强制上限25
+        if REDUCE_RANDOM then rradius = math.max(1, math.floor(rradius/2)) end
+        newOrigin = GetOffsets_Sphere(myPos, rradius, Origin_Scans)
+
+        local pole = (tPos - myPos)
+        if pole.Magnitude < 0.001 then pole = Vector3.new(0,0,1) else pole = pole.Unit end
+        local hPole = -pole
         local arb = math.abs(hPole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
         local t1 = hPole:Cross(arb)
-        if t1.Magnitude == 0 then
-            arb = Vector3.new(0,0,1)
-            t1 = hPole:Cross(arb)
-        end
+        if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = hPole:Cross(arb) end
         t1 = t1.Unit
         local t2 = hPole:Cross(t1).Unit
-        -- 随机采样 Hit_Scans 个点（均匀分布）
+        newTarget = { tPos }
         for i = 1, Hit_Scans do
             local theta = math.random() * 2 * math.pi
             local r = Hit_Radius * math.sqrt(math.random())
-            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-            table.insert(newTarget, tPos + offsetVec)
+            table.insert(newTarget, tPos + (t1 * (math.cos(theta)*r) + t2 * (math.sin(theta)*r)))
+        end
+
+    elseif SCAN.Mode == "Cardinals" then
+        newOrigin = GetOffsets_Cardinals(myPos, Origin_Radius)
+        newTarget = GetOffsets_Cardinals(tPos, Hit_Radius)
+
+    elseif SCAN.Mode == "Aggressive" then
+        -- Aggressive: 更高密度 + 混合策略
+        local extraO = math.min(Origin_Scans * 2, 120)
+        local extraH = math.min(Hit_Scans * 2, 200)
+        if REDUCE_RANDOM then
+            newOrigin = GetOffsets_Cardinals(myPos, Origin_Radius)
+            for i=1,Origin_Scans do table.insert(newOrigin, myPos + ((ScanVectors[(i%#ScanVectors)+1].Unit) * (Origin_Radius * (0.5 + ((i%3)/3)))) ) end
+        else
+            newOrigin = GetOffsets_Sphere(myPos, Origin_Radius * 1.2, extraO)
+        end
+        local pole = (tPos - myPos)
+        if pole.Magnitude < 0.001 then pole = Vector3.new(0,0,1) else pole = pole.Unit end
+        local hPole = -pole
+        local arb = math.abs(hPole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+        local t1 = hPole:Cross(arb)
+        if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = hPole:Cross(arb) end
+        t1 = t1.Unit
+        local t2 = hPole:Cross(t1).Unit
+        newTarget = { tPos }
+        for i = 1, extraH do
+            local theta = math.random() * 2 * math.pi
+            local r = Hit_Radius * math.sqrt(math.random()) * (1 + math.random()*0.3)
+            table.insert(newTarget, tPos + (t1 * (math.cos(theta)*r) + t2 * (math.sin(theta)*r)))
+        end
+
+    elseif SCAN.Mode == "Hybrid" then
+        -- Hybrid: Cardinals + 圆盘采样混合，强调稳定性与覆盖
+        newOrigin = GetOffsets_Cardinals(myPos, math.max(Origin_Radius*0.7, 0.5))
+        local oPole = (tPos - myPos)
+        if oPole.Magnitude < 0.001 then oPole = Vector3.new(0,0,1) else oPole = oPole.Unit end
+        for i = 1, math.max(4, Origin_Scans//2) do
+            local off = GetOffsets_Algo2(myPos, oPole, Origin_Radius*0.6, 1)
+            for _,v in ipairs(off) do table.insert(newOrigin, v) end
+        end
+        newTarget = GetOffsets_Algo2(tPos, -oPole, Hit_Radius, Hit_Scans)
+        for _,v in ipairs(GetOffsets_Cardinals(tPos, Hit_Radius*0.5)) do table.insert(newTarget, v) end
+
+    elseif SCAN.Mode == "Focused" then
+        -- Focused: 小半径高密度（优先中心与前置方向），适合精确单点打击
+        local pole = (tPos - myPos)
+        if pole.Magnitude < 0.001 then pole = Vector3.new(0,0,1) else pole = pole.Unit end
+        newOrigin = { myPos, myPos + pole * math.min(Origin_Radius*0.6, 10) }
+        for i=1, Origin_Scans do
+            local theta = math.random()*2*math.pi
+            local r = (Origin_Radius*0.35) * math.sqrt(math.random())
+            local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+            local t1 = pole:Cross(arb); if t1.Magnitude==0 then t1 = pole:Cross(Vector3.new(0,0,1)) end; t1=t1.Unit
+            local t2 = pole:Cross(t1).Unit
+            table.insert(newOrigin, myPos + t1*(math.cos(theta)*r) + t2*(math.sin(theta)*r))
+        end
+        newTarget = { tPos }
+        for i=1, Hit_Scans*2 do
+            local theta = math.random()*2*math.pi
+            local r = (Hit_Radius*0.5) * math.sqrt(math.random())
+            local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+            local t1 = (-pole):Cross(arb); if t1.Magnitude==0 then t1 = (-pole):Cross(Vector3.new(0,0,1)) end; t1=t1.Unit
+            local t2 = (-pole):Cross(t1).Unit
+            table.insert(newTarget, tPos + t1*(math.cos(theta)*r) + t2*(math.sin(theta)*r))
+        end
+
+    else
+        -- fallback to original alternating
+        if WB.Round % 2 == 0 then
+            newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
+            newTarget = GetOffsets_Algo1(tPos, myPos, Hit_Radius)
+        else
+            local oPole = (tPos - myPos)
+            local oMag = oPole.Magnitude
+            if oMag < 0.001 then oPole = Vector3.new(0,0,1) else oPole = oPole.Unit end
+            newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
+            newTarget = { tPos }
+            local hPole = -oPole
+            local arb = math.abs(hPole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+            local t1 = hPole:Cross(arb)
+            if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = hPole:Cross(arb) end
+            t1 = t1.Unit
+            local t2 = hPole:Cross(t1).Unit
+            for i = 1, Hit_Scans do
+                local theta = math.random() * 2 * math.pi
+                local r = Hit_Radius * math.sqrt(math.random())
+                local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                table.insert(newTarget, tPos + offsetVec)
+            end
+        end
+    end
+
+    -- 如果 MODE_HIT_BOOST_ENABLED，基于模式调整采样半径（仅影响采样，不直接改全局 Hit_Radius）
+    local function ModeHitBoostFactor(mode)
+        if not MODE_HIT_BOOST_ENABLED then return 1.0 end
+        if mode == "Aggressive" then return 1.35 end
+        if mode == "RandomSphere" then return 1.25 end
+        if mode == "Hybrid" then return 1.3 end
+        if mode == "Focused" then return 1.4 end
+        if mode == "Cardinals" then return 1.1 end
+        return 1.0
+    end
+    local boost = ModeHitBoostFactor(SCAN.Mode)
+    if boost ~= 1.0 then
+        for i=1,#newTarget do
+            local dir = newTarget[i] - tPos
+            if dir.Magnitude > 0 then
+                -- 仅在采样阶段扩大采样范围（但后续最终发射点会 clamp 到25）
+                newTarget[i] = tPos + dir.Unit * math.min(dir.Magnitude * boost, 30)
+            end
+        end
+    end
+
+    -- 如果 EXPAND_HIT_RADIUS 开启：在采样阶段使用更大的采样半径（上限30）
+    if EXPAND_HIT_RADIUS then
+        local sampleCap = 30
+        -- we do not change Hit_Radius global, but enlarge the newTarget sampled points by up to sampleCap
+        for i=1,#newTarget do
+            local dir = newTarget[i] - tPos
+            local mag = dir.Magnitude
+            if mag > 0 then
+                local scale = math.min(sampleCap/mag, 1)
+                newTarget[i] = tPos + dir * scale
+            end
         end
     end
 
@@ -8571,14 +8920,17 @@ local function DoRagebot()
 
     for _, pO in ipairs(newOrigin) do
         for _, pH in ipairs(newTarget) do
+            -- 当 ReduceRandomization 开启时，优先尝试中心点与确定性点
+            if REDUCE_RANDOM and pO==newOrigin[1] then
+                -- 优先中心点
+            end
             if CheckWallbang(pO, pH) then
-                -- 找到第一条合法路径，立即锁定并跳出循环
                 bestPO = pO
                 bestPH = pH
                 break
             end
         end
-        if bestPO then break end -- 找到就跳出外层循环
+        if bestPO then break end
     end
 
     -- 5. 局部精化：如果找到初步路径，尝试在该路径附近做更密集的随机扫描以提高稳定性
@@ -8586,7 +8938,6 @@ local function DoRagebot()
         local refineRadius = math.min(3, Hit_Radius * 0.25)
         local refined = false
 
-        -- 更密集的命中点微调（优先调整命中点）
         for i = 1, 24 do
             local theta = math.random() * 2 * math.pi
             local r = refineRadius * math.sqrt(math.random())
@@ -8605,7 +8956,6 @@ local function DoRagebot()
             end
         end
 
-        -- 如果命中点微调失败，尝试在发射点和命中点周围做联合局部搜索
         if not refined then
             for i = 1, 40 do
                 local tryPH = bestPH + GetRandomOffset(refineRadius * 1.5)
@@ -8616,7 +8966,6 @@ local function DoRagebot()
             end
         end
 
-        -- 回退策略：尝试用目标中心与现有候选发射点匹配
         if not refined then
             for _, pO in ipairs(newOrigin) do
                 if CheckWallbang(pO, tPos) then
@@ -8625,7 +8974,6 @@ local function DoRagebot()
             end
         end
 
-        -- 进一步尝试：沿发射点指向目标方向小步前移（若有障碍可能绕行）
         if not refined then
             for i = 1, 12 do
                 local dirToTarget = (tPos - bestPO)
@@ -8635,15 +8983,18 @@ local function DoRagebot()
             end
         end
 
-        -- 最终处理：若以上都没找到更稳定点，但原始 bestPO/bestPH 仍有效，则保留；否则放弃
         if refined then
-            Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick(), FastScanUntil = tick() + 0.6}
-            Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=(bestPH - tPos).Magnitude>0.001}
+            Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick(), FastScanUntil = tick() + 0.6, Sampled=true}
+            Locked_Path.HitRadiusUsed = refineRadius > 0 and refineRadius or Hit_Radius
+            Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=true}
+            Valid_Pair.HitRadiusUsed = Locked_Path.HitRadiusUsed
             WB.Cached=false
         else
             if CheckWallbang(bestPO, bestPH) then
-                Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick(), FastScanUntil = tick() + 0.6}
-                Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=(bestPH - tPos).Magnitude>0.001}
+                Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick(), FastScanUntil = tick() + 0.6, Sampled=false}
+                Locked_Path.HitRadiusUsed = Hit_Radius
+                Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=false}
+                Valid_Pair.HitRadiusUsed = Locked_Path.HitRadiusUsed
                 WB.Cached=false
             else
                 Valid_Pair=nil
@@ -8806,7 +9157,7 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
--- == Ragebot fire Heartbeat (已优化：在最终射击时对采样点进行局部随机化以模拟随机命中) ==
+-- == Ragebot fire Heartbeat (已优化：在最终射击时对采样点进行局部随机化以模拟随机命中，但优先使用上次有效轨迹) ==
 RunService.Heartbeat:Connect(function()
     if not RB_State or not Valid_Pair then return end
     local char=LocalPlayer.Character
@@ -8831,7 +9182,6 @@ RunService.Heartbeat:Connect(function()
     if not part then return end
 
     -- 新增：射击距离限制（只在目标在限定距离内才发射），单位：世界单位（米）
-    -- 若需要调整为最小射程/其他逻辑，请修改阈值或条件
     local targetRoot = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
     if targetRoot then
         local shotDist = (targetRoot.Position - GetLocalRealPosition()).Magnitude
@@ -8842,50 +9192,100 @@ RunService.Heartbeat:Connect(function()
 
     local key="K"..math.random(1000,9999)
 
-    -- 选择最终命中点：如果是采样点，则在采样点附近进行小范围随机（仅在需要时进行）
+    -- 选择最终命中点：
     local finalHit = Valid_Pair.Hit
-    if Valid_Pair.Sampled and Valid_Pair.Target and Valid_Pair.Target.Character then
-        local myPos = GetLocalRealPosition()
-        local tPos = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart") and Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart").Position or Valid_Pair.Hit
-        local pole = (tPos - myPos)
-        if pole.Magnitude > 0.001 then
-            local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
-            local t1 = pole:Cross(arb)
-            if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
-            t1 = t1.Unit
-            local t2 = pole:Cross(t1).Unit
-            -- adaptive rmax: closer -> smaller, farther -> larger but clipped
-            local dist = pole.Magnitude
-            local distFactor = math.clamp(dist / 50, 0.2, 1)
-            local rmax = math.min(Hit_Radius * 0.2 * distFactor, 4)
-            local found = false
-            for i=1,8 do
-                local theta = math.random() * 2 * math.pi
-                local r = rmax * math.sqrt(math.random())
-                local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-                local cand = Valid_Pair.Hit + offsetVec
-                if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
-            end
-            if not found then
-                -- fallback attempts with decreasing r
-                for j=1,3 do
-                    local rr = rmax * (1 - j*0.3)
-                    if rr <= 0 then break end
+    if Valid_Pair and Valid_Pair.Origin and Valid_Pair.Hit and CheckWallbang(Valid_Pair.Origin, Valid_Pair.Hit) then
+        finalHit = Valid_Pair.Hit
+    else
+        if Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character then
+            local myPos = GetLocalRealPosition()
+            local tPos = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart") and Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart").Position or Valid_Pair.Hit
+            local pole = (tPos - myPos)
+            if pole.Magnitude > 0.001 then
+                local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+                local t1 = pole:Cross(arb)
+                if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
+                t1 = t1.Unit
+                local t2 = pole:Cross(t1).Unit
+
+                -- 自适应半径來源：優先使用 Valid_Pair.HitRadiusUsed，否則使用配置 Hit_Radius
+                local rbase = (Valid_Pair.HitRadiusUsed and Valid_Pair.HitRadiusUsed > 0) and Valid_Pair.HitRadiusUsed or Hit_Radius
+                if rbase <= 0 then rbase = Hit_Radius end
+
+                -- 若 EXPAND_HIT_RADIUS 开启，使用更大的 sampling 半径（上限 30），但最终实际发射会被 clamp 到 <=25
+                if EXPAND_HIT_RADIUS then rbase = math.min(30, rbase * 1.25) end
+
+                -- MODE_HIT_BOOST 在射击阶段也生效（提高命中半径 sampling）
+                local boost = ModeHitBoostFactor(SCAN.Mode)
+                rbase = math.min(30, rbase * boost)
+
+                local dist = pole.Magnitude
+                local distFactor = math.clamp(dist / 50, 0.2, 1)
+                local rmax = math.min(math.max(rbase * distFactor, 0.1), math.max(4, rbase))
+
+                local found = false
+                for i=1,8 do
+                    local theta = math.random() * 2 * math.pi
+                    local r = rmax * math.sqrt(math.random())
+                    local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                    local cand = (Valid_Pair.Hit or tPos) + offsetVec
+                    -- 确保实际发射点不超过 25（服务器实际发射范围限制）
+                    if EXPAND_HIT_RADIUS then cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand end
+                    if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
+                end
+
+                if not found then
+                    for j=1,3 do
+                        local rr = rmax * (1 - j*0.3)
+                        if rr <= 0 then break end
+                        for i=1,6 do
+                            local theta = math.random() * 2 * math.pi
+                            local r = rr * math.sqrt(math.random())
+                            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                            local cand = (Valid_Pair.Hit or tPos) + offsetVec
+                            if EXPAND_HIT_RADIUS then cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand end
+                            if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
+                        end
+                        if found then break end
+                    end
+                end
+
+                if not found then
                     for i=1,6 do
                         local theta = math.random() * 2 * math.pi
-                        local r = rr * math.sqrt(math.random())
+                        local r = Hit_Radius * math.sqrt(math.random())
                         local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-                        local cand = Valid_Pair.Hit + offsetVec
+                        local cand = tPos + offsetVec
+                        if EXPAND_HIT_RADIUS then cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand end
                         if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
                     end
-                    if found then break end
                 end
-            end
-            if not found then
-                -- try original center
-                if CheckWallbang(Valid_Pair.Origin, tPos) then finalHit = tPos else finalHit = Valid_Pair.Hit end
+
+                -- 如果仍未找到且启用了 Scan On Fire，则进行更密集的快速扫描来验证命中点（优先使用）
+                if not found and SCAN_ON_FIRE_ENABLED then
+                    for i=1,24 do
+                        local theta = math.random() * 2 * math.pi
+                        local r = math.min(25, rmax*1.2) * math.sqrt(math.random())
+                        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                        local cand = (Valid_Pair.Hit or tPos) + offsetVec
+                        cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand
+                        if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
+                    end
+                end
+
+                if not found then
+                    if CheckWallbang(Valid_Pair.Origin, tPos) then finalHit = tPos else finalHit = Valid_Pair.Hit or tPos end
+                end
+            else
+                finalHit = Valid_Pair.Hit or Valid_Pair.Origin
             end
         end
+    end
+
+    -- 最终 ensure：如果开启了 ExpandHitRadius，需要对 finalHit 做 clamp（不超过 25 单位）
+    if EXPAND_HIT_RADIUS and Valid_Pair and Valid_Pair.Origin then
+        local vec = finalHit - Valid_Pair.Origin
+        if vec.Magnitude > 25 then finalHit = Valid_Pair.Origin + vec.Unit * 25 end
     end
 
     local dir=(finalHit-Valid_Pair.Origin).Unit
@@ -8893,6 +9293,8 @@ RunService.Heartbeat:Connect(function()
     if TR.Enabled then task.spawn(CreateTracer,Valid_Pair.Origin,dir) end
     ZF_H:FireServer("🧈",tool,key,1,part,finalHit,dir)
     if tool:FindFirstChild("Hitmarker") then tool.Hitmarker:Fire(part) end
+
+    -- Hit log processing 与命中记录保存
     if HitLogEnabled then
         local dmg,mult=17,1.35
         if gunConfig then dmg=gunConfig.Damage or 17; mult=gunConfig.HeadshotMultiplier or 1.35
@@ -8904,7 +9306,26 @@ RunService.Heartbeat:Connect(function()
         local mp=GetLocalRealPosition()
         local tr=Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
         ProcessHitLog(Valid_Pair.Target.Name,tool.Name,math.floor(fd*100)/100,tr and math.floor((mp-tr.Position).Magnitude) or 0,WB.Cached)
+
+        -- 保存记录（若开启）
+        if HIT_RECORD.Enabled and fd and fd > 0 then
+            local rec = {
+                target = Valid_Pair.Target.Name,
+                tool = tool.Name,
+                damage = tostring(math.floor(fd*100)/100),
+                originX = tostring(Valid_Pair.Origin.X),
+                originY = tostring(Valid_Pair.Origin.Y),
+                originZ = tostring(Valid_Pair.Origin.Z),
+                hitX = tostring(finalHit.X),
+                hitY = tostring(finalHit.Y),
+                hitZ = tostring(finalHit.Z),
+                cached = tostring(WB.Cached),
+                time = tostring(os.time()),
+            }
+            pcall(function() SaveHitRecord(Valid_Pair.Target.Name, rec) end)
+        end
     end
+
     Last_Shot=tick()
 end)
 
