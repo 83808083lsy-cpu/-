@@ -6270,6 +6270,25 @@ local RB_State, RF_State, AutoReload, DownCheck   = false, false, false, false
 local Debug_Rays, TargetMode, HitSoundSelection   = false, "Near", "None"
 local Origin_Radius, Hit_Radius                   = 19.5, 24.5
 local Origin_Scans, Hit_Scans                     = 24, 30
+local AutoAdjustScans                              = false
+
+-- 根据扫描半径和需求自动调整采样数量
+local function UpdateAutoAdjustScans()
+    if not AutoAdjustScans then return end
+    local o = math.clamp(math.floor(Origin_Radius * 1.25), 8, 50)
+    local h = math.clamp(math.floor(Hit_Radius * 1.35), 12, 100)
+    Origin_Scans = o
+    Hit_Scans = h
+    if Library and Library.SetFlags then
+        if Library.SetFlags["CAT_Origin_Scans_32"] then
+            Library.SetFlags["CAT_Origin_Scans_32"](o)
+        end
+        if Library.SetFlags["CAT_Hit_Scans_34"] then
+            Library.SetFlags["CAT_Hit_Scans_34"](h)
+        end
+    end
+end
+
 local ScanRate                                     = 14
 local Last_Shot, Valid_Pair, Locked_Path          = 0, nil, nil
 local WB = {LastScan=0, Cached=false, Toggle=false, Threshold=0.5, Round=0}
@@ -7539,19 +7558,19 @@ end)
 -- == Silent Aim
 -- =====================================================================
 --[[
-  配置文件5.lua （已修改版：加入命中半径模式切换 UI 与逻辑）
+  配置文件5.lua （已修改版）
   已集成（新增项在注释中标注）：
     - 命中记录保存（SaveHitRecords）
     - Cache Hit Tolerance（改为开关并默认开启 0.3）
     - Extrapolate Position (ms slider 30..60)
-    - 新扫描模式 Original / RandomSphere / Cardinals / Aggressive / Hybrid / Focused
+    - 新扫描模式 Original / RandomSphere / Cardinals / Aggressive
+    - 新增扫描模式 Hybrid / Focused（使得所有能用模式全部加入）
     - ReduceRandomization 开关（尽量不随机偏移）
     - ExpandHitRadius 开关（采样扩张但实际发射限制 25）
     - 预加载/模拟偏移点（Preload Sim）开关：根据自身坐标与目标速度提前推理偏移点并预计算是否能伤害
     - 快速轨迹验证（Fast Validate）开关：启用时在锁定路径阶段短时高频验证轨迹有效性
     - 开火时快速扫描（Scan On Fire）开关：在发射前进行快速扫描验证最终命中点
-    - 模式命中半径增强（Mode Hit Boost）开关：各模式下采样半径自适应增强
-    - 新增：命中半径模式（Hit Radius Mode）与默认设置（UI 控件）
+    - 模式命中半径增强（Mode Hit Boost）开关：各模式下会自动调整采样半径以达到“最强/最好用”的效果
     - 其它局部微调与鲁棒性改进
 --]]
 
@@ -7768,16 +7787,6 @@ SCAN_ON_FIRE_ENABLED = false
 -- 新增开关：各模式下命中半径增强（使扫描在各种模式下更强/更容易命中）
 MODE_HIT_BOOST_ENABLED = true
 
--- 新增：命中半径模式（UI 切换）
--- 模式说明：
--- "Default"     : 使用配置 Hit_Radius 或 Valid_Pair.HitRadiusUsed（不额外修改）
--- "Adaptive"    : 在 Default 基础上按模式自适应放大（等同旧 Mode Hit Boost 行为）
--- "Max"         : 最大化采样半径（上限取 25）
--- "Conservative": 较保守，略微缩小采样半径
--- "Custom"      : 使用自定义半径（可在 UI 中设置）
-HIT_RADIUS_MODE = "Default"
-CUSTOM_HIT_RADIUS = 10
-
 -- ==================================
 
 do -- Combat page
@@ -7860,11 +7869,12 @@ do -- Combat page
         s1:Toggle({Name="Auto Reload", Flag="CAT_Auto_Reload_27",  Callback=function(v) AutoReload=v; if v then AutoReloadSetup() else clearReloadConnections() end end}):Keybind({Flag="CAT_Auto_Reload_27_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Auto_Reload_27"] then Library.SetFlags["CAT_Auto_Reload_27"](v) end end})
         s1:Toggle({Name="Down Check", Flag="CAT_Down_Check_28",   Callback=function(v) DownCheck=v end}):Keybind({Flag="CAT_Down_Check_28_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Down_Check_28"] then Library.SetFlags["CAT_Down_Check_28"](v) end end})
       s1:Slider({Name="Max Cache", Flag="CAT_Max_Cache_30",    Min=0.1, Max=25,  Default=0.5,   Decimals=0.01, Callback=function(v) WB.Threshold=v end})
-        s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=19.5, Default=19.5, Decimals=0.01, Callback=function(v) Origin_Radius=v end})
+        s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=19.5, Default=19.5, Decimals=0.01, Callback=function(v) Origin_Radius=v; UpdateAutoAdjustScans() end})
         s1:Slider({Name="Origin Scans", Flag="CAT_Origin_Scans_32", Min=1,   Max=50, Default=24,    Callback=function(v) Origin_Scans=math.floor(v) end})
         s1:Slider({Name="Scan Rate",    Flag="CAT_Scan_Rate",       Min=1,   Max=200, Default=30,    Callback=function(v) ScanRate=math.floor(v) end})
-        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=24.5, Default=24.2, Decimals=0.01, Callback=function(v) Hit_Radius=v end})
+        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=24.5, Default=24.2, Decimals=0.01, Callback=function(v) Hit_Radius=v; UpdateAutoAdjustScans() end})
         s1:Slider({Name="Hit Scans", Flag="CAT_Hit_Scans_34",    Min=1,   Max=100, Default=30,    Callback=function(v) Hit_Scans=math.floor(v) end})
+        s1:Toggle({Name="Auto Adjust Scans", Flag="CAT_Auto_Adjust_Scans", Default=false, Callback=function(v) AutoAdjustScans=v; UpdateAutoAdjustScans() end})
         local s2 = Rage:Section({Name="Target Selection", Side=2})
         s2:Dropdown({Name="Target Mode", Flag="CAT_Target_Mode_35", Items={"Near","Mouse","Centre","Lock"},         Default="Near", Callback=function(v) TargetMode=v end})
         s2:Dropdown({Name="Hit Sound", Flag="CAT_Hit_Sound_36",   Items={"None","Skeet","Neverlose","Gamesense"}, Default="None", Callback=function(v) HitSoundSelection=v end})
@@ -7907,13 +7917,6 @@ do -- Combat page
         s1:Toggle({Name="Fast trajectory validate", Flag="CAT_Fast_Validate", Default=false, Callback=function(v) FAST_VALIDATE_ENABLED = v end})
         s1:Toggle({Name="Scan on fire (quick verify)", Flag="CAT_Scan_On_Fire", Default=false, Callback=function(v) SCAN_ON_FIRE_ENABLED = v end})
         s1:Toggle({Name="Mode Hit Boost", Flag="CAT_Mode_Hit_Boost", Default=true, Callback=function(v) MODE_HIT_BOOST_ENABLED = v end})
-
-        -- 新增：命中半径模式下拉（含默认）
-        s1:Dropdown({Name="Hit Radius Mode", Flag="CAT_Hit_Radius_Mode", Items={"Default","Adaptive","Max","Conservative","Custom"}, Default="Default", Callback=function(v)
-            HIT_RADIUS_MODE = v
-        end})
-        -- 若选择 Custom，可自定义半径
-        s1:Slider({Name="Custom Hit Radius (used when mode=Custom)", Flag="CAT_Custom_Hit_Radius", Min=0.1, Max=25, Default=10, Decimals=2, Callback=function(v) CUSTOM_HIT_RADIUS = v end})
     end
 end
 
@@ -8035,7 +8038,7 @@ do -- Visuals page
         ambSec:Slider({Name="Brightness", Flag="CAT_VS_Brightness", Min=-1, Max=1, Default=0.15, Decimals=0.01, Callback=function(v) AMB.Brightness=v end})
     end
 
-    do -- ESP
+do -- ESP
         local sec = Sub:Section({Name="ESP", Side=2})
         sec:Toggle({Name="Nametag", Flag="CAT_Nametag_42",  Default=false, Callback=function(v) NametagEnabled=v; if not v then for _,p in pairs(Players:GetPlayers()) do local t=p.Character and p.Character:FindFirstChild("CAT_NameTag"); local l=t and t:FindFirstChild("L"); if l then l.Visible=false; if not DistanceEnabled then t.Enabled=false end end end end end}):Keybind({Flag="CAT_Nametag_42_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Nametag_42"] then Library.SetFlags["CAT_Nametag_42"](v) end end})
         sec:Toggle({Name="Distance", Flag="CAT_Distance_43", Default=false, Callback=function(v) DistanceEnabled=v; if not v then for _,p in pairs(Players:GetPlayers()) do local t=p.Character and p.Character:FindFirstChild("CAT_NameTag"); local l=t and t:FindFirstChild("DL"); if l then l.Visible=false; if not NametagEnabled then t.Enabled=false end end end end end}):Keybind({Flag="CAT_Distance_43_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Distance_43"] then Library.SetFlags["CAT_Distance_43"](v) end end})
@@ -8220,6 +8223,24 @@ do -- PlayerList page
     PL_WhiteSearch = pR:Searchbox({Name="Whitelist", Items=GetAllPlayerNames(), Multi=true,
         Callback=function(v) WhiteList=(typeof(v)=="table" and v or {v}) end})
     pR:Button({Name="Clear Whitelist", Callback=function() WhiteList={}; pcall(function() PL_WhiteSearch:Set({}) end) end})
+end
+
+-- 新增：Scan Settings 页面（含 Original 四轮模式开关）
+do
+    local Page = Window:Page({Name="ScanSettings", SubPages=false})
+    local s = Page:Section({Name="Scan Mode", Side=1})
+    -- 确保 SCAN 表存在
+    SCAN = SCAN or {}
+    SCAN.OriginalQuad = SCAN.OriginalQuad or false
+    -- Toggle 控件：Original 四轮模式（开启后单数轮由双轮 -> 四轮）
+    s:Toggle({
+        Name = "Original 四轮模式",
+        Flag = "OriginalQuad",
+        Value = SCAN.OriginalQuad,
+        Callback = function(v)
+            SCAN.OriginalQuad = v
+        end
+    })
 end
 
 Library:CreateSettingsPage(Window, Watermark, KeybindList)
@@ -8508,8 +8529,9 @@ local function DoInvisible()
 end
 
 -- =====================================================================
--- == 解析1：固定25点向量表 + 随机Roll轴旋转
+-- == 解析1：固定25点向量表 + 随机Roll轴旋转（极致速度/精准度版）
 -- =====================================================================
+-- 预处理：把 ScanVectors 归一化一次，供高速复用
 local ScanVectors = {
     Vector3.new(1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0),
     -Vector3.new(1, 0, 0), -Vector3.new(0, 0, 1), -Vector3.new(0, 1, 0),
@@ -8521,25 +8543,104 @@ local ScanVectors = {
     Vector3.new(1,2,0)/math.sqrt(5), Vector3.new(-1,2,0)/math.sqrt(5), Vector3.new(1,0,2)/math.sqrt(5), Vector3.new(-1,0,2)/math.sqrt(5),
     -Vector3.new(-1,0,2)/math.sqrt(5), -Vector3.new(1,0,2)/math.sqrt(5),
 }
+-- 预化单位向量表（避免每次重复 Unit）
+local ScanVectorsUnit = {}
+for i=1,#ScanVectors do
+    local v = ScanVectors[i]
+    local m = v.Magnitude
+    if m == 0 then ScanVectorsUnit[i] = Vector3.new(1,0,0) else ScanVectorsUnit[i] = v / m end
+end
 
+-- 小型缓存：缓存按 axisHash + quantizedAngle 的旋转结果（复用最近运算）
+local RotateCache = {}
+local RotateCacheOrder = {}
+local ROTATE_CACHE_LIMIT = 64
+
+local function axis_hash(k)
+    -- 量化 axis 三分量到 3 位小数，作为 key（容差换取缓存命中）
+    return string.format("%.3f_%.3f_%.3f", k.X, k.Y, k.Z)
+end
+
+-- 配置：Algo1 最大 roll 角度（度），更小范围通常更稳定/精准；你可以调高以扩大覆盖
+local ALGO1_MAX_ROLL_DEG = 45
+
+local function cache_put(key, value)
+    if RotateCache[key] == nil then
+        table.insert(RotateCacheOrder, key)
+        RotateCache[key] = value
+        if #RotateCacheOrder > ROTATE_CACHE_LIMIT then
+            local old = table.remove(RotateCacheOrder, 1)
+            RotateCache[old] = nil
+        end
+    end
+end
+
+-- GetOffsets_Algo1: 基于 forward (from firePos->targetPos) 的局部坐标系，把预定义向量按半径扩展并在平面内做 roll
 local function GetOffsets_Algo1(firePos, targetPos, offset)
     if not offset or offset <= 0 then return {firePos} end
-    local offsets = {firePos} -- 优先检测中心点
-    local cfOffset = CFrame.new(firePos, targetPos) * CFrame.Angles(0, 0, math.rad(math.random(1, 90)))
-    for _, pos in ipairs(ScanVectors) do
-        table.insert(offsets, cfOffset * (pos * offset))
+    -- 首元素为中心点
+    local offsets = {firePos}
+
+    -- 计算 forward 轴与局部平面基 t1/t2（与之前 CFrame.new(...)*pos 等价的基）
+    local pole = targetPos - firePos
+    local poleMag = pole.Magnitude
+    local forward = (poleMag < 1e-6) and Vector3.new(0,0,1) or pole / poleMag
+
+    local arb = math.abs(forward.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+    local t1 = forward:Cross(arb)
+    if t1.Magnitude == 0 then
+        arb = Vector3.new(0,0,1)
+        t1 = forward:Cross(arb)
     end
+    t1 = t1.Unit
+    local t2 = forward:Cross(t1).Unit
+
+    -- roll 角度，保留一定随机性但不做过大波动（更利于精确）
+    local angleDeg = math.random(0, ALGO1_MAX_ROLL_DEG)
+    local angleRad = math.rad(angleDeg)
+    local cosA = math.cos(angleRad)
+    local sinA = math.sin(angleRad)
+
+    -- 缓存 key（对相近方向/角度复用）
+    local key = axis_hash(forward) .. "|" .. tostring(math.floor(angleDeg))
+    local rotatedUnits = RotateCache[key]
+    if not rotatedUnits then
+        -- 没有缓存则计算并存入缓存：对每个单位向量，先以 basis 映射到 (x,y,z)，再对平面 (x,y) 做旋转
+        rotatedUnits = {}
+        for i=1,#ScanVectorsUnit do
+            local sv = ScanVectorsUnit[i]
+            -- 在 local basis 上的坐标： x->t1, y->t2, z->forward
+            local lx = sv.X * offset
+            local ly = sv.Y * offset
+            local lz = sv.Z * offset
+            -- 在平面内旋转 (x,y)
+            local rx = lx * cosA - ly * sinA
+            local ry = lx * sinA + ly * cosA
+            -- 转回世界空间并存单位偏移（我们只存偏移向量）
+            local worldOffset = t1 * rx + t2 * ry + forward * lz
+            rotatedUnits[i] = worldOffset
+        end
+        cache_put(key, rotatedUnits)
+    end
+
+    -- 生成最终点列表（中心点已加入）
+    for i=1,#rotatedUnits do
+        table.insert(offsets, firePos + rotatedUnits[i])
+    end
+
     return offsets
 end
 
 -- =====================================================================
--- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
+-- == 解析2（已替换）：基于视线垂直平面的圆盤均匀采样（黄金角 / Vogel，优化版）
+-- == - 返回包含 center 的列表
+-- == - 单数轮时支持双轮或四轮（由 SCAN.OriginalQuad 控制）
 -- =====================================================================
 local function GetOffsets_Algo2(center, poleDir, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
-    local offsets = {center} -- 优先检测中心点
+    local offsets = {center} -- 保留中心点
 
-    -- 构建正交基：t1, t2 为与 poleDir 垂直的两个单位向量（plane basis）
+    -- 构建与 poleDir 垂直的正交基 t1, t2
     local arb = math.abs(poleDir.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
     local t1 = poleDir:Cross(arb)
     if t1.Magnitude == 0 then
@@ -8549,12 +8650,53 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
     t1 = t1.Unit
     local t2 = poleDir:Cross(t1).Unit
 
-    -- 使用 concentric disk sampling 保证圆盘上的均匀采样
-    for i = 1, count do
-        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count)
-        local r = radius * math.sqrt(math.random())
-        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-        table.insert(offsets, center + offsetVec)
+    local golden = math.pi * (3 - math.sqrt(5)) -- 黄金角
+    local baseCount = math.max(1, math.floor(count))
+
+    -- 主轮：Vogel 分布（确定性、高效）
+    for i = 1, baseCount do
+        local r = radius * math.sqrt(i / baseCount)
+        local theta = i * golden
+        local x = math.cos(theta) * r
+        local y = math.sin(theta) * r
+        table.insert(offsets, center + t1 * x + t2 * y)
+    end
+
+    -- 单数轮交错采样：根据 SCAN.OriginalQuad 决定是双轮（+1 phase）还是四轮（+3 phases）
+    if WB and (WB.Round % 2 == 1) then
+        if SCAN and SCAN.OriginalQuad then
+            -- 四轮：加入 3 个相位偏移（与主轮互补），相位分别为 golden * 0.25, 0.5, 0.75
+            local phases = { golden * 0.25, golden * 0.5, golden * 0.75 }
+            for _, phase in ipairs(phases) do
+                for i = 1, baseCount do
+                    local r = radius * math.sqrt(math.max(0, (i - 0.5) / baseCount))
+                    local theta = i * golden + phase
+                    local x = math.cos(theta) * r
+                    local y = math.sin(theta) * r
+                    local pt = center + t1 * x + t2 * y
+                    local isDup = false
+                    for _, v in ipairs(offsets) do
+                        if (v - pt).Magnitude < 1e-3 then isDup = true; break end
+                    end
+                    if not isDup then table.insert(offsets, pt) end
+                end
+            end
+        else
+            -- 双轮（原先行为）：单一相位偏移（golden * 0.5）
+            local phase = golden * 0.5
+            for i = 1, baseCount do
+                local r = radius * math.sqrt(math.max(0, (i - 0.5) / baseCount))
+                local theta = i * golden + phase
+                local x = math.cos(theta) * r
+                local y = math.sin(theta) * r
+                local pt = center + t1 * x + t2 * y
+                local isDup = false
+                for _, v in ipairs(offsets) do
+                    if (v - pt).Magnitude < 1e-3 then isDup = true; break end
+                end
+                if not isDup then table.insert(offsets, pt) end
+            end
+        end
     end
 
     return offsets
@@ -8567,7 +8709,6 @@ local function GetOffsets_Sphere(center, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
     local offsets = {center}
     for i = 1, count do
-        -- 使用均匀体积分布采样，r 控制在 [0,radius]
         local r = radius * (math.random() ^ (1/3))
         local z = 2 * math.random() - 1
         local theta = 2 * math.pi * math.random()
@@ -8588,8 +8729,8 @@ end
 local function GetOffsets_Cardinals(center, scale)
     if not scale or scale <= 0 then return {center} end
     local offsets = {center}
-    for _, v in ipairs(ScanVectors) do
-        table.insert(offsets, center + v.Unit * scale)
+    for _, v in ipairs(ScanVectorsUnit) do
+        table.insert(offsets, center + v * scale)
     end
     return offsets
 end
@@ -8603,41 +8744,56 @@ local function GetRandomOffset(maxRadius)
     local r = maxRadius * math.sqrt(math.random())
     local x = math.cos(theta) * r
     local y = math.sin(theta) * r
-    -- 在局部球面上随机小偏移，主要在水平面应用（Z轴保留）
     return Vector3.new(x, 0, y)
 end
 
 -- =====================================================================
--- == Hit radius mode helper
+-- == 新增：根据 workspace.Characters 自动检测目标是否拥有 DisplayItems["TEC-9"]
+-- ==（此函数保留但在本次需求中不再用于射程判定；射程现在基于本地手持武器）
 -- =====================================================================
-local function ModeHitBoostFactor(mode)
-    if not MODE_HIT_BOOST_ENABLED then return 1.0 end
-    if mode == "Aggressive" then return 1.35 end
-    if mode == "RandomSphere" then return 1.25 end
-    if mode == "Hybrid" then return 1.3 end
-    if mode == "Focused" then return 1.4 end
-    if mode == "Cardinals" then return 1.1 end
-    return 1.0
-end
+local function HasTEC9(playerName)
+    if not playerName then return false end
+    local ok, root = pcall(function() return workspace:FindFirstChild("Characters") end)
+    if not ok or not root then return false end
+    local ok2, node = pcall(function() return root:FindFirstChild(playerName) end)
+    if not ok2 or not node then return false end
 
-local function ApplyHitRadiusMode(base)
-    if not base or base <= 0 then base = Hit_Radius or 1 end
-    if HIT_RADIUS_MODE == "Default" then
-        return base
-    elseif HIT_RADIUS_MODE == "Adaptive" then
-        return base * ModeHitBoostFactor(SCAN.Mode)
-    elseif HIT_RADIUS_MODE == "Max" then
-        return math.max(base, 25)
-    elseif HIT_RADIUS_MODE == "Conservative" then
-        return base * 0.8
-    elseif HIT_RADIUS_MODE == "Custom" then
-        return math.max(0.1, CUSTOM_HIT_RADIUS)
+    local di = node:FindFirstChild("DisplayItems")
+    if di then
+        local success, res = pcall(function()
+            if di:IsA("Folder") or di:IsA("Model") then
+                return di:FindFirstChild("TEC-9") ~= nil
+            elseif di:IsA("ModuleScript") then
+                local ok, tbl = pcall(require, di)
+                if ok and type(tbl) == "table" then return tbl["TEC-9"] ~= nil end
+            elseif di:IsA("StringValue") or di:IsA("ObjectValue") or di:IsA("BoolValue") or di:IsA("IntValue") then
+                local v = di.Value
+                if type(v) == "string" and v:find("TEC-9") then return true end
+                if type(v) == "table" and v["TEC-9"] then return true end
+            end
+            return false
+        end)
+        if success and res then return true end
     end
-    return base
+
+    local ms = node:FindFirstChild("DisplayItems")
+    if ms and ms:IsA("ModuleScript") then
+        local okm, tbl = pcall(require, ms)
+        if okm and type(tbl) == "table" and tbl["TEC-9"] then return true end
+    end
+
+    local okattr, attrVal = pcall(function() return node:GetAttribute("DisplayItems") end)
+    if okattr and attrVal then
+        if type(attrVal) == "string" and tostring(attrVal):find("TEC-9") then return true end
+    end
+
+    if node:FindFirstChild("TEC-9") then return true end
+
+    return false
 end
 
 -- =====================================================================
--- == 核心 Ragebot 逻辑（已按要求调整）
+-- == 核心 Ragebot 逻辑（其余部分保持不变）
 -- =====================================================================
 
 -- 预加载候选（若 PRELOAD_SIM_ENABLED 为 true，会保存）
@@ -8769,10 +8925,10 @@ local function DoRagebot()
             if REDUCE_RANDOM then
                 -- 若减少随机，去掉随机旋转，使用确定向量（更稳定）
                 local offsetsO = {myPos}
-                for _, pos in ipairs(ScanVectors) do table.insert(offsetsO, myPos + (pos.Unit * Origin_Radius)) end
+                for _, pos in ipairs(ScanVectorsUnit) do table.insert(offsetsO, myPos + (pos * Origin_Radius)) end
                 newOrigin = offsetsO
                 local offsetsT = {tPos}
-                for _, pos in ipairs(ScanVectors) do table.insert(offsetsT, tPos + (pos.Unit * Hit_Radius)) end
+                for _, pos in ipairs(ScanVectorsUnit) do table.insert(offsetsT, tPos + (pos * Hit_Radius)) end
                 newTarget = offsetsT
             else
                 newOrigin = GetOffsets_Algo1(myPos, tPos, Origin_Radius)
@@ -8846,7 +9002,7 @@ local function DoRagebot()
         local extraH = math.min(Hit_Scans * 2, 200)
         if REDUCE_RANDOM then
             newOrigin = GetOffsets_Cardinals(myPos, Origin_Radius)
-            for i=1,Origin_Scans do table.insert(newOrigin, myPos + ((ScanVectors[(i%#ScanVectors)+1].Unit) * (Origin_Radius * (0.5 + ((i%3)/3)))) ) end
+            for i=1,Origin_Scans do table.insert(newOrigin, myPos + ((ScanVectorsUnit[(i%#ScanVectorsUnit)+1]) * (Origin_Radius * (0.5 + ((i%3)/3)))) ) end
         else
             newOrigin = GetOffsets_Sphere(myPos, Origin_Radius * 1.2, extraO)
         end
@@ -8866,7 +9022,7 @@ local function DoRagebot()
         end
 
     elseif SCAN.Mode == "Hybrid" then
-        -- Hybrid: Cardinals + 圆盘采样混合，强调稳定性与覆盖
+        -- Hybrid: Cardinals + 圆盤采样混合，强调稳定性与覆盖
         newOrigin = GetOffsets_Cardinals(myPos, math.max(Origin_Radius*0.7, 0.5))
         local oPole = (tPos - myPos)
         if oPole.Magnitude < 0.001 then oPole = Vector3.new(0,0,1) else oPole = oPole.Unit end
@@ -8926,17 +9082,22 @@ local function DoRagebot()
         end
     end
 
-    -- 使用命中半径模式调整采样新半径（仅影响采样，不直接修改全局 Hit_Radius）
-    local effective_hit_sample_radius = ApplyHitRadiusMode(Hit_Radius or 0)
-    -- 将采样点按有效采样半径做适度缩放（保持原有方向）
-    if effective_hit_sample_radius and effective_hit_sample_radius > 0 and Hit_Radius and Hit_Radius > 0 then
-        local scaleFactor = effective_hit_sample_radius / Hit_Radius
+    -- 如果 MODE_HIT_BOOST_ENABLED，基于模式调整采样半径（仅影响采样，不直接改全局 Hit_Radius）
+    local function ModeHitBoostFactor(mode)
+        if not MODE_HIT_BOOST_ENABLED then return 1.0 end
+        if mode == "Aggressive" then return 1.35 end
+        if mode == "RandomSphere" then return 1.25 end
+        if mode == "Hybrid" then return 1.3 end
+        if mode == "Focused" then return 1.4 end
+        if mode == "Cardinals" then return 1.1 end
+        return 1.0
+    end
+    local boost = ModeHitBoostFactor(SCAN.Mode)
+    if boost ~= 1.0 then
         for i=1,#newTarget do
             local dir = newTarget[i] - tPos
-            local mag = dir.Magnitude
-            if mag > 0 then
-                local newMag = math.min(mag * scaleFactor, 30)
-                newTarget[i] = tPos + dir.Unit * newMag
+            if dir.Magnitude > 0 then
+                newTarget[i] = tPos + dir.Unit * math.min(dir.Magnitude * boost, 30)
             end
         end
     end
@@ -8944,7 +9105,6 @@ local function DoRagebot()
     -- 如果 EXPAND_HIT_RADIUS 开启：在采样阶段使用更大的采样半径（上限30）
     if EXPAND_HIT_RADIUS then
         local sampleCap = 30
-        -- we do not change Hit_Radius global, but enlarge the newTarget sampled points by up to sampleCap
         for i=1,#newTarget do
             local dir = newTarget[i] - tPos
             local mag = dir.Magnitude
@@ -8960,7 +9120,6 @@ local function DoRagebot()
 
     for _, pO in ipairs(newOrigin) do
         for _, pH in ipairs(newTarget) do
-            -- 当 ReduceRandomization 开启时，优先尝试中心点与确定性点
             if REDUCE_RANDOM and pO==newOrigin[1] then
                 -- 优先中心点
             end
@@ -9225,7 +9384,28 @@ RunService.Heartbeat:Connect(function()
     local targetRoot = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
     if targetRoot then
         local shotDist = (targetRoot.Position - GetLocalRealPosition()).Magnitude
-        if shotDist > 820 then
+
+        -- 根据"本地玩家"当前手持武器自动调整允许的最远射击距离：
+        -- 如果当前手持包含 "TEC" 的武器（例如 TEC-9），允许距离为 825；否则为 1000
+        local maxAllowedDist = 1000 -- 默认其他枪械为 1000 米
+        local ok, isTec9 = pcall(function()
+            local myTool = tool
+            if not myTool then return false end
+            local tname = tostring(myTool.Name or ""):lower()
+            if tname:find("tec") or tname:find("tec%-9") then return true end
+            local dn = myTool:FindFirstChild("DisplayName")
+            if dn and tostring(dn.Value or ""):lower():find("tec") then return true end
+            if myTool.GetAttribute then
+                local attr = myTool:GetAttribute("DisplayName")
+                if attr and tostring(attr):lower():find("tec") then return true end
+            end
+            return false
+        end)
+        if ok and isTec9 then
+            maxAllowedDist = 825
+        end
+
+        if shotDist > maxAllowedDist then
             return -- 目标过远，跳过本次发射
         end
     end
@@ -9252,11 +9432,12 @@ RunService.Heartbeat:Connect(function()
                 local rbase = (Valid_Pair.HitRadiusUsed and Valid_Pair.HitRadiusUsed > 0) and Valid_Pair.HitRadiusUsed or Hit_Radius
                 if rbase <= 0 then rbase = Hit_Radius end
 
-                -- 根据命中半径模式调整采样半径（可能是 Adaptive/Max/Conservative/Custom）
-                rbase = ApplyHitRadiusMode(rbase)
-
                 -- 若 EXPAND_HIT_RADIUS 开启，使用更大的 sampling 半径（上限 30），但最终实际发射会被 clamp 到 <=25
                 if EXPAND_HIT_RADIUS then rbase = math.min(30, rbase * 1.25) end
+
+                -- MODE_HIT_BOOST 在射击阶段也生效（提高命中半径 sampling）
+                local boost = ModeHitBoostFactor(SCAN.Mode)
+                rbase = math.min(30, rbase * boost)
 
                 local dist = pole.Magnitude
                 local distFactor = math.clamp(dist / 50, 0.2, 1)
