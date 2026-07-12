@@ -6270,6 +6270,25 @@ local RB_State, RF_State, AutoReload, DownCheck   = false, false, false, false
 local Debug_Rays, TargetMode, HitSoundSelection   = false, "Near", "None"
 local Origin_Radius, Hit_Radius                   = 19.5, 24.5
 local Origin_Scans, Hit_Scans                     = 24, 30
+local AutoAdjustScans                              = false
+
+-- 根据扫描半径和需求自动调整采样数量
+local function UpdateAutoAdjustScans()
+    if not AutoAdjustScans then return end
+    local o = math.clamp(math.floor(Origin_Radius * 1.25), 8, 50)
+    local h = math.clamp(math.floor(Hit_Radius * 1.35), 12, 100)
+    Origin_Scans = o
+    Hit_Scans = h
+    if Library and Library.SetFlags then
+        if Library.SetFlags["CAT_Origin_Scans_32"] then
+            Library.SetFlags["CAT_Origin_Scans_32"](o)
+        end
+        if Library.SetFlags["CAT_Hit_Scans_34"] then
+            Library.SetFlags["CAT_Hit_Scans_34"](h)
+        end
+    end
+end
+
 local ScanRate                                     = 14
 local Last_Shot, Valid_Pair, Locked_Path          = 0, nil, nil
 local WB = {LastScan=0, Cached=false, Toggle=false, Threshold=0.5, Round=0}
@@ -7850,11 +7869,12 @@ do -- Combat page
         s1:Toggle({Name="Auto Reload", Flag="CAT_Auto_Reload_27",  Callback=function(v) AutoReload=v; if v then AutoReloadSetup() else clearReloadConnections() end end}):Keybind({Flag="CAT_Auto_Reload_27_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Auto_Reload_27"] then Library.SetFlags["CAT_Auto_Reload_27"](v) end end})
         s1:Toggle({Name="Down Check", Flag="CAT_Down_Check_28",   Callback=function(v) DownCheck=v end}):Keybind({Flag="CAT_Down_Check_28_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Down_Check_28"] then Library.SetFlags["CAT_Down_Check_28"](v) end end})
       s1:Slider({Name="Max Cache", Flag="CAT_Max_Cache_30",    Min=0.1, Max=25,  Default=0.5,   Decimals=0.01, Callback=function(v) WB.Threshold=v end})
-        s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=19.5, Default=19.5, Decimals=0.01, Callback=function(v) Origin_Radius=v end})
+        s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=19.5, Default=19.5, Decimals=0.01, Callback=function(v) Origin_Radius=v; UpdateAutoAdjustScans() end})
         s1:Slider({Name="Origin Scans", Flag="CAT_Origin_Scans_32", Min=1,   Max=50, Default=24,    Callback=function(v) Origin_Scans=math.floor(v) end})
         s1:Slider({Name="Scan Rate",    Flag="CAT_Scan_Rate",       Min=1,   Max=200, Default=30,    Callback=function(v) ScanRate=math.floor(v) end})
-        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=24.5, Default=24.2, Decimals=0.01, Callback=function(v) Hit_Radius=v end})
+        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=24.5, Default=24.2, Decimals=0.01, Callback=function(v) Hit_Radius=v; UpdateAutoAdjustScans() end})
         s1:Slider({Name="Hit Scans", Flag="CAT_Hit_Scans_34",    Min=1,   Max=100, Default=30,    Callback=function(v) Hit_Scans=math.floor(v) end})
+        s1:Toggle({Name="Auto Adjust Scans", Flag="CAT_Auto_Adjust_Scans", Default=false, Callback=function(v) AutoAdjustScans=v; UpdateAutoAdjustScans() end})
         local s2 = Rage:Section({Name="Target Selection", Side=2})
         s2:Dropdown({Name="Target Mode", Flag="CAT_Target_Mode_35", Items={"Near","Mouse","Centre","Lock"},         Default="Near", Callback=function(v) TargetMode=v end})
         s2:Dropdown({Name="Hit Sound", Flag="CAT_Hit_Sound_36",   Items={"None","Skeet","Neverlose","Gamesense"}, Default="None", Callback=function(v) HitSoundSelection=v end})
@@ -8018,7 +8038,7 @@ do -- Visuals page
         ambSec:Slider({Name="Brightness", Flag="CAT_VS_Brightness", Min=-1, Max=1, Default=0.15, Decimals=0.01, Callback=function(v) AMB.Brightness=v end})
     end
 
-    do -- ESP
+do -- ESP
         local sec = Sub:Section({Name="ESP", Side=2})
         sec:Toggle({Name="Nametag", Flag="CAT_Nametag_42",  Default=false, Callback=function(v) NametagEnabled=v; if not v then for _,p in pairs(Players:GetPlayers()) do local t=p.Character and p.Character:FindFirstChild("CAT_NameTag"); local l=t and t:FindFirstChild("L"); if l then l.Visible=false; if not DistanceEnabled then t.Enabled=false end end end end end}):Keybind({Flag="CAT_Nametag_42_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Nametag_42"] then Library.SetFlags["CAT_Nametag_42"](v) end end})
         sec:Toggle({Name="Distance", Flag="CAT_Distance_43", Default=false, Callback=function(v) DistanceEnabled=v; if not v then for _,p in pairs(Players:GetPlayers()) do local t=p.Character and p.Character:FindFirstChild("CAT_NameTag"); local l=t and t:FindFirstChild("DL"); if l then l.Visible=false; if not NametagEnabled then t.Enabled=false end end end end end}):Keybind({Flag="CAT_Distance_43_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Distance_43"] then Library.SetFlags["CAT_Distance_43"](v) end end})
@@ -8516,7 +8536,12 @@ local function GetOffsets_Algo1(firePos, targetPos, offset)
 end
 
 -- =====================================================================
--- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样
+-- == 解析2（已替换）：基于视线垂直平面的圆盘均匀采样（已优化）
+-- == 说明：
+-- == - 返回值仍包含中心点作为第一个元素。
+-- == - 使用黄金角（Vogel）方法在圆盘上生成均匀分布点，确定性且速度快。
+-- == - 对于 Original 单数轮（WB.Round 为奇数）会进行“双轮”交错采样（第二次以相位偏移插入），提高覆盖性与稳定性。
+-- == - 保持原先接口与行为（count 个面内样本 + 中心点），但分布更均匀、更少依赖随机。
 -- =====================================================================
 local function GetOffsets_Algo2(center, poleDir, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
@@ -8532,12 +8557,40 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
     t1 = t1.Unit
     local t2 = poleDir:Cross(t1).Unit
 
-    -- 使用 concentric disk sampling 保证圆盘上的均匀采样
-    for i = 1, count do
-        local theta = (2 * math.pi) * (i / count) + (math.random() - 0.5) * (2*math.pi / count)
-        local r = radius * math.sqrt(math.random())
-        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-        table.insert(offsets, center + offsetVec)
+    -- 使用 Vogel / 黄金角 方法在圆盘上做均匀分布（确定性且高效）
+    -- 保持接口：产生 count 个样本点（不包含已在 offsets 的中心点）
+    local golden = math.pi * (3 - math.sqrt(5)) -- ~2.3999632297
+    local baseCount = math.max(1, math.floor(count))
+
+    for i = 1, baseCount do
+        local r = radius * math.sqrt(i / baseCount)
+        local theta = i * golden
+        local x = math.cos(theta) * r
+        local y = math.sin(theta) * r
+        table.insert(offsets, center + t1 * x + t2 * y)
+    end
+
+    -- Original 单数轮 / 双轮策略：
+    -- 在 WB.Round 为奇数（即单数轮采样分支被调用时），为了提升覆盖性做第二次相位偏移采样并合并（交错插入）
+    -- 这会在不显著增加计算量的情况下改善点的分布，尤其对较小 count 效果明显。
+    if WB and (WB.Round % 2 == 1) then
+        local phase = golden * 0.5
+        for i = 1, baseCount do
+            local r = radius * math.sqrt(math.max(0, (i - 0.5) / baseCount))
+            local theta = i * golden + phase
+            local x = math.cos(theta) * r
+            local y = math.sin(theta) * r
+            local pt = center + t1 * x + t2 * y
+            -- 去重：避免与已有点非常接近（阈值可微调）
+            local isDup = false
+            for _, v in ipairs(offsets) do
+                if (v - pt).Magnitude < 1e-3 then
+                    isDup = true
+                    break
+                end
+            end
+            if not isDup then table.insert(offsets, pt) end
+        end
     end
 
     return offsets
@@ -8588,6 +8641,51 @@ local function GetRandomOffset(maxRadius)
     local y = math.sin(theta) * r
     -- 在局部球面上随机小偏移，主要在水平面应用（Z轴保留）
     return Vector3.new(x, 0, y)
+end
+
+-- =====================================================================
+-- == 新增：根据 workspace.Characters 自动检测目标是否拥有 DisplayItems["TEC-9"]
+-- ==（此函数保留但在本次需求中不再用于射程判定；射程现在基于本地手持武器）
+-- =====================================================================
+local function HasTEC9(playerName)
+    if not playerName then return false end
+    local ok, root = pcall(function() return workspace:FindFirstChild("Characters") end)
+    if not ok or not root then return false end
+    local ok2, node = pcall(function() return root:FindFirstChild(playerName) end)
+    if not ok2 or not node then return false end
+
+    local di = node:FindFirstChild("DisplayItems")
+    if di then
+        local success, res = pcall(function()
+            if di:IsA("Folder") or di:IsA("Model") then
+                return di:FindFirstChild("TEC-9") ~= nil
+            elseif di:IsA("ModuleScript") then
+                local ok, tbl = pcall(require, di)
+                if ok and type(tbl) == "table" then return tbl["TEC-9"] ~= nil end
+            elseif di:IsA("StringValue") or di:IsA("ObjectValue") or di:IsA("BoolValue") or di:IsA("IntValue") then
+                local v = di.Value
+                if type(v) == "string" and v:find("TEC-9") then return true end
+                if type(v) == "table" and v["TEC-9"] then return true end
+            end
+            return false
+        end)
+        if success and res then return true end
+    end
+
+    local ms = node:FindFirstChild("DisplayItems")
+    if ms and ms:IsA("ModuleScript") then
+        local okm, tbl = pcall(require, ms)
+        if okm and type(tbl) == "table" and tbl["TEC-9"] then return true end
+    end
+
+    local okattr, attrVal = pcall(function() return node:GetAttribute("DisplayItems") end)
+    if okattr and attrVal then
+        if type(attrVal) == "string" and tostring(attrVal):find("TEC-9") then return true end
+    end
+
+    if node:FindFirstChild("TEC-9") then return true end
+
+    return false
 end
 
 -- =====================================================================
@@ -9185,7 +9283,28 @@ RunService.Heartbeat:Connect(function()
     local targetRoot = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
     if targetRoot then
         local shotDist = (targetRoot.Position - GetLocalRealPosition()).Magnitude
-        if shotDist > 820 then
+
+        -- 根据"本地玩家"当前手持武器自动调整允许的最远射击距离：
+        -- 如果当前手持包含 "TEC" 的武器（例如 TEC-9），允许距离为 825；否则为 1000
+        local maxAllowedDist = 1000 -- 默认其他枪械为 1000 米
+        local ok, isTec9 = pcall(function()
+            local myTool = tool
+            if not myTool then return false end
+            local tname = tostring(myTool.Name or ""):lower()
+            if tname:find("tec") or tname:find("tec%-9") then return true end
+            local dn = myTool:FindFirstChild("DisplayName")
+            if dn and tostring(dn.Value or ""):lower():find("tec") then return true end
+            if myTool.GetAttribute then
+                local attr = myTool:GetAttribute("DisplayName")
+                if attr and tostring(attr):lower():find("tec") then return true end
+            end
+            return false
+        end)
+        if ok and isTec9 then
+            maxAllowedDist = 825
+        end
+
+        if shotDist > maxAllowedDist then
             return -- 目标过远，跳过本次发射
         end
     end
