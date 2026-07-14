@@ -7925,7 +7925,7 @@ do -- Visuals page
     local Sub   = Page:SubPage({Name="Main", Columns=2})
     local World = Page:SubPage({Name="World", Columns=2})
 
-    do -- World Visuals subpage
+do -- World Visuals subpage
         local litSec = World:Section({Name="Lighting", Side=1})
         litSec:Toggle({Name="Lighting Mode", Flag="WV_LightingMode", Default=false, Callback=function(v) WV.LightingModeEnabled=v end}):Keybind({Flag="WV_LightingMode_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["WV_LightingMode"] then Library.SetFlags["WV_LightingMode"](v) end end})
         litSec:Dropdown({Name="Technology", Flag="WV_Technology", Items={"Compatibility","ShadowMap","Voxel","Future"}, Default="ShadowMap", Callback=function(v) WV.LightingMode=v end})
@@ -8239,6 +8239,80 @@ do
         Value = SCAN.OriginalQuad,
         Callback = function(v)
             SCAN.OriginalQuad = v
+        end
+    })
+
+    -- 新增：在扫描/射击阶段禁用半径随机命中（优先使用中心命中点，适合需要确定性时开启）
+    SCAN.DisableRandomHit = SCAN.DisableRandomHit or false
+    s:Toggle({
+        Name = "Disable radius random hit",
+        Flag = "SCAN_DisableRandomHit",
+        Value = SCAN.DisableRandomHit,
+        Callback = function(v)
+            SCAN.DisableRandomHit = v
+        end
+    })
+
+    -- 新增：把完整配置文件输出到聊天（尝试使用 readfile + DefaultChatSystemChatEvents）
+    local function safe_readfile(path)
+        local ok, res = pcall(function() if readfile then return readfile(path) end end)
+        if ok then return res end
+        return nil
+    end
+
+    local function SendChatMessageChunk(msg)
+        if not msg or msg == "" then return end
+        -- 常见聊天事件位置（多数环境：ReplicatedStorage.DefaultChatSystemChatEvents）
+        local function fire(msg)
+            local ok,svc = pcall(function() return game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents",2) end)
+            if ok and svc and svc.SayMessageRequest then
+                pcall(function() svc.SayMessageRequest:FireServer(msg, "All") end)
+                return true
+            end
+            -- 备用位置（一些环境可能把事件放在 game:GetService("StarterGui") 或 game:GetService("Players")）
+            local ok2,svc2 = pcall(function() return game:GetService("StarterGui"):WaitForChild("DefaultChatSystemChatEvents",2) end)
+            if ok2 and svc2 and svc2.SayMessageRequest then
+                pcall(function() svc2.SayMessageRequest:FireServer(msg, "All") end)
+                return true
+            end
+            return false
+        end
+        pcall(function() fire(msg) end)
+    end
+
+    local function OutputConfigToChat()
+        local fname = "配置文件v3.lua.txt"
+        local content = safe_readfile(fname)
+        if not content then
+            -- 尝试按文件名小写或相对路径读取
+            content = safe_readfile("./"..fname) or safe_readfile("./"..fname:lower())
+        end
+        if not content then
+            -- 如果无法用 readfile 读取，则尝试把当前脚本作为字符串导出（如果有全局保存）
+            if RawScriptContent and type(RawScriptContent) == "string" then
+                content = RawScriptContent
+            end
+        end
+        if not content then
+            warn("[OutputConfigToChat] 无法读取文件内容（readfile 不可用或文件不存在）")
+            return
+        end
+
+        -- 分段发送（每段控制在 ~1800 字符以内以兼容聊天长度限制）
+        local maxlen = 1800
+        local idx = 1
+        while idx <= #content do
+            local part = content:sub(idx, math.min(#content, idx + maxlen - 1))
+            SendChatMessageChunk(part)
+            idx = idx + maxlen
+            task.wait(0.2)
+        end
+    end
+
+    s:Button({
+        Name = "Output config to chat",
+        Callback = function()
+            task.spawn(function() OutputConfigToChat() end)
         end
     })
 end
@@ -9414,90 +9488,105 @@ RunService.Heartbeat:Connect(function()
 
     -- 选择最终命中点：
     local finalHit = Valid_Pair.Hit
-    if Valid_Pair and Valid_Pair.Origin and Valid_Pair.Hit and CheckWallbang(Valid_Pair.Origin, Valid_Pair.Hit) then
-        finalHit = Valid_Pair.Hit
+
+    -- 新增兼容：当开启 SCAN.DisableRandomHit 时，跳过随机半径采样，优先使用 Valid_Pair.Hit（或回退到 origin/target 中心）
+    local disableRandomHit = (SCAN and SCAN.DisableRandomHit) or false
+    if disableRandomHit then
+        if Valid_Pair and Valid_Pair.Origin and Valid_Pair.Hit then
+            if CheckWallbang(Valid_Pair.Origin, Valid_Pair.Hit) then
+                finalHit = Valid_Pair.Hit
+            else
+                finalHit = Valid_Pair.Origin
+            end
+        else
+            finalHit = (Valid_Pair and (Valid_Pair.Hit or Valid_Pair.Origin)) or finalHit
+        end
     else
-        if Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character then
-            local myPos = GetLocalRealPosition()
-            local tPos = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart") and Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart").Position or Valid_Pair.Hit
-            local pole = (tPos - myPos)
-            if pole.Magnitude > 0.001 then
-                local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
-                local t1 = pole:Cross(arb)
-                if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
-                t1 = t1.Unit
-                local t2 = pole:Cross(t1).Unit
+        if Valid_Pair and Valid_Pair.Origin and Valid_Pair.Hit and CheckWallbang(Valid_Pair.Origin, Valid_Pair.Hit) then
+            finalHit = Valid_Pair.Hit
+        else
+            if Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character then
+                local myPos = GetLocalRealPosition()
+                local tPos = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart") and Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart").Position or Valid_Pair.Hit
+                local pole = (tPos - myPos)
+                if pole.Magnitude > 0.001 then
+                    local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+                    local t1 = pole:Cross(arb)
+                    if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
+                    t1 = t1.Unit
+                    local t2 = pole:Cross(t1).Unit
 
-                -- 自适应半径來源：優先使用 Valid_Pair.HitRadiusUsed，否則使用配置 Hit_Radius
-                local rbase = (Valid_Pair.HitRadiusUsed and Valid_Pair.HitRadiusUsed > 0) and Valid_Pair.HitRadiusUsed or Hit_Radius
-                if rbase <= 0 then rbase = Hit_Radius end
+                    -- 自适应半径來源：優先使用 Valid_Pair.HitRadiusUsed，否則使用配置 Hit_Radius
+                    local rbase = (Valid_Pair.HitRadiusUsed and Valid_Pair.HitRadiusUsed > 0) and Valid_Pair.HitRadiusUsed or Hit_Radius
+                    if rbase <= 0 then rbase = Hit_Radius end
 
-                -- 若 EXPAND_HIT_RADIUS 开启，使用更大的 sampling 半径（上限 30），但最终实际发射会被 clamp 到 <=25
-                if EXPAND_HIT_RADIUS then rbase = math.min(30, rbase * 1.25) end
+                    -- 若 EXPAND_HIT_RADIUS 开启，使用更大的 sampling 半径（上限 30），但最终实际发射会被 clamp 到 <=25
+                    if EXPAND_HIT_RADIUS then rbase = math.min(30, rbase * 1.25) end
 
-                -- MODE_HIT_BOOST 在射击阶段也生效（提高命中半径 sampling）
-                local boost = ModeHitBoostFactor(SCAN.Mode)
-                rbase = math.min(30, rbase * boost)
+                    -- MODE_HIT_BOOST 在射击阶段也生效（提高命中半径 sampling）
+                    local boost = ModeHitBoostFactor(SCAN.Mode)
+                    rbase = math.min(30, rbase * boost)
 
-                local dist = pole.Magnitude
-                local distFactor = math.clamp(dist / 50, 0.2, 1)
-                local rmax = math.min(math.max(rbase * distFactor, 0.1), math.max(4, rbase))
+                    local dist = pole.Magnitude
+                    local distFactor = math.clamp(dist / 50, 0.2, 1)
+                    local rmax = math.min(math.max(rbase * distFactor, 0.1), math.max(4, rbase))
 
-                local found = false
-                for i=1,8 do
-                    local theta = math.random() * 2 * math.pi
-                    local r = rmax * math.sqrt(math.random())
-                    local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-                    local cand = (Valid_Pair.Hit or tPos) + offsetVec
-                    -- 确保实际发射点不超过 25（服务器实际发射范围限制）
-                    if EXPAND_HIT_RADIUS then cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand end
-                    if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
-                end
-
-                if not found then
-                    for j=1,3 do
-                        local rr = rmax * (1 - j*0.3)
-                        if rr <= 0 then break end
-                        for i=1,6 do
-                            local theta = math.random() * 2 * math.pi
-                            local r = rr * math.sqrt(math.random())
-                            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-                            local cand = (Valid_Pair.Hit or tPos) + offsetVec
-                            if EXPAND_HIT_RADIUS then cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand end
-                            if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
-                        end
-                        if found then break end
-                    end
-                end
-
-                if not found then
-                    for i=1,6 do
+                    local found = false
+                    for i=1,8 do
                         local theta = math.random() * 2 * math.pi
-                        local r = Hit_Radius * math.sqrt(math.random())
+                        local r = rmax * math.sqrt(math.random())
                         local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-                        local cand = tPos + offsetVec
+                        local cand = (Valid_Pair.Hit or tPos) + offsetVec
+                        -- 确保实际发射点不超过 25（服务器实际发射范围限制）
                         if EXPAND_HIT_RADIUS then cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand end
                         if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
                     end
-                end
 
-                -- 如果仍未找到且启用了 Scan On Fire，则进行更密集的快速扫描来验证命中点（优先使用）
-                if not found and SCAN_ON_FIRE_ENABLED then
-                    for i=1,24 do
-                        local theta = math.random() * 2 * math.pi
-                        local r = math.min(25, rmax*1.2) * math.sqrt(math.random())
-                        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-                        local cand = (Valid_Pair.Hit or tPos) + offsetVec
-                        cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand
-                        if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
+                    if not found then
+                        for j=1,3 do
+                            local rr = rmax * (1 - j*0.3)
+                            if rr <= 0 then break end
+                            for i=1,6 do
+                                local theta = math.random() * 2 * math.pi
+                                local r = rr * math.sqrt(math.random())
+                                local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                                local cand = (Valid_Pair.Hit or tPos) + offsetVec
+                                if EXPAND_HIT_RADIUS then cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand end
+                                if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
+                            end
+                            if found then break end
+                        end
                     end
-                end
 
-                if not found then
-                    if CheckWallbang(Valid_Pair.Origin, tPos) then finalHit = tPos else finalHit = Valid_Pair.Hit or tPos end
+                    if not found then
+                        for i=1,6 do
+                            local theta = math.random() * 2 * math.pi
+                            local r = Hit_Radius * math.sqrt(math.random())
+                            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                            local cand = tPos + offsetVec
+                            if EXPAND_HIT_RADIUS then cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand end
+                            if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
+                        end
+                    end
+
+                    -- 如果仍未找到且启用了 Scan On Fire，则进行更密集的快速扫描来验证命中点（优先使用）
+                    if not found and SCAN_ON_FIRE_ENABLED then
+                        for i=1,24 do
+                            local theta = math.random() * 2 * math.pi
+                            local r = math.min(25, rmax*1.2) * math.sqrt(math.random())
+                            local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                            local cand = (Valid_Pair.Hit or tPos) + offsetVec
+                            cand = (Valid_Pair.Origin and (Valid_Pair.Origin + (cand-Valid_Pair.Origin).Unit * math.min((cand-Valid_Pair.Origin).Magnitude,25))) or cand
+                            if CheckWallbang(Valid_Pair.Origin, cand) then finalHit = cand; found=true; break end
+                        end
+                    end
+
+                    if not found then
+                        if CheckWallbang(Valid_Pair.Origin, tPos) then finalHit = tPos else finalHit = Valid_Pair.Hit or tPos end
+                    end
+                else
+                    finalHit = Valid_Pair.Hit or Valid_Pair.Origin
                 end
-            else
-                finalHit = Valid_Pair.Hit or Valid_Pair.Origin
             end
         end
     end
@@ -9508,10 +9597,22 @@ RunService.Heartbeat:Connect(function()
         if vec.Magnitude > 25 then finalHit = Valid_Pair.Origin + vec.Unit * 25 end
     end
 
-    local dir=(finalHit-Valid_Pair.Origin).Unit
-    GN_S:FireServer(tick(),key,tool,"FDS9I83",Valid_Pair.Origin,{dir},false)
-    if TR.Enabled then task.spawn(CreateTracer,Valid_Pair.Origin,dir) end
-    ZF_H:FireServer("🧈",tool,key,1,part,finalHit,dir)
+    -- 准备发送给服务器的 DS 偏移与起点（保持兼容：当 DS 不存在或为 Vector3.zero 时发送零向量）
+    local dsOff = (DS and DS.AppliedOffset) and DS.AppliedOffset or Vector3.new(0,0,0)
+    local sendOrigin = Valid_Pair.Origin and (Valid_Pair.Origin + dsOff) or dsOff
+
+    -- 计算方向向量时使用 sendOrigin（以确保服务器接受到相同的起点/方向）
+    local dir = Vector3.new(0,0,1)
+    if finalHit and sendOrigin then
+        local diff = finalHit - sendOrigin
+        if diff.Magnitude > 0 then dir = diff.Unit end
+    end
+
+    -- 发送给服务器：向后兼容地在参数末尾追加 dsOff （服务器若只接收前面参数则可忽略多余参数）
+    GN_S:FireServer(tick(),key,tool,"FDS9I83",sendOrigin,{dir},false, dsOff)
+    if TR.Enabled then task.spawn(CreateTracer, sendOrigin, dir) end
+    -- 也把 DS 偏移附带到 ZF_H（或其它服务器事件）供服务器同步使用
+    ZF_H:FireServer("🧈",tool,key,1,part,finalHit,dir, dsOff)
     if tool:FindFirstChild("Hitmarker") then tool.Hitmarker:Fire(part) end
 
     -- Hit log processing 与命中记录保存
