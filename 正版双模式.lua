@@ -6978,8 +6978,22 @@ local function StartMeleeLoop()
                                     if hitPart then
                                         local handle = tool:FindFirstChild("WeaponHandle") or tool:FindFirstChild("Handle") or char:FindFirstChild("Left Arm")
                                         local a = {"🍞",tick(),tool,"2389ZFX34",res,true,handle,hitPart,tChar,myPos,hitPart.Position}
-                                        if tool.Name=="Chainsaw" then for i=1,15 do MA.Remote2:FireServer(unpack(a)) end else MA.Remote2:FireServer(unpack(a)) end
-                                        MA.LastHit = tick(); break
+                                        -- 立即记录上次命中时间，保持速度节奏
+                                        MA.LastHit = tick()
+                                        -- 异步发送 Remote2，主循环不等待发送结束就可进行下一轮 Remote1
+                                        if tool.Name=="Chainsaw" then
+                                            task.spawn(function()
+                                                for i=1,15 do MA.Remote2:FireServer(unpack(a)) end
+                                            end)
+                                        else
+                                            task.spawn(function()
+                                                for i=1,4 do
+                                                    MA.Remote2:FireServer(unpack(a))
+                                                    task.wait(0.3)
+                                                end
+                                            end)
+                                        end
+                                        break
                                     end
                                 end
                             end
