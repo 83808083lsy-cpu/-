@@ -8232,13 +8232,48 @@ do
     -- 确保 SCAN 表存在
     SCAN = SCAN or {}
     SCAN.OriginalQuad = SCAN.OriginalQuad or false
-    -- Toggle 控件：Original 四轮模式（开启后单数轮由双轮 -> 四轮）
+    SCAN.AutoRelock = SCAN.AutoRelock or false
+    SCAN.TransientReuse = SCAN.TransientReuse or false
+    SCAN.TransientTime = SCAN.TransientTime or 1
+
+    -- Toggle 控件：Original 四轮模式（开启后单数轮由单轮 -> 四轮）
     s:Toggle({
         Name = "Original 四轮模式",
         Flag = "OriginalQuad",
         Value = SCAN.OriginalQuad,
         Callback = function(v)
             SCAN.OriginalQuad = v
+        end
+    })
+
+    -- 新增：自动重检：当复用路径时若玩家离有效轨迹超过 5 米则重新寻找
+    s:Toggle({
+        Name = "Auto re-search when >5m",
+        Flag = "SCAN_AutoRelock",
+        Value = SCAN.AutoRelock,
+        Callback = function(v)
+            SCAN.AutoRelock = v
+        end
+    })
+
+    -- 新增：短暂复用（Transient reuse）及时间调节（0.1 - 3 秒）
+    s:Toggle({
+        Name = "Transient reuse on loss",
+        Flag = "SCAN_TransientReuse",
+        Value = SCAN.TransientReuse,
+        Callback = function(v)
+            SCAN.TransientReuse = v
+        end
+    })
+    s:Slider({
+        Name = "Transient time (s)",
+        Flag = "SCAN_TransientTime",
+        Min = 0.1,
+        Max = 3,
+        Default = SCAN.TransientTime,
+        Decimals = 0.1,
+        Callback = function(v)
+            SCAN.TransientTime = v
         end
     })
 end
@@ -8634,7 +8669,7 @@ end
 -- =====================================================================
 -- == 解析2（已替换）：基于视线垂直平面的圆盤均匀采样（黄金角 / Vogel，优化版）
 -- == - 返回包含 center 的列表
--- == - 单数轮时支持双轮或四轮（由 SCAN.OriginalQuad 控制）
+-- == - 单数轮时支持单轮或四轮（由 SCAN.OriginalQuad 控制）
 -- =====================================================================
 local function GetOffsets_Algo2(center, poleDir, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
@@ -8662,7 +8697,7 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
         table.insert(offsets, center + t1 * x + t2 * y)
     end
 
-    -- 单数轮交错采样：根据 SCAN.OriginalQuad 决定是双轮（+1 phase）还是四轮（+3 phases）
+    -- 单数轮交错采样：根据 SCAN.OriginalQuad 决定行为
     if WB and (WB.Round % 2 == 1) then
         if SCAN and SCAN.OriginalQuad then
             -- 四轮：加入 3 个相位偏移（与主轮互补），相位分别为 golden * 0.25, 0.5, 0.75
@@ -8682,20 +8717,7 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
                 end
             end
         else
-            -- 双轮（原先行为）：单一相位偏移（golden * 0.5）
-            local phase = golden * 0.5
-            for i = 1, baseCount do
-                local r = radius * math.sqrt(math.max(0, (i - 0.5) / baseCount))
-                local theta = i * golden + phase
-                local x = math.cos(theta) * r
-                local y = math.sin(theta) * r
-                local pt = center + t1 * x + t2 * y
-                local isDup = false
-                for _, v in ipairs(offsets) do
-                    if (v - pt).Magnitude < 1e-3 then isDup = true; break end
-                end
-                if not isDup then table.insert(offsets, pt) end
-            end
+            -- 单轮：不添加额外相位（保持主轮采样）
         end
     end
 
@@ -8852,43 +8874,69 @@ local function DoRagebot()
 
     -- 1. 缓存机制（加强：在缓存命中时做局部持续精化扫描）
     if Locked_Path then
-        local dO=(myPos-Locked_Path.MyPos).Magnitude
-        local dH=(tPos-Locked_Path.TPos).Magnitude
-        local inRange=(myPos-Locked_Path.AbsO).Magnitude<=Origin_Radius
-                   and (tPos-Locked_Path.AbsH).Magnitude<=Hit_Radius
-        -- 使用 CacheHitTolerance 如果开启则扩大匹配容差
-        local tol = WB.CacheHitToleranceEnabled and (WB.CacheHitTolerance or 0.3) or 0
-        if dO<=WB.Threshold + tol and dH<=WB.Threshold + tol and inRange then
-            if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
-                Locked_Path.FastScanUntil = tick() + 0.6
-                local refined = false
-                local refineRadius = math.min(3, Hit_Radius * 0.2)
-                for i = 1, 8 do
-                    local theta = math.random() * 2 * math.pi
-                    local r = refineRadius * math.sqrt(math.random())
-                    local pole = (tPos - myPos)
-                    local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
-                    local t1 = pole:Cross(arb)
-                    if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
-                    t1 = t1.Unit
-                    local t2 = pole:Cross(t1).Unit
-                    local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
-                    local tryH = Locked_Path.AbsH + offsetVec
-                    if CheckWallbang(Locked_Path.AbsO, tryH) then
-                        Locked_Path.AbsH = tryH
-                        Locked_Path.RefinedAt = tick()
-                        refined = true
-                        break
+        -- 新增：如开启 AutoRelock，当玩家移出有效轨迹一定范围时（固定 5m）自动放弃复用
+        if SCAN and SCAN.AutoRelock and Locked_Path.AbsO and (myPos - Locked_Path.AbsO).Magnitude > 5 then
+            Locked_Path = nil
+        else
+            local dO=(myPos-Locked_Path.MyPos).Magnitude
+            local dH=(tPos-Locked_Path.TPos).Magnitude
+            local inRange=(myPos-Locked_Path.AbsO).Magnitude<=Origin_Radius
+                       and (tPos-Locked_Path.AbsH).Magnitude<=Hit_Radius
+            -- 使用 CacheHitTolerance 如果开启则扩大匹配容差
+            local tol = WB.CacheHitToleranceEnabled and (WB.CacheHitTolerance or 0.3) or 0
+            if dO<=WB.Threshold + tol and dH<=WB.Threshold + tol and inRange then
+                local now = tick()
+                if CheckWallbang(Locked_Path.AbsO,Locked_Path.AbsH) then
+                    Locked_Path.FastScanUntil = now + 0.6
+                    Locked_Path.TransientStart = nil
+                    local refined = false
+                    local refineRadius = math.min(3, Hit_Radius * 0.2)
+                    for i = 1, 8 do
+                        local theta = math.random() * 2 * math.pi
+                        local r = refineRadius * math.sqrt(math.random())
+                        local pole = (tPos - myPos)
+                        local arb = math.abs(pole.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+                        local t1 = pole:Cross(arb)
+                        if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = pole:Cross(arb) end
+                        t1 = t1.Unit
+                        local t2 = pole:Cross(t1).Unit
+                        local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                        local tryH = Locked_Path.AbsH + offsetVec
+                        if CheckWallbang(Locked_Path.AbsO, tryH) then
+                            Locked_Path.AbsH = tryH
+                            Locked_Path.RefinedAt = tick()
+                            refined = true
+                            break
+                        end
+                    end
+
+                    Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target,Sampled=Locked_Path.Sampled}
+                    Valid_Pair.HitRadiusUsed = Locked_Path.HitRadiusUsed or Hit_Radius
+                    WB.Cached=true
+                    return
+                else
+                    -- 若开启短暂复用（Transient reuse），在设定时间内继续复用旧路径，若在时间内再次验证成功则重置计时
+                    if SCAN and SCAN.TransientReuse then
+                        if not Locked_Path.TransientStart then Locked_Path.TransientStart = now end
+                        local allowed = SCAN.TransientTime and SCAN.TransientTime or 1
+                        if now - Locked_Path.TransientStart <= allowed then
+                            Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target,Sampled=Locked_Path.Sampled}
+                            Valid_Pair.HitRadiusUsed = Locked_Path.HitRadiusUsed or Hit_Radius
+                            WB.Cached=true
+                            return
+                        else
+                            -- 超时，放弃复用
+                            Locked_Path.TransientStart = nil
+                            Locked_Path = nil
+                        end
+                    else
+                        Locked_Path = nil
                     end
                 end
-
-                Valid_Pair={Origin=Locked_Path.AbsO,Hit=Locked_Path.AbsH,Target=target,Sampled=Locked_Path.Sampled}
-                Valid_Pair.HitRadiusUsed = Locked_Path.HitRadiusUsed or Hit_Radius
-                WB.Cached=true
-                return
+            else
+                Locked_Path=nil
             end
         end
-        Locked_Path=nil
     end
 
     -- 2. 扫描速率限制（支持当已锁定路径时短时快速复检）
