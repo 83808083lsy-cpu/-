@@ -6684,7 +6684,7 @@ end
 
 local function ProcessHitLog(tName, toolName, dmg, dist, cached)
     local s = string.format("rgb(%d,%d,%d)", 200,200,200)
-    local g = string.format("rgb(%d,%d,%d)", 0,255,0)
+    local g = string.format("rgb(%d,%d,%d)", 255,105,180)
     local ct = cached and string.format(' <font color="%s">Via Cache</font>', g) or ""
     AddLogEntry(string.format(
         '<font color="%s">Hit </font><font color="%s">%s </font><font color="%s">use </font>'..
@@ -8225,13 +8225,15 @@ do -- PlayerList page
     pR:Button({Name="Clear Whitelist", Callback=function() WhiteList={}; pcall(function() PL_WhiteSearch:Set({}) end) end})
 end
 
--- 新增：Scan Settings 页面（含 Original 四轮模式开关）
+-- 新增：Scan Settings 页面（含 Original 四轮模式开关、六轮、双轮、提前射击设置等）
 do
     local Page = Window:Page({Name="ScanSettings", SubPages=false})
     local s = Page:Section({Name="Scan Mode", Side=1})
     -- 确保 SCAN 表存在
     SCAN = SCAN or {}
     SCAN.OriginalQuad = SCAN.OriginalQuad or false
+    SCAN.OriginalSix  = SCAN.OriginalSix  or false
+    SCAN.OriginalDual = SCAN.OriginalDual or false
     SCAN.AutoRelock = SCAN.AutoRelock or false
     SCAN.TransientReuse = SCAN.TransientReuse or false
     SCAN.TransientTime = SCAN.TransientTime or 1
@@ -8243,6 +8245,29 @@ do
         Value = SCAN.OriginalQuad,
         Callback = function(v)
             SCAN.OriginalQuad = v
+        end
+    })
+
+    -- 新增：Original 六轮模式（单数轮展开为六相位）
+    s:Toggle({
+        Name = "Original 六轮模式",
+        Flag = "OriginalSix",
+        Value = SCAN.OriginalSix,
+        Callback = function(v)
+            SCAN.OriginalSix = v
+            if v then SCAN.OriginalQuad = false end -- 互斥提示行为（UI 层面）
+        end
+    })
+
+    -- 新增：Original 双轮模式（单数轮展开为双相位）
+    s:Toggle({
+        Name = "Original 双轮模式",
+        Flag = "OriginalDual",
+        Value = SCAN.OriginalDual,
+        Callback = function(v)
+            SCAN.OriginalDual = v
+            if v then SCAN.OriginalQuad = false end
+            if v then SCAN.OriginalSix = false end
         end
     })
 
@@ -8275,6 +8300,66 @@ do
         Callback = function(v)
             SCAN.TransientTime = v
         end
+    })
+
+    -- 新增：提前射击（基于自身坐标提前扫描可用点并在接近可用点时提前触发）
+    SCAN.PrefireEnabled = SCAN.PrefireEnabled or false
+    SCAN.PrefireTrigger = SCAN.PrefireTrigger or 6 -- 触发距离（m）
+    SCAN.PrefireMaxDist = SCAN.PrefireMaxDist or 6 -- 预扫描最大距离（m）
+
+    s:Toggle({
+        Name = "预检并提前射击 (靠近可用点提前开火)",
+        Flag = "SCAN_PrefireEnabled",
+        Value = SCAN.PrefireEnabled,
+        Callback = function(v) SCAN.PrefireEnabled = v end
+    })
+    s:Slider({
+        Name = "提前触发距离 (m, 最大 19.5)",
+        Flag = "SCAN_PrefireTrigger",
+        Min = 1,
+        Max = 19.5,
+        Default = SCAN.PrefireTrigger,
+        Decimals = 0.1,
+        Callback = function(v) SCAN.PrefireTrigger = v end
+    })
+    s:Slider({
+        Name = "预扫描最大距离 (m, 最大 19.5)",
+        Flag = "SCAN_PrefireMaxDist",
+        Min = 1,
+        Max = 19.5,
+        Default = SCAN.PrefireMaxDist,
+        Decimals = 0.1,
+        Callback = function(v) SCAN.PrefireMaxDist = v end
+    })
+
+    -- 新增：基于敌人动向的预测提前射击
+    SCAN.PredictivePrefire = SCAN.PredictivePrefire or false
+    SCAN.PredictiveTime = SCAN.PredictiveTime or 0.12
+    SCAN.PredictiveRadius = SCAN.PredictiveRadius or 2.5
+
+    s:Toggle({
+        Name = "根据敌人动向预测提前射击",
+        Flag = "SCAN_PredictivePrefire",
+        Value = SCAN.PredictivePrefire,
+        Callback = function(v) SCAN.PredictivePrefire = v end
+    })
+    s:Slider({
+        Name = "敌人预测时间 (s)",
+        Flag = "SCAN_PredictiveTime",
+        Min = 0.02,
+        Max = 0.5,
+        Default = SCAN.PredictiveTime,
+        Decimals = 0.02,
+        Callback = function(v) SCAN.PredictiveTime = v end
+    })
+    s:Slider({
+        Name = "敌人预测容差半径 (m)",
+        Flag = "SCAN_PredictiveRadius",
+        Min = 0.5,
+        Max = 6,
+        Default = SCAN.PredictiveRadius,
+        Decimals = 0.1,
+        Callback = function(v) SCAN.PredictiveRadius = v end
     })
 end
 
@@ -8669,7 +8754,7 @@ end
 -- =====================================================================
 -- == 解析2（已替换）：基于视线垂直平面的圆盤均匀采样（黄金角 / Vogel，优化版）
 -- == - 返回包含 center 的列表
--- == - 单数轮时支持单轮或四轮（由 SCAN.OriginalQuad 控制）
+-- == - 单数轮时支持单轮或四轮（由 SCAN.OriginalQuad/OriginalSix/OriginalDual 控制）
 -- =====================================================================
 local function GetOffsets_Algo2(center, poleDir, radius, count)
     if not radius or radius <= 0 or count <= 0 then return {center} end
@@ -8697,11 +8782,19 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
         table.insert(offsets, center + t1 * x + t2 * y)
     end
 
-    -- 单数轮交错采样：根据 SCAN.OriginalQuad 决定行为
+    -- 单数轮交错采样：根据 SCAN 设置决定行为（支持 OriginalSix / OriginalQuad / OriginalDual）
     if WB and (WB.Round % 2 == 1) then
-        if SCAN and SCAN.OriginalQuad then
-            -- 四轮：加入 3 个相位偏移（与主轮互补），相位分别为 golden * 0.25, 0.5, 0.75
-            local phases = { golden * 0.25, golden * 0.5, golden * 0.75 }
+        local phases = nil
+        if SCAN and SCAN.OriginalSix then
+            phases = {}
+            for k=1,5 do table.insert(phases, golden * (k/6)) end
+        elseif SCAN and SCAN.OriginalQuad then
+            phases = { golden * 0.25, golden * 0.5, golden * 0.75 }
+        elseif SCAN and SCAN.OriginalDual then
+            phases = { golden * 0.5 }
+        end
+
+        if phases then
             for _, phase in ipairs(phases) do
                 for i = 1, baseCount do
                     local r = radius * math.sqrt(math.max(0, (i - 0.5) / baseCount))
@@ -8716,8 +8809,6 @@ local function GetOffsets_Algo2(center, poleDir, radius, count)
                     if not isDup then table.insert(offsets, pt) end
                 end
             end
-        else
-            -- 单轮：不添加额外相位（保持主轮采样）
         end
     end
 
@@ -8810,6 +8901,66 @@ local function HasTEC9(playerName)
     end
 
     if node:FindFirstChild("TEC-9") then return true end
+
+    return false
+end
+
+-- =====================================================================
+-- == 新增辅助：预扫描/提前射击判断函数
+-- =====================================================================
+local function CheckPrefireCondition(origin, finalHit, validPair)
+    -- 返回 true 表示满足提前射击条件（会在外层的发射逻辑中直接使用 finalHit）
+    if not SCAN or not SCAN.PrefireEnabled then return false end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local vel = hrp.Velocity or Vector3.zero
+    local prefTrigger = SCAN.PrefireTrigger or 6
+    local prefMax = SCAN.PrefireMaxDist or 6
+    -- 1) 基于自身运动方向的前向预扫描：在自身前方沿速度方向做分段采样，若任一点到 finalHit 有合法弹道则提前发射
+    if vel.Magnitude > 0.5 then
+        local dir = vel.Unit
+        local steps = math.max(1, math.floor(prefMax))
+        for s = 1, steps do
+            local stepDist = math.min(s, prefMax)
+            local futurePos = hrp.Position + dir * stepDist
+            -- 判断离 origin 的距离是否在触发范围内（靠近 origin 时才触发）
+            if (futurePos - origin).Magnitude <= prefTrigger then
+                local ok, valid = pcall(function() return CheckWallbang(futurePos, finalHit) end)
+                if ok and valid then
+                    return true
+                end
+            end
+        end
+        -- 另外：若当前离 origin 本体就已经接近，则也尝试用当前位置（或小位移）判断
+        if (hrp.Position - origin).Magnitude <= prefTrigger then
+            local ok, valid = pcall(function() return CheckWallbang(hrp.Position, finalHit) end)
+            if ok and valid then return true end
+        end
+    else
+        -- 站立不动时，也可以基于与 origin 的距离触发一次快速检测
+        if (hrp.Position - origin).Magnitude <= prefTrigger then
+            local ok, valid = pcall(function() return CheckWallbang(hrp.Position, finalHit) end)
+            if ok and valid then return true end
+        end
+    end
+
+    -- 2) 基于敌人动向的预测提前射击（若开启）
+    if SCAN.PredictivePrefire and validPair and validPair.Target and validPair.Target.Character then
+        local tRoot = validPair.Target.Character:FindFirstChild("HumanoidRootPart")
+        if tRoot then
+            local tvel = tRoot.Velocity or Vector3.zero
+            local ptime = SCAN.PredictiveTime or 0.12
+            local predPos = tRoot.Position + tvel * ptime
+            local tol = SCAN.PredictiveRadius or 2.5
+            if (predPos - finalHit).Magnitude <= tol then
+                local ok, valid = pcall(function() return CheckWallbang(origin, predPos) end)
+                if ok and valid then
+                    return true
+                end
+            end
+        end
+    end
 
     return false
 end
@@ -8991,7 +9142,7 @@ local function DoRagebot()
             else
                 oPole = oPole.Unit
             end
-            local forward_offset = myPos + oPole * math.min(Origin_Radius, 19)
+            local forward_offset = myPos + oPole * math.min(Origin_Radius, 19.5)
             newOrigin = GetOffsets_Algo2(myPos, oPole, Origin_Radius, Origin_Scans)
             if WB.Round % 4 == 0 then
                 local inserted = false
@@ -9550,12 +9701,21 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
+    -- 新增：提前射击判断（若满足条件，允许在到达 origin 前提前开火）
+    local doPrefire = false
+    local ok, preRes = pcall(function() return CheckPrefireCondition(Valid_Pair.Origin or GetLocalRealPosition(), finalHit, Valid_Pair) end)
+    if ok and preRes then
+        doPrefire = true
+    end
+
     -- 最终 ensure：如果开启了 ExpandHitRadius，需要对 finalHit 做 clamp（不超过 25 单位）
     if EXPAND_HIT_RADIUS and Valid_Pair and Valid_Pair.Origin then
         local vec = finalHit - Valid_Pair.Origin
         if vec.Magnitude > 25 then finalHit = Valid_Pair.Origin + vec.Unit * 25 end
     end
 
+    -- 如果不是预先触发且距离/时间不符合，仍按常规等待（上面已经有 Last_Shot 与 waitTime 限制）
+    -- 直接发射
     local dir=(finalHit-Valid_Pair.Origin).Unit
     GN_S:FireServer(tick(),key,tool,"FDS9I83",Valid_Pair.Origin,{dir},false)
     if TR.Enabled then task.spawn(CreateTracer,Valid_Pair.Origin,dir) end
