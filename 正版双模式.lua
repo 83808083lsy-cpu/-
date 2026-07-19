@@ -8073,6 +8073,9 @@ do -- ESP
     end
 end
 
+-- 原始脚本开头（省略上下文部分保留原有内容） - 我在原脚本基础上插入了新函数并在 DoRagebot 中调用它们。
+-- 请用你已有的完整脚本替换同名部分；下面为完整文件（包含新增函数和与 DoRagebot 的集成）
+
 do -- Player page
     local Page = Window:Page({Name="Player", SubPages=true})
     local Sub  = Page:SubPage({Name="Physical", Columns=2})
@@ -8966,6 +8969,208 @@ local function CheckPrefireCondition(origin, finalHit, validPair)
 end
 
 -- =====================================================================
+-- == 新增：Hitbox 多点采样 + 射线预测检测（核心新增部分）
+-- == 说明：
+-- ==  - GenerateHitboxSamples：返回目标若干采样点（包含头/躯干/四肢中心与周围环形）
+-- ==  - PredictSamplePos：根据子弹速度估算飞行时间并补偿目标速度得到预测点
+-- ==  - EvaluateHitboxSamples：从枪口发射射线到每个预测点，若命中点属于目标角色，即判定为有效采样点
+-- ==  - FindBestHitboxSample：外层封装，返回最优的世界击中点（或 nil）
+-- =====================================================================
+
+-- 将世界坐标投影到屏幕 2D（返回 Vector2, onScreen）
+local function ProjectToScreen(pos)
+    if not Camera then return Vector2.new(0,0), false end
+    local x,y,on = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(x,y), on
+end
+
+-- 尝试获取武器枪口/发射点位置（优先 Muzzle/Barrel/Handle/PrimaryPart）
+local function GetMuzzlePosition(tool)
+    if not tool then
+        -- fallback: camera origin + forward offset
+        if Camera then return Camera.CFrame.Position + Camera.CFrame.LookVector * 0.5 end
+        return GetLocalRealPosition()
+    end
+    local partsToCheck = {"Muzzle","Barrel","BarrelEnd","Tip","Handle","Grip","PrimaryPart"}
+    for _, name in ipairs(partsToCheck) do
+        local p = tool:FindFirstChild(name, true)
+        if p and p:IsA("BasePart") then return p.Position end
+    end
+    -- PrimaryPart fallback
+    if tool.PrimaryPart and tool.PrimaryPart:IsA("BasePart") then return tool.PrimaryPart.Position end
+    -- handle fallback
+    local h = tool:FindFirstChild("Handle")
+    if h and h:IsA("BasePart") then return h.Position end
+    -- camera fallback
+    if Camera then return Camera.CFrame.Position + Camera.CFrame.LookVector * 0.5 end
+    -- ultimate fallback
+    return GetLocalRealPosition()
+end
+
+-- 生成基于骨骼的多个采样点：head/torso/root/limbs + 环形偏移
+-- opts:
+--   samplesPerPart (默认 6), ringRadiusMultiplier (默认 0.5)
+local function GenerateHitboxSamples(character, opts)
+    opts = opts or {}
+    local samplesPerPart = opts.samplesPerPart or 6
+    local ringMul = opts.ringRadiusMultiplier or 0.5
+    local samples = {}
+    if not character then return samples end
+
+    local function addPartSamples(part)
+        if not part or not part:IsA("BasePart") then return end
+        -- 中心点
+        table.insert(samples, part.Position)
+        -- 环形点
+        local r = math.max( (part.Size.X + part.Size.Y + part.Size.Z) / 6 * ringMul, 0.12 )
+        -- 构建局部基
+        local arb = math.abs(part.CFrame.LookVector.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+        local t1 = part.CFrame.LookVector:Cross(arb)
+        if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = part.CFrame.LookVector:Cross(arb) end
+        t1 = t1.Unit
+        local t2 = part.CFrame.LookVector:Cross(t1).Unit
+        for i=1,samplesPerPart do
+            local ang = (i/samplesPerPart)*2*math.pi
+            local off = t1 * (math.cos(ang)*r) + t2 * (math.sin(ang)*r)
+            table.insert(samples, part.Position + off)
+        end
+    end
+
+    -- 常用部位顺序
+    local head = character:FindFirstChild("Head")
+    local upper = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    local larm = character:FindFirstChild("LeftUpperArm") or character:FindFirstChild("Left Arm") or character:FindFirstChild("LeftLowerArm")
+    local rarm = character:FindFirstChild("RightUpperArm") or character:FindFirstChild("Right Arm") or character:FindFirstChild("RightLowerArm")
+    local lleg = character:FindFirstChild("LeftUpperLeg") or character:FindFirstChild("Left Leg") or character:FindFirstChild("LeftLowerLeg")
+    local rleg = character:FindFirstChild("RightUpperLeg") or character:FindFirstChild("Right Leg") or character:FindFirstChild("RightLowerLeg")
+
+    addPartSamples(head)
+    addPartSamples(upper)
+    addPartSamples(root)
+    addPartSamples(larm)
+    addPartSamples(rarm)
+    addPartSamples(lleg)
+    addPartSamples(rleg)
+
+    return samples
+end
+
+-- 预测采样点位置（基于子弹速度和目标速度）
+-- muzzlePos: Vector3, samplePos: Vector3, targetVel: Vector3, bulletVel: number
+-- 限制最大预测时间以避免过度预测
+local function PredictSamplePos(muzzlePos, samplePos, targetVel, bulletVel)
+    if not muzzlePos or not samplePos then return samplePos end
+    if not bulletVel or bulletVel <= 1 then return samplePos end
+    local dist = (samplePos - muzzlePos).Magnitude
+    local t = dist / bulletVel
+    local maxT = 0.6 -- 上限（秒），可调
+    if t > maxT then t = maxT end
+    return samplePos + (targetVel or Vector3.zero) * t
+end
+
+-- 判断实例是否属于某个角色
+local function IsInstanceOfCharacter(inst, character)
+    if not inst or not character then return false end
+    local cur = inst
+    while cur do
+        if cur == character then return true end
+        cur = cur.Parent
+    end
+    return false
+end
+
+-- Evaluate samples: 从 muzzle 发射带预测的射线，检测是否命中目标角色的任意部件
+-- 返回第一个有效命中点与其命中部件（或 nil）
+-- opts: maxSamples (限制检查数), bulletVel (优先使用)
+local function EvaluateHitboxSamples(muzzlePos, samples, targetCharacter, tool, opts)
+    opts = opts or {}
+    local maxSamples = opts.maxSamples or 64
+    local bulletVel = opts.bulletVel or 1100
+    local targetVel = Vector3.zero
+    -- 尝试获取目标速度
+    if targetCharacter and targetCharacter.PrimaryPart then targetVel = targetCharacter.PrimaryPart.Velocity or Vector3.zero
+    else
+        local tRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+        if tRoot then targetVel = tRoot.Velocity or Vector3.zero end
+    end
+
+    -- 如果 tool 有 config 可读速度信息，优先使用
+    if tool then
+        local cfg = tool:FindFirstChild("Config")
+        if cfg and cfg:IsA("ModuleScript") then
+            local ok, gs = pcall(require, cfg)
+            if ok and gs and gs.BulletSettings and gs.BulletSettings.Velocity then bulletVel = tonumber(gs.BulletSettings.Velocity) or bulletVel end
+            if ok and gs and gs.Velocity then bulletVel = tonumber(gs.Velocity) or bulletVel end
+        end
+    end
+
+    local rp = RaycastParams.new()
+    rp.FilterDescendantsInstances = {LocalPlayer.Character, tool}
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.IgnoreWater = true
+
+    local checked = 0
+    for _, s in ipairs(samples) do
+        if checked >= maxSamples then break end
+        checked = checked + 1
+        local pred = PredictSamplePos(muzzlePos, s, targetVel, bulletVel)
+        local dir = pred - muzzlePos
+        if dir.Magnitude <= 0 then
+            -- degenerate
+            if IsInstanceOfCharacter(workspace:FindPartOnRayWithIgnoreList(Ray.new(muzzlePos, Vector3.new(0,0,0)), {LocalPlayer.Character}), targetCharacter) then
+                return s, nil
+            end
+            continue
+        end
+
+        -- 使用 workspace:Raycast（Roblox新版）并检查命中的 Instance 是否属于目标角色
+        local ok, rr = pcall(function() return workspace:Raycast(muzzlePos, dir, rp) end)
+        if ok and rr and rr.Instance then
+            local inst = rr.Instance
+            if IsInstanceOfCharacter(inst, targetCharacter) then
+                -- 成功命中目标角色的部件，返回预测的点（或实际命中位置）
+                -- 我们返回 rr.Position 优先，因为它是实际的碰撞点
+                return rr.Position, inst
+            else
+                -- 若未直接命中目标，可以尝试 CheckWallbang（穿墙检测）作为备选（Cost 较高）
+                local ok2, wb = pcall(function() return CheckWallbang(muzzlePos, pred) end)
+                if ok2 and wb then
+                    -- CheckWallbang 返回真，表示服务器上该点认为是可行弹道 -> 使用 pred
+                    return pred, nil
+                end
+            end
+        else
+            -- 无撞击（未命中），仍尝试 CheckWallbang（稀有场景）
+            local ok3, wb2 = pcall(function() return CheckWallbang(muzzlePos, pred) end)
+            if ok3 and wb2 then
+                return pred, nil
+            end
+        end
+    end
+
+    return nil, nil
+end
+
+-- 外层封装：根据目标角色生成采样点并评估，返回最佳命中点（或 nil）
+-- opts: samplesPerPart, maxSamples, bulletVel
+local function FindBestHitboxSample(origin, targetCharacter, tool, opts)
+    if not targetCharacter or not origin then return nil end
+    opts = opts or {}
+    local samples = GenerateHitboxSamples(targetCharacter, {samplesPerPart = opts.samplesPerPart or 6, ringRadiusMultiplier = opts.ringRadiusMultiplier or 0.6})
+    if #samples == 0 then return nil end
+    local muzzle = GetMuzzlePosition(tool)
+    local best, inst = EvaluateHitboxSamples(muzzle, samples, targetCharacter, tool, {maxSamples = opts.maxSamples or 64, bulletVel = opts.bulletVel})
+    -- 如果 EvaluateHitboxSamples 返回命中实例且命中位置不为 nil，则优先返回命中点
+    if best then return best, inst end
+    return nil
+end
+
+-- =====================================================================
+-- == 新增辅助：预加载/命中容错等集成点将调用 FindBestHitboxSample 来提升命中稳定性
+-- =====================================================================
+
+-- =====================================================================
 -- == 核心 Ragebot 逻辑（其余部分保持不变）
 -- =====================================================================
 
@@ -9331,6 +9536,18 @@ local function DoRagebot()
         if bestPO then break end
     end
 
+    -- 新增：若常规采样未找到有效路径，尝试 Hitbox 多点采样（运动预测 + 枪口发射检测）
+    if (not bestPO or not bestPH) and target and target.Character then
+        local ok, tool = pcall(function() return LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool") end)
+        tool = ok and tool or nil
+        local bestHit, hitInst = FindBestHitboxSample(myPos, target.Character, tool, {samplesPerPart = 6, maxSamples = 64, ringRadiusMultiplier = 0.6, bulletVel = (tool and ( (tool:FindFirstChild("Config") and (pcall(require, tool.Config) and (pcall(require, tool.Config) and (select(2, pcall(require, tool.Config)) and select(2, pcall(require, tool.Config))) ) ) ) ) or 1100) })
+        -- 说明：上面尝试从 tool.Config 里读取速度（如果可用），否则默认 1100
+        if bestHit then
+            bestPO = myPos
+            bestPH = bestHit
+        end
+    end
+
     -- 5. 局部精化：如果找到初步路径，尝试在该路径附近做更密集的随机扫描以提高稳定性
     if bestPO and bestPH then
         local refineRadius = math.min(3, Hit_Radius * 0.25)
@@ -9555,7 +9772,7 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
--- == Ragebot fire Heartbeat (已优化：在最终射击时对采样点进行局部随机化以模拟随机命中，但优先使用上次有效轨迹) ==
+-- == Ragebot fire Heartbeat: 在最终射击时对采样点进行局部随机化以模拟随机命中，但优先使用上次有效轨迹 ==
 RunService.Heartbeat:Connect(function()
     if not RB_State or not Valid_Pair then return end
     local char=LocalPlayer.Character
