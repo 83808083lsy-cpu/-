@@ -7903,7 +7903,7 @@ do -- Combat page
         s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=19.5, Default=20, Decimals=0.01, Callback=function(v) Origin_Radius=v; UpdateAutoAdjustScans() end})
         s1:Slider({Name="Origin Scans", Flag="CAT_Origin_Scans_32", Min=1,   Max=50, Default=24,    Callback=function(v) Origin_Scans=math.floor(v) end})
         s1:Slider({Name="Scan Rate",    Flag="CAT_Scan_Rate",       Min=1,   Max=200, Default=60,    Callback=function(v) ScanRate=math.floor(v) end})
-        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=26, Default=25, Decimals=0.01, Callback=function(v) Hit_Radius=v; UpdateAutoAdjustScans() end})
+        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=24.5, Default=25, Decimals=0.01, Callback=function(v) Hit_Radius=v; UpdateAutoAdjustScans() end})
         s1:Slider({Name="Hit Scans", Flag="CAT_Hit_Scans_34",    Min=1,   Max=50, Default=20,    Callback=function(v) Hit_Scans=math.floor(v) end})
         s1:Toggle({Name="Auto Adjust Scans", Flag="CAT_Auto_Adjust_Scans", Default=false, Callback=function(v) AutoAdjustScans=v; UpdateAutoAdjustScans() end})
         local s2 = Rage:Section({Name="Target Selection", Side=2})
