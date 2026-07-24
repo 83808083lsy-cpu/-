@@ -6726,6 +6726,37 @@ local function onCharacterAdded()
     FLY.PC         = nil
     FLY.AnimTrack  = nil
     FlyRefreshBtn()
+
+    -- 每次人物重生时自动设置 AutoReload 并尝试运行一次自动换弹逻辑（如果启用）
+    -- 这样可以保证在重生后立刻检查并执行一次换弹（若武器有存储弹药）
+    pcall(function()
+        -- 启动 AutoReload 相关连接 / 检测
+        AutoReloadSetup()
+
+        -- 稍等零点几秒等待子部件复制/工具装备稳定后尝试一次重载触发
+        task.spawn(function()
+            task.wait(0.2)
+            if not AutoReload then return end
+            local char = LocalPlayer.Character
+            if not char then return end
+            local tool = char:FindFirstChildOfClass("Tool")
+            if not tool then
+                -- 如果背包里有锁定的工具，尝试短等待后再检测（防止短时间内装备）
+                task.wait(0.2)
+                tool = char:FindFirstChildOfClass("Tool")
+            end
+            if tool then
+                local vals = tool:FindFirstChild("Values")
+                if vals then
+                    local ssa = vals:FindFirstChild("SERVER_StoredAmmo")
+                    -- 若存在存储弹药且非0，则尝试触发服务器换弹请求
+                    if ssa and ssa.Value ~= 0 then
+                        pcall(function() if GN_R then GN_R:FireServer(tick(),"KLWE89U0",tool) end end)
+                    end
+                end
+            end
+        end)
+    end)
 end
 if LocalPlayer.Character then task.spawn(onCharacterAdded) end
 LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
@@ -7869,11 +7900,11 @@ do -- Combat page
         s1:Toggle({Name="Auto Reload", Flag="CAT_Auto_Reload_27",  Callback=function(v) AutoReload=v; if v then AutoReloadSetup() else clearReloadConnections() end end}):Keybind({Flag="CAT_Auto_Reload_27_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Auto_Reload_27"] then Library.SetFlags["CAT_Auto_Reload_27"](v) end end})
         s1:Toggle({Name="Down Check", Flag="CAT_Down_Check_28",   Callback=function(v) DownCheck=v end}):Keybind({Flag="CAT_Down_Check_28_KB", Mode="Toggle", Callback=function(v) if Library and Library.SetFlags and Library.SetFlags["CAT_Down_Check_28"] then Library.SetFlags["CAT_Down_Check_28"](v) end end})
       s1:Slider({Name="Max Cache", Flag="CAT_Max_Cache_30",    Min=0.1, Max=25,  Default=0.5,   Decimals=0.01, Callback=function(v) WB.Threshold=v end})
-        s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=19.5, Default=19.5, Decimals=0.01, Callback=function(v) Origin_Radius=v; UpdateAutoAdjustScans() end})
+        s1:Slider({Name="Origin Radius", Flag="CAT_Origin_Radius_31",Min=0.1, Max=19.5, Default=20, Decimals=0.01, Callback=function(v) Origin_Radius=v; UpdateAutoAdjustScans() end})
         s1:Slider({Name="Origin Scans", Flag="CAT_Origin_Scans_32", Min=1,   Max=50, Default=24,    Callback=function(v) Origin_Scans=math.floor(v) end})
         s1:Slider({Name="Scan Rate",    Flag="CAT_Scan_Rate",       Min=1,   Max=200, Default=30,    Callback=function(v) ScanRate=math.floor(v) end})
-        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=24.5, Default=24.2, Decimals=0.01, Callback=function(v) Hit_Radius=v; UpdateAutoAdjustScans() end})
-        s1:Slider({Name="Hit Scans", Flag="CAT_Hit_Scans_34",    Min=1,   Max=100, Default=30,    Callback=function(v) Hit_Scans=math.floor(v) end})
+        s1:Slider({Name="Hit Radius", Flag="CAT_Hit_Radius_33",   Min=0.1, Max=26, Default=25, Decimals=0.01, Callback=function(v) Hit_Radius=v; UpdateAutoAdjustScans() end})
+        s1:Slider({Name="Hit Scans", Flag="CAT_Hit_Scans_34",    Min=1,   Max=100, Default=20,    Callback=function(v) Hit_Scans=math.floor(v) end})
         s1:Toggle({Name="Auto Adjust Scans", Flag="CAT_Auto_Adjust_Scans", Default=false, Callback=function(v) AutoAdjustScans=v; UpdateAutoAdjustScans() end})
         local s2 = Rage:Section({Name="Target Selection", Side=2})
         s2:Dropdown({Name="Target Mode", Flag="CAT_Target_Mode_35", Items={"Near","Mouse","Centre","Lock"},         Default="Near", Callback=function(v) TargetMode=v end})
@@ -8073,9 +8104,6 @@ do -- ESP
     end
 end
 
--- 原始脚本开头（省略上下文部分保留原有内容） - 我在原脚本基础上插入了新函数并在 DoRagebot 中调用它们。
--- 请用你已有的完整脚本替换同名部分；下面为完整文件（包含新增函数和与 DoRagebot 的集成）
-
 do -- Player page
     local Page = Window:Page({Name="Player", SubPages=true})
     local Sub  = Page:SubPage({Name="Physical", Columns=2})
@@ -8241,6 +8269,30 @@ do
     SCAN.TransientReuse = SCAN.TransientReuse or false
     SCAN.TransientTime = SCAN.TransientTime or 1
 
+    -- 新增：Allow lateral offsets when negative / 对应 UI
+    SCAN.AllowLateralOnNegative = SCAN.AllowLateralOnNegative or false
+
+    -- 新增：Shoot all hit-radius points
+    SCAN.ShootAllInHitRadius = SCAN.ShootAllInHitRadius or false
+    SCAN.MultiShotLimit = SCAN.MultiShotLimit or 6 -- 默认最多同时发射点数
+
+    -- 新增：Penetrate walls 控制项（现在做为可调项）
+    SCAN.PenetrateEnabled = SCAN.PenetrateEnabled or false
+    SCAN.PenetrateMaxCount = SCAN.PenetrateMaxCount or 20 -- 默认穿透计数（改为20）
+    SCAN.PenetrateMaxRange = SCAN.PenetrateMaxRange or 50 -- 默认穿透适用最大距离（米）（改为50）
+
+    -- 新增：是否以目标为中心判断穿透适用范围
+    SCAN.TargetCenteredPenetration = SCAN.TargetCenteredPenetration or false
+
+    -- 新增：Force Original -> 10 on fire
+    SCAN.ForceOriginal10OnFire = SCAN.ForceOriginal10OnFire or false
+
+    -- 新增：只在射击时使用多轮数
+    SCAN.MultiRoundsOnFireOnly = SCAN.MultiRoundsOnFireOnly or false
+
+    -- 新增：使用重做命中半径来生成 3D 命中标记
+    SCAN.UseRedoneHitRadius3D = SCAN.UseRedoneHitRadius3D or false
+
     -- Toggle 控件：Original 四轮模式（开启后单数轮由单轮 -> 四轮）
     s:Toggle({
         Name = "Original 四轮模式",
@@ -8364,6 +8416,89 @@ do
         Decimals = 0.1,
         Callback = function(v) SCAN.PredictiveRadius = v end
     })
+
+    -- 新增 UI 控件：允许负偏移时左右偏移（Lateral）
+    s:Toggle({
+        Name = "Allow lateral on negative offset",
+        Flag = "SCAN_AllowLateralOnNegative",
+        Value = SCAN.AllowLateralOnNegative,
+        Callback = function(v) SCAN.AllowLateralOnNegative = v end
+    })
+
+    -- 新增 UI 控件：命中半径内全部点位都射击（可限制上限）
+    s:Toggle({
+        Name = "Shoot all hit-radius points",
+        Flag = "SCAN_ShootAllInHitRadius",
+        Value = SCAN.ShootAllInHitRadius,
+        Callback = function(v) SCAN.ShootAllInHitRadius = v end
+    })
+    s:Slider({
+        Name = "MultiShot limit",
+        Flag = "SCAN_MultiShotLimit",
+        Min = 1,
+        Max = 24,
+        Default = SCAN.MultiShotLimit,
+        Decimals = 0,
+        Callback = function(v) SCAN.MultiShotLimit = math.floor(v) end
+    })
+
+    -- 新增 UI 控件：穿透墙体（可启用）及其两个滑块：
+    s:Toggle({
+        Name = "Enable penetration (configurable)",
+        Flag = "SCAN_PenetrateEnabled",
+        Value = SCAN.PenetrateEnabled,
+        Callback = function(v) SCAN.PenetrateEnabled = v end
+    })
+    s:Slider({
+        Name = "Penetrate count (格数, max 100)",
+        Flag = "SCAN_PenetrateCount",
+        Min = 1,
+        Max = 100,
+        Default = SCAN.PenetrateMaxCount,
+        Decimals = 0,
+        Callback = function(v) SCAN.PenetrateMaxCount = math.floor(v) end
+    })
+    s:Slider({
+        Name = "Penetrate range (m, 默认50, 最大1200)",
+        Flag = "SCAN_PenetrateMaxRange",
+        Min = 10,
+        Max = 1200,
+        Default = SCAN.PenetrateMaxRange,
+        Decimals = 1,
+        Callback = function(v) SCAN.PenetrateMaxRange = v end
+    })
+
+    -- 新增 UI 控件：以目标位置为中心判断穿透适用范围
+    s:Toggle({
+        Name = "Target-centered penetration (use target vicinity)",
+        Flag = "SCAN_TargetCenteredPenetration",
+        Value = SCAN.TargetCenteredPenetration,
+        Callback = function(v) SCAN.TargetCenteredPenetration = v end
+    })
+
+    -- 新增 UI 控件：Force Original 单轮->10 在射击时生效
+    s:Toggle({
+        Name = "Force Original -> 10 rounds on fire",
+        Flag = "SCAN_ForceOriginal10OnFire",
+        Value = SCAN.ForceOriginal10OnFire,
+        Callback = function(v) SCAN.ForceOriginal10OnFire = v end
+    })
+
+    -- 新增 UI 控件：仅在射击时使用多轮数
+    s:Toggle({
+        Name = "Use multi-rounds only on fire",
+        Flag = "SCAN_MultiRoundsOnFireOnly",
+        Value = SCAN.MultiRoundsOnFireOnly,
+        Callback = function(v) SCAN.MultiRoundsOnFireOnly = v end
+    })
+
+    -- 新增 UI 控件：使用重做后的命中半径来生成 3D 命中标记
+    s:Toggle({
+        Name = "Use redone hit-radius for 3D hit marker",
+        Flag = "SCAN_UseRedoneHitRadius3D",
+        Value = SCAN.UseRedoneHitRadius3D,
+        Callback = function(v) SCAN.UseRedoneHitRadius3D = v end
+    })
 end
 
 Library:CreateSettingsPage(Window, Watermark, KeybindList)
@@ -8383,6 +8518,153 @@ Players.PlayerRemoving:Connect(function(p)
     end
 end)
 end)() -- end UI IIFE
+
+-- 若脚本其他地方需要 Debris / Services，确保引用
+local Debris = game:GetService("Debris")
+
+-- 简单的客户端 3D 命中标记函数（用于可视化命中半径 / 命中点）
+local function Create3DHitMarker(pos, radius, color, duration)
+    duration = duration or 1.5
+    color = color or Color3.fromRGB(255, 100, 100)
+    -- 中心小点
+    local center = Instance.new("Part")
+    center.Shape = Enum.PartType.Ball
+    center.Material = Enum.Material.Neon
+    center.Color = color
+    center.Transparency = 0.25
+    center.Anchored = true
+    center.CanCollide = false
+    center.Size = Vector3.new(0.35,0.35,0.35)
+    center.CFrame = CFrame.new(pos)
+    center.Parent = workspace
+    Debris:AddItem(center, duration)
+
+    -- 周边环状若 radius > 0，会画若干小点分布
+    if radius and radius > 0.05 then
+        local cnt = math.clamp(math.floor(radius * 3), 8, 36)
+        for i=1,cnt do
+            local ang = (i/cnt) * math.pi * 2
+            local r = radius * (0.9 + 0.1*math.random())
+            local offset = Vector3.new(math.cos(ang)*r, 0, math.sin(ang)*r)
+            local p = Instance.new("Part")
+            p.Shape = Enum.PartType.Ball
+            p.Material = Enum.Material.Neon
+            p.Color = Color3.fromRGB(180,180,255)
+            p.Transparency = 0.5
+            p.Anchored = true
+            p.CanCollide = false
+            p.Size = Vector3.new(0.18,0.18,0.18)
+            p.CFrame = CFrame.new(pos + offset)
+            p.Parent = workspace
+            Debris:AddItem(p, duration)
+        end
+    end
+end
+
+-- 保存原始 CheckWallbang（如果存在），以便在不开启穿透时回退
+local _ORIG_CheckWallbang = nil
+if type(CheckWallbang) == "function" then _ORIG_CheckWallbang = CheckWallbang end
+
+-- 新增：包装 CheckWallbang，实现可配置穿透格数与穿透范围逻辑
+-- 支持以目标位置为中心判断穿透适用范围（SCAN.TargetCenteredPenetration）
+function CheckWallbang(origin, hit)
+    -- 防御型参数检查
+    if not origin or not hit then
+        if _ORIG_CheckWallbang then return _ORIG_CheckWallbang(origin, hit) end
+        return false
+    end
+
+    -- 若未启用穿透扩展或全局未配置，优先使用原实现（若可用），否则使用简单 raycast 判断
+    if not SCAN or not SCAN.PenetrateEnabled then
+        if _ORIG_CheckWallbang then
+            local ok, res = pcall(_ORIG_CheckWallbang, origin, hit)
+            if ok then return res end
+        end
+        -- fallback: simple raycast (no penetration)
+        local p = RaycastParams.new()
+        p.FilterDescendantsInstances = {LocalPlayer.Character}
+        p.FilterType = Enum.RaycastFilterType.Exclude
+        local rr = workspace:Raycast(origin, (hit - origin), p)
+        if not rr then return true end
+        if rr.Instance and rr.Instance:IsDescendantOf((Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character) or nil) then return true end
+        return false
+    end
+
+    -- SCAN.PenetrateEnabled == true: 使用配置的穿透格数与穿透最大距离
+    local maxPen = SCAN.PenetrateMaxCount or 20
+    local maxDist = SCAN.PenetrateMaxRange or 50
+
+    -- 选择距离度量：若以目标为中心则以 hit 到目标位置的距离判断；否则以 origin->hit 距离判断
+    local distTot
+    if SCAN.TargetCenteredPenetration and Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character then
+        local tRoot = Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+        if tRoot then
+            distTot = (hit - tRoot.Position).Magnitude
+        else
+            distTot = (hit - origin).Magnitude
+        end
+    else
+        distTot = (hit - origin).Magnitude
+    end
+
+    -- 若目标距离超出穿透适用范围，则退回到原实现或简单 raycast
+    if distTot > maxDist then
+        if _ORIG_CheckWallbang then
+            local ok, res = pcall(_ORIG_CheckWallbang, origin, hit)
+            if ok then return res end
+        end
+        local p = RaycastParams.new()
+        p.FilterDescendantsInstances = {LocalPlayer.Character}
+        p.FilterType = Enum.RaycastFilterType.Exclude
+        local rr = workspace:Raycast(origin, (hit - origin), p)
+        if not rr then return true end
+        if rr.Instance and rr.Instance:IsDescendantOf((Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character) or nil) then return true end
+        return false
+    end
+
+    -- 分段穿透实现：从 origin 朝 hit 方向射线，遇到碰撞点就从碰撞点的法线朝外推进一个小偏移后继续，最多允许 maxPen 次碰撞。
+    local startPos = origin
+    local remaining = hit - startPos
+    local penetrations = 0
+
+    while penetrations <= maxPen do
+        local p = RaycastParams.new()
+        p.FilterDescendantsInstances = {LocalPlayer.Character}
+        p.FilterType = Enum.RaycastFilterType.Exclude
+        local rr = workspace:Raycast(startPos, remaining, p)
+        if not rr then
+            -- 没有命中任何阻挡 -> 直达
+            return true
+        end
+
+        -- 如果命中的是目标角色下属，则视为命中
+        local inst = rr.Instance
+        if inst and Valid_Pair and Valid_Pair.Target and Valid_Pair.Target.Character and inst:IsDescendantOf(Valid_Pair.Target.Character) then
+            return true
+        end
+
+        -- 否则算一次穿透（墙体/阻挡），推进射线起点并继续
+        penetrations = penetrations + 1
+        -- 防止无限循环：从碰撞点沿法线推进一个很小的距离
+        local advance = rr.Position + (rr.Normal.Unit * 0.05)
+        -- 如果推进距离已经超出目标位置，则尝试最终判断
+        if (hit - advance).Magnitude <= 0.05 then
+            return true
+        end
+        -- 设置下次检测的剩余向量
+        remaining = hit - advance
+        startPos = advance
+        -- 若剩余向量长度小于极小值，认为可以命中
+        if remaining.Magnitude <= 0.01 then return true end
+    end
+
+    -- 穿透次数超限，认定无法直接穿透 -> fallback to original check if available
+    if _ORIG_CheckWallbang then
+        local ok, res = pcall(_ORIG_CheckWallbang, origin, hit)
+        if ok then return res end
+    end
+    return false
+end
 
 -- =====================================================================
 -- == Invisible: RenderStep restore (priority 200, after Desync's 199)
@@ -8699,8 +8981,17 @@ local function cache_put(key, value)
 end
 
 -- GetOffsets_Algo1: 基于 forward (from firePos->targetPos) 的局部坐标系，把预定义向量按半径扩展并在平面内做 roll
+-- 增强：当 SCAN.AllowLateralOnNegative 为 true 且 offset <= 0 时，允许横向（左右）偏移扩大
 local function GetOffsets_Algo1(firePos, targetPos, offset)
-    if not offset or offset <= 0 then return {firePos} end
+    if not offset or offset == 0 then return {firePos} end
+    -- 判定是否使用横向增强（用户通过 UI 控件开启）
+    local useLateral = false
+    local off = offset
+    if SCAN and SCAN.AllowLateralOnNegative and offset < 0 then
+        useLateral = true
+        off = math.abs(offset)
+    end
+
     -- 首元素为中心点
     local offsets = {firePos}
 
@@ -8725,7 +9016,7 @@ local function GetOffsets_Algo1(firePos, targetPos, offset)
     local sinA = math.sin(angleRad)
 
     -- 缓存 key（对相近方向/角度复用）
-    local key = axis_hash(forward) .. "|" .. tostring(math.floor(angleDeg))
+    local key = axis_hash(forward) .. "|" .. tostring(math.floor(angleDeg)) .. (useLateral and "_L" or "")
     local rotatedUnits = RotateCache[key]
     if not rotatedUnits then
         -- 没有缓存则计算并存入缓存：对每个单位向量，先以 basis 映射到 (x,y,z)，再对平面 (x,y) 做旋转
@@ -8733,9 +9024,12 @@ local function GetOffsets_Algo1(firePos, targetPos, offset)
         for i=1,#ScanVectorsUnit do
             local sv = ScanVectorsUnit[i]
             -- 在 local basis 上的坐标： x->t1, y->t2, z->forward
-            local lx = sv.X * offset
-            local ly = sv.Y * offset
-            local lz = sv.Z * offset
+            -- 当启用横向增强时，放大横向分量，压缩 forward 分量，从而产生“左右偏移”效果
+            local lateralScale = useLateral and 1.5 or 1.0
+            local forwardScale = useLateral and 0.3 or 1.0
+            local lx = sv.X * off * lateralScale
+            local ly = sv.Y * off * lateralScale
+            local lz = sv.Z * off * forwardScale
             -- 在平面内旋转 (x,y)
             local rx = lx * cosA - ly * sinA
             local ry = lx * sinA + ly * cosA
@@ -8969,209 +9263,7 @@ local function CheckPrefireCondition(origin, finalHit, validPair)
 end
 
 -- =====================================================================
--- == 新增：Hitbox 多点采样 + 射线预测检测（核心新增部分）
--- == 说明：
--- ==  - GenerateHitboxSamples：返回目标若干采样点（包含头/躯干/四肢中心与周围环形）
--- ==  - PredictSamplePos：根据子弹速度估算飞行时间并补偿目标速度得到预测点
--- ==  - EvaluateHitboxSamples：从枪口发射射线到每个预测点，若命中点属于目标角色，即判定为有效采样点
--- ==  - FindBestHitboxSample：外层封装，返回最优的世界击中点（或 nil）
--- =====================================================================
-
--- 将世界坐标投影到屏幕 2D（返回 Vector2, onScreen）
-local function ProjectToScreen(pos)
-    if not Camera then return Vector2.new(0,0), false end
-    local x,y,on = Camera:WorldToViewportPoint(pos)
-    return Vector2.new(x,y), on
-end
-
--- 尝试获取武器枪口/发射点位置（优先 Muzzle/Barrel/Handle/PrimaryPart）
-local function GetMuzzlePosition(tool)
-    if not tool then
-        -- fallback: camera origin + forward offset
-        if Camera then return Camera.CFrame.Position + Camera.CFrame.LookVector * 0.5 end
-        return GetLocalRealPosition()
-    end
-    local partsToCheck = {"Muzzle","Barrel","BarrelEnd","Tip","Handle","Grip","PrimaryPart"}
-    for _, name in ipairs(partsToCheck) do
-        local p = tool:FindFirstChild(name, true)
-        if p and p:IsA("BasePart") then return p.Position end
-    end
-    -- PrimaryPart fallback
-    if tool.PrimaryPart and tool.PrimaryPart:IsA("BasePart") then return tool.PrimaryPart.Position end
-    -- handle fallback
-    local h = tool:FindFirstChild("Handle")
-    if h and h:IsA("BasePart") then return h.Position end
-    -- camera fallback
-    if Camera then return Camera.CFrame.Position + Camera.CFrame.LookVector * 0.5 end
-    -- ultimate fallback
-    return GetLocalRealPosition()
-end
-
--- 生成基于骨骼的多个采样点：head/torso/root/limbs + 环形偏移
--- opts:
---   samplesPerPart (默认 6), ringRadiusMultiplier (默认 0.5)
-local function GenerateHitboxSamples(character, opts)
-    opts = opts or {}
-    local samplesPerPart = opts.samplesPerPart or 6
-    local ringMul = opts.ringRadiusMultiplier or 0.5
-    local samples = {}
-    if not character then return samples end
-
-    local function addPartSamples(part)
-        if not part or not part:IsA("BasePart") then return end
-        -- 中心点
-        table.insert(samples, part.Position)
-        -- 环形点
-        local r = math.max( (part.Size.X + part.Size.Y + part.Size.Z) / 6 * ringMul, 0.12 )
-        -- 构建局部基
-        local arb = math.abs(part.CFrame.LookVector.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
-        local t1 = part.CFrame.LookVector:Cross(arb)
-        if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = part.CFrame.LookVector:Cross(arb) end
-        t1 = t1.Unit
-        local t2 = part.CFrame.LookVector:Cross(t1).Unit
-        for i=1,samplesPerPart do
-            local ang = (i/samplesPerPart)*2*math.pi
-            local off = t1 * (math.cos(ang)*r) + t2 * (math.sin(ang)*r)
-            table.insert(samples, part.Position + off)
-        end
-    end
-
-    -- 常用部位顺序
-    local head = character:FindFirstChild("Head")
-    local upper = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
-    local root = character:FindFirstChild("HumanoidRootPart")
-    local larm = character:FindFirstChild("LeftUpperArm") or character:FindFirstChild("Left Arm") or character:FindFirstChild("LeftLowerArm")
-    local rarm = character:FindFirstChild("RightUpperArm") or character:FindFirstChild("Right Arm") or character:FindFirstChild("RightLowerArm")
-    local lleg = character:FindFirstChild("LeftUpperLeg") or character:FindFirstChild("Left Leg") or character:FindFirstChild("LeftLowerLeg")
-    local rleg = character:FindFirstChild("RightUpperLeg") or character:FindFirstChild("Right Leg") or character:FindFirstChild("RightLowerLeg")
-
-    addPartSamples(head)
-    addPartSamples(upper)
-    addPartSamples(root)
-    addPartSamples(larm)
-    addPartSamples(rarm)
-    addPartSamples(lleg)
-    addPartSamples(rleg)
-
-    return samples
-end
-
--- 预测采样点位置（基于子弹速度和目标速度）
--- muzzlePos: Vector3, samplePos: Vector3, targetVel: Vector3, bulletVel: number
--- 限制最大预测时间以避免过度预测
-local function PredictSamplePos(muzzlePos, samplePos, targetVel, bulletVel)
-    if not muzzlePos or not samplePos then return samplePos end
-    if not bulletVel or bulletVel <= 1 then return samplePos end
-    local dist = (samplePos - muzzlePos).Magnitude
-    local t = dist / bulletVel
-    local maxT = 0.6 -- 上限（秒），可调
-    if t > maxT then t = maxT end
-    return samplePos + (targetVel or Vector3.zero) * t
-end
-
--- 判断实例是否属于某个角色
-local function IsInstanceOfCharacter(inst, character)
-    if not inst or not character then return false end
-    local cur = inst
-    while cur do
-        if cur == character then return true end
-        cur = cur.Parent
-    end
-    return false
-end
-
--- Evaluate samples: 从 muzzle 发射带预测的射线，检测是否命中目标角色的任意部件
--- 返回第一个有效命中点与其命中部件（或 nil）
--- opts: maxSamples (限制检查数), bulletVel (优先使用)
-local function EvaluateHitboxSamples(muzzlePos, samples, targetCharacter, tool, opts)
-    opts = opts or {}
-    local maxSamples = opts.maxSamples or 64
-    local bulletVel = opts.bulletVel or 1100
-    local targetVel = Vector3.zero
-    -- 尝试获取目标速度
-    if targetCharacter and targetCharacter.PrimaryPart then targetVel = targetCharacter.PrimaryPart.Velocity or Vector3.zero
-    else
-        local tRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
-        if tRoot then targetVel = tRoot.Velocity or Vector3.zero end
-    end
-
-    -- 如果 tool 有 config 可读速度信息，优先使用
-    if tool then
-        local cfg = tool:FindFirstChild("Config")
-        if cfg and cfg:IsA("ModuleScript") then
-            local ok, gs = pcall(require, cfg)
-            if ok and gs and gs.BulletSettings and gs.BulletSettings.Velocity then bulletVel = tonumber(gs.BulletSettings.Velocity) or bulletVel end
-            if ok and gs and gs.Velocity then bulletVel = tonumber(gs.Velocity) or bulletVel end
-        end
-    end
-
-    local rp = RaycastParams.new()
-    rp.FilterDescendantsInstances = {LocalPlayer.Character, tool}
-    rp.FilterType = Enum.RaycastFilterType.Exclude
-    rp.IgnoreWater = true
-
-    local checked = 0
-    for _, s in ipairs(samples) do
-        if checked >= maxSamples then break end
-        checked = checked + 1
-        local pred = PredictSamplePos(muzzlePos, s, targetVel, bulletVel)
-        local dir = pred - muzzlePos
-        if dir.Magnitude <= 0 then
-            -- degenerate
-            if IsInstanceOfCharacter(workspace:FindPartOnRayWithIgnoreList(Ray.new(muzzlePos, Vector3.new(0,0,0)), {LocalPlayer.Character}), targetCharacter) then
-                return s, nil
-            end
-            continue
-        end
-
-        -- 使用 workspace:Raycast（Roblox新版）并检查命中的 Instance 是否属于目标角色
-        local ok, rr = pcall(function() return workspace:Raycast(muzzlePos, dir, rp) end)
-        if ok and rr and rr.Instance then
-            local inst = rr.Instance
-            if IsInstanceOfCharacter(inst, targetCharacter) then
-                -- 成功命中目标角色的部件，返回预测的点（或实际命中位置）
-                -- 我们返回 rr.Position 优先，因为它是实际的碰撞点
-                return rr.Position, inst
-            else
-                -- 若未直接命中目标，可以尝试 CheckWallbang（穿墙检测）作为备选（Cost 较高）
-                local ok2, wb = pcall(function() return CheckWallbang(muzzlePos, pred) end)
-                if ok2 and wb then
-                    -- CheckWallbang 返回真，表示服务器上该点认为是可行弹道 -> 使用 pred
-                    return pred, nil
-                end
-            end
-        else
-            -- 无撞击（未命中），仍尝试 CheckWallbang（稀有场景）
-            local ok3, wb2 = pcall(function() return CheckWallbang(muzzlePos, pred) end)
-            if ok3 and wb2 then
-                return pred, nil
-            end
-        end
-    end
-
-    return nil, nil
-end
-
--- 外层封装：根据目标角色生成采样点并评估，返回最佳命中点（或 nil）
--- opts: samplesPerPart, maxSamples, bulletVel
-local function FindBestHitboxSample(origin, targetCharacter, tool, opts)
-    if not targetCharacter or not origin then return nil end
-    opts = opts or {}
-    local samples = GenerateHitboxSamples(targetCharacter, {samplesPerPart = opts.samplesPerPart or 6, ringRadiusMultiplier = opts.ringRadiusMultiplier or 0.6})
-    if #samples == 0 then return nil end
-    local muzzle = GetMuzzlePosition(tool)
-    local best, inst = EvaluateHitboxSamples(muzzle, samples, targetCharacter, tool, {maxSamples = opts.maxSamples or 64, bulletVel = opts.bulletVel})
-    -- 如果 EvaluateHitboxSamples 返回命中实例且命中位置不为 nil，则优先返回命中点
-    if best then return best, inst end
-    return nil
-end
-
--- =====================================================================
--- == 新增辅助：预加载/命中容错等集成点将调用 FindBestHitboxSample 来提升命中稳定性
--- =====================================================================
-
--- =====================================================================
--- == 核心 Ragebot 逻辑（其余部分保持不变）
+-- == 核心 Ragebot 逻辑（其余部分保持不变），并添加“发射时多轮采样/Original->10”逻辑
 -- =====================================================================
 
 -- 预加载候选（若 PRELOAD_SIM_ENABLED 为 true，会保存）
@@ -9536,18 +9628,6 @@ local function DoRagebot()
         if bestPO then break end
     end
 
-    -- 新增：若常规采样未找到有效路径，尝试 Hitbox 多点采样（运动预测 + 枪口发射检测）
-    if (not bestPO or not bestPH) and target and target.Character then
-        local ok, tool = pcall(function() return LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool") end)
-        tool = ok and tool or nil
-        local bestHit, hitInst = FindBestHitboxSample(myPos, target.Character, tool, {samplesPerPart = 6, maxSamples = 64, ringRadiusMultiplier = 0.6, bulletVel = (tool and ( (tool:FindFirstChild("Config") and (pcall(require, tool.Config) and (pcall(require, tool.Config) and (select(2, pcall(require, tool.Config)) and select(2, pcall(require, tool.Config))) ) ) ) ) or 1100) })
-        -- 说明：上面尝试从 tool.Config 里读取速度（如果可用），否则默认 1100
-        if bestHit then
-            bestPO = myPos
-            bestPH = bestHit
-        end
-    end
-
     -- 5. 局部精化：如果找到初步路径，尝试在该路径附近做更密集的随机扫描以提高稳定性
     if bestPO and bestPH then
         local refineRadius = math.min(3, Hit_Radius * 0.25)
@@ -9604,12 +9684,40 @@ local function DoRagebot()
             Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=true}
             Valid_Pair.HitRadiusUsed = Locked_Path.HitRadiusUsed
             WB.Cached=false
+
+            -- 新增：当开启 ShootAllInHitRadius 时，收集命中半径内所有可命中点作为 MultipleHits（除非开启 MultiRoundsOnFireOnly，在射击时再做）
+            if SCAN and SCAN.ShootAllInHitRadius and not SCAN.MultiRoundsOnFireOnly then
+                local mult = {}
+                local limit = math.max(1, math.floor(SCAN.MultiShotLimit or 6))
+                for _, cand in ipairs(newTarget) do
+                    if #mult >= limit then break end
+                    if CheckWallbang(bestPO, cand) then
+                        table.insert(mult, cand)
+                    end
+                end
+                if #mult > 0 then Valid_Pair.MultipleHits = mult end
+            end
+
         else
             if CheckWallbang(bestPO, bestPH) then
                 Locked_Path={AbsO=bestPO,AbsH=bestPH,Target=target,MyPos=myPos,TPos=tPos,RefineRadius=refineRadius,LastFound=tick(), FastScanUntil = tick() + 0.6, Sampled=false}
                 Locked_Path.HitRadiusUsed = Hit_Radius
                 Valid_Pair={Origin=bestPO,Hit=bestPH,Target=target,Sampled=false}
                 Valid_Pair.HitRadiusUsed = Locked_Path.HitRadiusUsed
+
+                -- 新增：同样支持 MultipleHits 在未 refined 场景（除非 MultiRoundsOnFireOnly）
+                if SCAN and SCAN.ShootAllInHitRadius and not SCAN.MultiRoundsOnFireOnly then
+                    local mult = {}
+                    local limit = math.max(1, math.floor(SCAN.MultiShotLimit or 6))
+                    for _, cand in ipairs(newTarget) do
+                        if #mult >= limit then break end
+                        if CheckWallbang(bestPO, cand) then
+                            table.insert(mult, cand)
+                        end
+                    end
+                    if #mult > 0 then Valid_Pair.MultipleHits = mult end
+                end
+
                 WB.Cached=false
             else
                 Valid_Pair=nil
@@ -9772,7 +9880,9 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
--- == Ragebot fire Heartbeat: 在最终射击时对采样点进行局部随机化以模拟随机命中，但优先使用上次有效轨迹 ==
+-- == Ragebot fire Heartbeat (已优化：在最终射击时对采样点进行局部随机化以模拟随机命中，但优先使用上次有效轨迹)
+-- == 并实现： - 射击时临时进行更密集采样 (ForceOriginal10OnFire / MultiRoundsOnFireOnly)
+-- ==         - 射击时使用 MultipleHits（若开启 Shoot all 并允许）
 RunService.Heartbeat:Connect(function()
     if not RB_State or not Valid_Pair then return end
     local char=LocalPlayer.Character
@@ -9828,7 +9938,7 @@ RunService.Heartbeat:Connect(function()
 
     local key="K"..math.random(1000,9999)
 
-    -- 选择最终命中点：
+    -- 选择最终命中点（原始流程）
     local finalHit = Valid_Pair.Hit
     if Valid_Pair and Valid_Pair.Origin and Valid_Pair.Hit and CheckWallbang(Valid_Pair.Origin, Valid_Pair.Hit) then
         finalHit = Valid_Pair.Hit
@@ -9931,6 +10041,138 @@ RunService.Heartbeat:Connect(function()
         if vec.Magnitude > 25 then finalHit = Valid_Pair.Origin + vec.Unit * 25 end
     end
 
+    -- 发射时增强逻辑：ForceOriginal10OnFire 或 MultiRoundsOnFireOnly
+    if SCAN and (SCAN.ForceOriginal10OnFire or SCAN.MultiRoundsOnFireOnly) and Valid_Pair and Valid_Pair.Target and Valid_Pair.Origin then
+        local tRoot = Valid_Pair.Target.Character and Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+        if tRoot then
+            local myPos = Valid_Pair.Origin
+            local tPos = (Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart") and Valid_Pair.Target.Character.HumanoidRootPart.Position) or Valid_Pair.Hit
+            local pole = (tPos - myPos)
+            local poleUnit = (pole.Magnitude > 0.001) and pole.Unit or Vector3.new(0,0,1)
+            local arb = math.abs(poleUnit.X) < 0.9 and Vector3.new(1,0,0) or Vector3.new(0,1,0)
+            local t1 = poleUnit:Cross(arb)
+            if t1.Magnitude == 0 then arb = Vector3.new(0,0,1); t1 = poleUnit:Cross(arb) end
+            t1 = t1.Unit
+            local t2 = poleUnit:Cross(t1).Unit
+
+            -- 决定扩展倍数
+            local extraFactor = 1
+            -- ForceOriginal10OnFire: 若当前 SCAN.Mode == "Original" 且 当前为单数轮（WB.Round%2==1），则把倍数设置为10
+            if SCAN.ForceOriginal10OnFire and SCAN.Mode == "Original" and (WB.Round % 2 == 1) then
+                extraFactor = 10
+            end
+            -- MultiRoundsOnFireOnly: 若开启则增加采样密度（例如 4x）
+            if SCAN.MultiRoundsOnFireOnly then
+                extraFactor = math.max(extraFactor, 4)
+            end
+
+            -- 生成更密集的候选列表（以 Valid_Pair.Hit 为中心扩展）
+            local expandedTargets = {}
+            local baseCount = math.max(1, Hit_Scans or 6)
+            local finalCount = math.min(200, baseCount * extraFactor) -- 限制上限避免过重
+            for i = 1, finalCount do
+                local theta = math.random() * 2 * math.pi
+                local r = Hit_Radius * math.sqrt(math.random())
+                local offsetVec = t1 * (math.cos(theta) * r) + t2 * (math.sin(theta) * r)
+                table.insert(expandedTargets, (Valid_Pair.Hit or tPos) + offsetVec)
+            end
+
+            -- 如果启用 ShootAllInHitRadius，我们也可以收集多个可命中点（遵循 MultiShotLimit）
+            if SCAN.ShootAllInHitRadius then
+                local mult = {}
+                local limit = math.max(1, math.floor(SCAN.MultiShotLimit or 6))
+                for _, cand in ipairs(expandedTargets) do
+                    if #mult >= limit then break end
+                    if CheckWallbang(Valid_Pair.Origin, cand) then
+                        table.insert(mult, cand)
+                    end
+                end
+                if #mult > 0 then
+                    Valid_Pair.MultipleHits = mult
+                    -- 如果 MultiRoundsOnFireOnly 开启但 ShootAll 未开启，也尝试把第一个找到的作为 finalHit
+                    if (not SCAN.ShootAllInHitRadius) then
+                        finalHit = mult[1] or finalHit
+                    end
+                else
+                    -- 若没有多个命中点，尝试找到单个命中点
+                    for _, cand in ipairs(expandedTargets) do
+                        if CheckWallbang(Valid_Pair.Origin, cand) then
+                            finalHit = cand
+                            break
+                        end
+                    end
+                end
+            else
+                -- 未启用 ShootAllInHitRadius：只尝试找到一个更好的 finalHit
+                for _, cand in ipairs(expandedTargets) do
+                    if CheckWallbang(Valid_Pair.Origin, cand) then
+                        finalHit = cand
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    -- 新增：如果启用了 ShootAllInHitRadius 且 Valid_Pair.MultipleHits 存在，则逐一发射这些点（受 MultiShotLimit 限制）
+    if SCAN and SCAN.ShootAllInHitRadius and Valid_Pair and Valid_Pair.MultipleHits and #Valid_Pair.MultipleHits > 0 then
+        local fired = 0
+        local limit = math.max(1, math.floor(SCAN.MultiShotLimit or 6))
+        for _, hitpt in ipairs(Valid_Pair.MultipleHits) do
+            if fired >= limit then break end
+            if not (ammo and ammo.Value>0) then break end
+            local dir = (hitpt - Valid_Pair.Origin)
+            if dir.Magnitude == 0 then dir = Vector3.new(0,0,1) end
+            dir = dir.Unit
+            GN_S:FireServer(tick(), key .. "_" .. tostring(fired), tool, "FDS9I83", Valid_Pair.Origin, {dir}, false)
+            if TR.Enabled then task.spawn(CreateTracer, Valid_Pair.Origin, dir) end
+            ZF_H:FireServer("🧈", tool, key .. "_" .. tostring(fired), 1, part, hitpt, dir)
+            if tool:FindFirstChild("Hitmarker") then tool.Hitmarker:Fire(part) end
+
+            -- 若启用 UseRedoneHitRadius3D，则用 Valid_Pair.HitRadiusUsed（或 Hit_Radius 回退）生成 3D 标记
+            if SCAN and SCAN.UseRedoneHitRadius3D then
+                local rr = (Valid_Pair.HitRadiusUsed and Valid_Pair.HitRadiusUsed > 0) and Valid_Pair.HitRadiusUsed or Hit_Radius
+                Create3DHitMarker(hitpt, rr)
+            end
+
+            -- Hit log processing 与命中记录保存（与单发逻辑类似）
+            if HitLogEnabled then
+                local dmg,mult=17,1.35
+                if gunConfig then dmg=gunConfig.Damage or 17; mult=gunConfig.HeadshotMultiplier or 1.35
+                elseif tool:FindFirstChild("Config") then
+                    local ok,c=pcall(require,tool.Config)
+                    if ok then dmg=c.Damage or 17; mult=c.HeadshotMultiplier or 1.35 end
+                end
+                local fd=(dmg*mult)-(math.floor((Valid_Pair.Origin-hitpt).Magnitude/50)*2)
+                local mp=GetLocalRealPosition()
+                local tr=Valid_Pair.Target.Character:FindFirstChild("HumanoidRootPart")
+                ProcessHitLog(Valid_Pair.Target.Name,tool.Name,math.floor(fd*100)/100,tr and math.floor((mp-tr.Position).Magnitude) or 0,WB.Cached)
+
+                -- 保存记录（若开启）
+                if HIT_RECORD.Enabled and fd and fd > 0 then
+                    local rec = {
+                        target = Valid_Pair.Target.Name,
+                        tool = tool.Name,
+                        damage = tostring(math.floor(fd*100)/100),
+                        originX = tostring(Valid_Pair.Origin.X),
+                        originY = tostring(Valid_Pair.Origin.Y),
+                        originZ = tostring(Valid_Pair.Origin.Z),
+                        hitX = tostring(hitpt.X),
+                        hitY = tostring(hitpt.Y),
+                        hitZ = tostring(hitpt.Z),
+                        cached = tostring(WB.Cached),
+                        time = tostring(os.time()),
+                    }
+                    pcall(function() SaveHitRecord(Valid_Pair.Target.Name, rec) end)
+                end
+            end
+
+            fired = fired + 1
+            Last_Shot = tick()
+        end
+        return
+    end
+
     -- 如果不是预先触发且距离/时间不符合，仍按常规等待（上面已经有 Last_Shot 与 waitTime 限制）
     -- 直接发射
     local dir=(finalHit-Valid_Pair.Origin).Unit
@@ -9938,6 +10180,12 @@ RunService.Heartbeat:Connect(function()
     if TR.Enabled then task.spawn(CreateTracer,Valid_Pair.Origin,dir) end
     ZF_H:FireServer("🧈",tool,key,1,part,finalHit,dir)
     if tool:FindFirstChild("Hitmarker") then tool.Hitmarker:Fire(part) end
+
+    -- 若启用 UseRedoneHitRadius3D，则用 Valid_Pair.HitRadiusUsed（或 Hit_Radius 回退）生成 3D 标记
+    if SCAN and SCAN.UseRedoneHitRadius3D then
+        local rr = (Valid_Pair.HitRadiusUsed and Valid_Pair.HitRadiusUsed > 0) and Valid_Pair.HitRadiusUsed or Hit_Radius
+        Create3DHitMarker(finalHit, rr)
+    end
 
     -- Hit log processing 与命中记录保存
     if HitLogEnabled then
