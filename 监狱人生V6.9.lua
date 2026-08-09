@@ -1,3 +1,4 @@
+-- 极致反应版：周围采样 + 预测瞄准
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -24,6 +25,14 @@ local TRACER_LIFETIME = 6
 local FADE_DURATION = 0.6
 
 local soundEnabled = true
+-- 新增：音效选择（已加入第四个 Skeet）
+local selectedSoundId = nil
+local SOUND_OPTIONS = {
+    { name = "MP5",  id = "rbxassetid://7698730413" },
+    { name = "M9",   id = "rbxassetid://2934888024" },
+    { name = "AK",   id = "rbxassetid://2934888736" },
+    { name = "Skeet",id = "rbxassetid://8726881116" },
+}
 
 local meleeEnabled = false
 local MELEE_MIN = 0
@@ -32,11 +41,78 @@ local meleeRange = 8
 local MELEE_COOLDOWN = 0.01
 local meleeLastFire = 0
 
+-- 自动换弹相关（保留手动触发函数，但已移除“5次未命中自动触发”逻辑）
 local FuncReloadEvent = ReplicatedStorage:WaitForChild("GunRemotes"):FindFirstChild("FuncReload")
-local missCount = 0
 local RELOAD_COOLDOWN = 0.5
 local reloadLastInvoke = 0
+local RELOAD_DURATION = 2.6
+local isReloading = false
 
+-- ========== 新增：极致响应的采样 & 预测配置 ==========
+-- 你要极致响应，所以这些默认数值较激进（短窗口、高频率）
+local SAMPLE_WINDOW = 0.12      -- 样本保留的时间窗口（秒），短时间提高响应
+local SAMPLE_MAX = 6           -- 每个目标保留的最大样本数
+local PREDICTION_MIN = 0.04    -- 最小预测时间（秒）
+local PREDICTION_MAX = 0.45    -- 最大预测时间（秒）
+local PREDICTION_SPEED_FACTOR = 0.9 -- 用于将距离映射到预测时间（可调）
+-- 注意：更大的预测时间会更“超前”但容易错失高度机动目标
+
+local samples = {} -- samples[player] = { {pos=Vector3, t=time}, ... }
+local ownSamples = {} -- own position samples
+local function recordSampleForPlayer(plr, pos, t)
+    if not plr then return end
+    local s = samples[plr]
+    if not s then
+        s = {}
+        samples[plr] = s
+    end
+    table.insert(s, {pos = pos, t = t})
+    -- 删除过旧样本或超出数量
+    while #s > SAMPLE_MAX or (s[1] and t - s[1].t > SAMPLE_WINDOW) do
+        table.remove(s, 1)
+    end
+end
+
+local function recordOwnSample(pos, t)
+    table.insert(ownSamples, {pos = pos, t = t})
+    while #ownSamples > SAMPLE_MAX or (ownSamples[1] and t - ownSamples[1].t > SAMPLE_WINDOW) do
+        table.remove(ownSamples, 1)
+    end
+end
+
+local function estimateVelocityFromSamples(tlist)
+    if not tlist or #tlist < 2 then
+        return Vector3.new(0,0,0)
+    end
+    local first = tlist[1]
+    local last = tlist[#tlist]
+    local dt = last.t - first.t
+    if dt <= 0 then return Vector3.new(0,0,0) end
+    return (last.pos - first.pos) / dt
+end
+
+local function getPlayerVelocity(plr)
+    local s = samples[plr]
+    if not s or #s < 2 then
+        return Vector3.new(0,0,0)
+    end
+    return estimateVelocityFromSamples(s)
+end
+
+local function getOwnVelocity()
+    if #ownSamples < 2 then return Vector3.new(0,0,0) end
+    return estimateVelocityFromSamples(ownSamples)
+end
+
+-- 计算预测时间：基于距离与配置，越远预测时间略增
+local function computePredictionTime(dist)
+    local t = dist / (600) * PREDICTION_SPEED_FACTOR -- 基于距离换算（600 可调）
+    if t < PREDICTION_MIN then t = PREDICTION_MIN end
+    if t > PREDICTION_MAX then t = PREDICTION_MAX end
+    return t
+end
+
+-- ========== UI 与 原有控件（保持不变） ==========
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AutoFireUi"
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -197,6 +273,7 @@ local knobShadow = Instance.new("UIStroke", SliderKnob)
 knobShadow.Color = Color3.fromRGB(220,220,225)
 knobShadow.Thickness = 1
 
+-- ========== 传送/近战/范围滑块/提示（保持原样） ==========
 local TeleportButton = Instance.new("ImageButton")
 TeleportButton.Name = "TeleportButton"
 TeleportButton.Size = UDim2.new(0, 110, 0, 32)
@@ -245,7 +322,6 @@ TeleportButton.MouseButton1Click:Connect(function()
     local releaseTween = TweenService:Create(TeleportButton, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(255,255,255)})
     pressedTween:Play()
     pressedTween.Completed:Wait()
-
     local myChar = localPlayer.Character
     if not myChar then
         releaseTween:Play()
@@ -258,13 +334,9 @@ TeleportButton.MouseButton1Click:Connect(function()
         teleportDebounce = false
         return
     end
-
     local originalCFrame = hrp.CFrame
-
     hrp.CFrame = CFrame.new(TELEPORT_POS)
-
     releaseTween:Play()
-
     task.delay(0.5, function()
         local charNow = localPlayer.Character
         if not charNow then
@@ -516,8 +588,114 @@ SwitchKnob.InputBegan:Connect(function(input)
     end
 end)
 
+-- 新增：音效选择悬浮窗（面板加宽以容纳 4 个选项）
+local function showSoundSelector()
+    -- 如果已存在则不重复创建
+    if ScreenGui:FindFirstChild("SoundSelector") then return end
+
+    local overlay = Instance.new("Frame")
+    overlay.Name = "SoundSelector"
+    overlay.Size = UDim2.new(0, 420, 0, 160) -- 加宽
+    overlay.Position = UDim2.new(0.5, -210, 0.5, -80)
+    overlay.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    overlay.BackgroundTransparency = 0
+    overlay.BorderSizePixel = 0
+    overlay.AnchorPoint = Vector2.new(0,0)
+    overlay.Parent = ScreenGui
+    local overlayCorner = Instance.new("UICorner", overlay)
+    overlayCorner.CornerRadius = UDim.new(0,8)
+    overlay.ZIndex = 10000
+
+    local title = Instance.new("TextLabel", overlay)
+    title.Size = UDim2.new(1, -20, 0, 28)
+    title.Position = UDim2.new(0,10,0,8)
+    title.BackgroundTransparency = 1
+    title.Text = "选择命中音效"
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 16
+    title.TextColor3 = Color3.fromRGB(240,240,240)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.ZIndex = 10001
+
+    local info = Instance.new("TextLabel", overlay)
+    info.Size = UDim2.new(1, -20, 0, 18)
+    info.Position = UDim2.new(0,10,0,36)
+    info.BackgroundTransparency = 1
+    info.Text = "点击试听并选择；取消则关闭音效"
+    info.Font = Enum.Font.Gotham
+    info.TextSize = 12
+    info.TextColor3 = Color3.fromRGB(190,190,190)
+    info.TextXAlignment = Enum.TextXAlignment.Left
+    info.ZIndex = 10001
+
+    local btnY = 64
+    for i, opt in ipairs(SOUND_OPTIONS) do
+        local btn = Instance.new("TextButton", overlay)
+        btn.Size = UDim2.new(0, 90, 0, 34)
+        btn.Position = UDim2.new(0, 16 + (i-1) * 100, 0, btnY)
+        btn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+        btn.TextColor3 = Color3.fromRGB(240,240,240)
+        btn.Font = Enum.Font.GothamSemibold
+        btn.TextSize = 14
+        btn.Text = opt.name
+        btn.AutoButtonColor = true
+        local btnCorner = Instance.new("UICorner", btn)
+        btnCorner.CornerRadius = UDim.new(0,6)
+        btn.ZIndex = 10002
+
+        btn.MouseButton1Click:Connect(function()
+            -- 选择并试听
+            selectedSoundId = opt.id
+            -- 播放试听音效（本地）
+            spawn(function()
+                local s = Instance.new("Sound")
+                s.SoundId = selectedSoundId
+                s.Volume = 1.6
+                s.PlaybackSpeed = 1
+                s.Parent = PlayerGui
+                SoundService:PlayLocalSound(s)
+                task.delay(1.5, function()
+                    if s and s.Parent then s:Destroy() end
+                end)
+            end)
+            -- 关闭选择界面
+            if overlay and overlay.Parent then overlay:Destroy() end
+            -- 更新 UI 状态显示
+            updateUi()
+        end)
+    end
+
+    local cancelBtn = Instance.new("TextButton", overlay)
+    cancelBtn.Size = UDim2.new(0, 80, 0, 28)
+    cancelBtn.Position = UDim2.new(1, -90, 1, -40)
+    cancelBtn.Text = "取消"
+    cancelBtn.Font = Enum.Font.Gotham
+    cancelBtn.TextSize = 14
+    cancelBtn.BackgroundColor3 = Color3.fromRGB(60,60,60)
+    cancelBtn.TextColor3 = Color3.fromRGB(230,230,230)
+    local cancelCorner = Instance.new("UICorner", cancelBtn)
+    cancelCorner.CornerRadius = UDim.new(0,6)
+    cancelBtn.ZIndex = 10002
+
+    cancelBtn.MouseButton1Click:Connect(function()
+        -- 取消选择 -> 关闭音效开关（按需求：取消则不启用）
+        if overlay and overlay.Parent then overlay:Destroy() end
+        soundEnabled = false
+        selectedSoundId = nil
+        updateUi()
+    end)
+end
+
 local function toggleSound()
     soundEnabled = not soundEnabled
+    if soundEnabled then
+        -- 每次打开都要求重新选择（关闭再打开需重新选择）
+        selectedSoundId = nil
+        showSoundSelector()
+    else
+        -- 关闭时清除已选，以便下次重新选择
+        selectedSoundId = nil
+    end
     updateUi()
 end
 SoundFrame.InputBegan:Connect(function(input)
@@ -612,6 +790,7 @@ end)
 
 updateUi()
 
+-- ========== 渲染弹道 & 射击逻辑（调整为使用预测点做可视化，但仍向服务器发送真实 targetPart） ==========
 local function fadeAndDestroyBeam(beam, parts)
     local steps = 12
     local waitTime = FADE_DURATION / steps
@@ -678,6 +857,22 @@ local function drawTracer(startPos, endPos)
     end)
 end
 
+-- 修改 playHitSound 使用选中的音效
+local function playHitSound()
+    if not soundEnabled then return end
+    local id = selectedSoundId or SOUND_OPTIONS[1].id
+    local s = Instance.new("Sound")
+    s.SoundId = id
+    s.Volume = 2
+    s.PlaybackSpeed = 1
+    s.Parent = PlayerGui
+    SoundService:PlayLocalSound(s)
+    task.delay(2, function()
+        if s and s.Parent then s:Destroy() end
+    end)
+end
+
+-- ========== 敌方判定 / 选择躯干部位（保持原逻辑） ==========
 local function isEnemyPlayer(plr)
     if plr == localPlayer then return false end
     if plr.Team == localPlayer.Team then return false end
@@ -694,187 +889,269 @@ local function isEnemyPlayer(plr)
     return true
 end
 
+local function chooseTorsoAdornee(char)
+    return char:FindFirstChild("UpperTorso")
+        or char:FindFirstChild("Torso")
+        or char:FindFirstChild("HumanoidRootPart")
+        or char:FindFirstChild("LowerTorso")
+        or char:FindFirstChild("Head")
+end
+
+-- ========== 关键改动：基于采样与预测选择最佳目标部位 ==========
 local function getBestTargetPart()
     local myChar = localPlayer.Character
-    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") or not myChar:FindFirstChild("Head") then return nil end
     local myPos = myChar.HumanoidRootPart.Position
+    local myHeadPos = myChar.Head.Position
+    local ownVel = getOwnVelocity()
 
-    local closestHeadPart = nil
-    local closestHeadChar = nil
-    local headDist = math.huge
+    local bestPart = nil
+    local bestChar = nil
+    local bestScore = math.huge -- 越小越好 (例如预测后与我距离)
 
-    local closestPart = nil
-    local closestChar = nil
-    local partDist = math.huge
-
+    -- 遍历玩家，使用预测位置判断视线与距离
     for _, plr in ipairs(Players:GetPlayers()) do
         if not isEnemyPlayer(plr) then continue end
         local char = plr.Character
         if not char then continue end
 
-        local rp = RaycastParams.new()
-        rp.FilterType = Enum.RaycastFilterType.Blacklist
-        rp.FilterDescendantsInstances = {myChar}
-        rp.IgnoreWater = true
-
+        -- 优先考虑 Head
+        local candidateParts = {}
         local head = char:FindFirstChild("Head")
-        if head and head:IsA("BasePart") then
-            local dir = head.Position - myPos
-            local dist = dir.Magnitude
-            if dist <= MAX_DISTANCE then
-                local ray = workspace:Raycast(myPos, dir, rp)
-                if not ray then
-                    if dist < headDist then
-                        headDist = dist
-                        closestHeadPart = head
-                        closestHeadChar = char
-                    end
-                    continue
-                else
-                    local hitInst = ray.Instance
-                    if hitInst and hitInst:IsDescendantOf(char) then
-                        if dist < headDist then
-                            headDist = dist
-                            closestHeadPart = head
-                            closestHeadChar = char
-                        end
-                        continue
-                    end
-                end
-            end
-        end
-
+        if head and head:IsA("BasePart") then table.insert(candidateParts, head) end
+        -- 其他部位作为备选
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                local dir = part.Position - myPos
-                local dist = dir.Magnitude
-                if dist <= MAX_DISTANCE and dist < partDist then
-                    local ray = workspace:Raycast(myPos, dir, rp)
-                    if not ray then
-                        partDist = dist
-                        closestPart = part
-                        closestChar = char
-                    else
-                        local hitInst = ray.Instance
-                        if hitInst and hitInst:IsDescendantOf(char) then
-                            partDist = dist
-                            closestPart = part
-                            closestChar = char
-                        end
-                    end
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and part.Name ~= "Head" then
+                table.insert(candidateParts, part)
+            end
+        end
+
+        local plrVel = getPlayerVelocity(plr)
+
+        for _, part in ipairs(candidateParts) do
+            local basePos = part.Position
+            local dist = (basePos - myHeadPos).Magnitude
+            if dist > MAX_DISTANCE then
+                continue
+            end
+
+            -- 计算预测时间并得到预测位置
+            local predT = computePredictionTime(dist)
+            local predictedPos = basePos + plrVel * predT
+
+            -- 进一步考虑自身移动（如果极快移动，抵消一部分）
+            local selfComp = ownVel * (predT * 0.25) -- 只抵消一小部分，避免过度矫正
+            predictedPos = predictedPos + selfComp
+
+            -- 尝试 Raycast 到预测点（黑名单仅自己）
+            local rp = RaycastParams.new()
+            rp.FilterType = Enum.RaycastFilterType.Blacklist
+            rp.FilterDescendantsInstances = { myChar }
+            rp.IgnoreWater = true
+
+            local dir = predictedPos - myHeadPos
+            if dir.Magnitude <= 0 then
+                dir = Vector3.new(0,0.001,0)
+            end
+
+            local ray = workspace:Raycast(myHeadPos, dir, rp)
+            local visible = false
+            if not ray then
+                visible = true
+            else
+                local hitInst = ray.Instance
+                if hitInst and hitInst:IsDescendantOf(char) then
+                    visible = true
+                end
+            end
+
+            if visible then
+                -- 评分函数：优先较近预测距离（越小越好）
+                local score = dir.Magnitude
+                -- 旁注：可以对头部额外加权（加小数）
+                if part == head then score = score * 0.85 end
+                if score < bestScore then
+                    bestScore = score
+                    bestPart = part
+                    bestChar = char
                 end
             end
         end
     end
 
-    if closestHeadPart then
-        return closestHeadPart, closestHeadChar
-    end
-
-    return closestPart, closestChar
+    return bestPart, bestChar
 end
 
-local function playHitSound()
-    if not soundEnabled then return end
-    local s = Instance.new("Sound")
-    s.SoundId = "rbxassetid://8726881116"
-    s.Volume = 2
-    s.PlaybackSpeed = 1
-    s.Parent = PlayerGui
-    SoundService:PlayLocalSound(s)
-    task.delay(2, function()
-        if s and s.Parent then s:Destroy() end
-    end)
+-- ========== 射击（使用预测位置作视觉反馈，但仍把 targetPart 传给服务器） ==========
+local function isHoldingTool(character)
+    if not character then return false end
+    for _,child in ipairs(character:GetChildren()) do
+        if child:IsA("Tool") then
+            return true
+        end
+    end
+    return false
 end
 
 local function tryInvokeReload()
+    if isReloading then return end
     if not FuncReloadEvent then return end
     local now = os.clock()
-    if now - reloadLastInvoke >= RELOAD_COOLDOWN then
-        pcall(function()
-            FuncReloadEvent:InvokeServer()
+    if now - reloadLastInvoke < RELOAD_COOLDOWN then return end
+    local ok, res = pcall(function()
+        return FuncReloadEvent:InvokeServer()
+    end)
+    reloadLastInvoke = now
+    if ok then
+        isReloading = true
+        -- 显示吐司并播放换弹音（本地）
+        local function showReloadToast(duration)
+            -- 简略吐司：复用之前的显示函数逻辑，如果需要更复杂 UI 请参考上文
+            local TOAST_NAME = "ReloadToast"
+            if ScreenGui:FindFirstChild(TOAST_NAME) then return end
+            local toast = Instance.new("Frame")
+            toast.Name = TOAST_NAME
+            toast.Size = UDim2.new(0, 220, 0, 56)
+            toast.Position = UDim2.new(0, 12, 1, -72)
+            toast.BackgroundColor3 = Color3.fromRGB(24,24,24)
+            toast.BorderSizePixel = 0
+            toast.ZIndex = 9999
+            toast.Parent = ScreenGui
+            local tlabel = Instance.new("TextLabel", toast)
+            tlabel.Size = UDim2.new(1, -20, 0, 24)
+            tlabel.Position = UDim2.new(0, 10, 0, 8)
+            tlabel.BackgroundTransparency = 1
+            tlabel.Text = "自动换弹"
+            tlabel.Font = Enum.Font.GothamSemibold
+            tlabel.TextSize = 14
+            tlabel.TextColor3 = Color3.fromRGB(240,240,240)
+            local progress = Instance.new("Frame", toast)
+            progress.Size = UDim2.new(0,0,0,12)
+            progress.Position = UDim2.new(0,10,0,32)
+            progress.BackgroundColor3 = Color3.fromRGB(100,200,255)
+            local durationVal = duration or RELOAD_DURATION
+            spawn(function()
+                local start = tick()
+                while tick() - start < durationVal do
+                    local p = (tick() - start)/durationVal
+                    progress.Size = UDim2.new(p, 0, 1, 0)
+                    task.wait()
+                end
+                if toast and toast.Parent then toast:Destroy() end
+            end)
+        end
+        showReloadToast(RELOAD_DURATION)
+        local reloadSound = Instance.new("Sound")
+        reloadSound.SoundId = "rbxassetid://93481383611512"
+        reloadSound.Volume = 1
+        reloadSound.Parent = PlayerGui
+        SoundService:PlayLocalSound(reloadSound)
+        task.delay(RELOAD_DURATION + 0.05, function()
+            if reloadSound and reloadSound.Parent then reloadSound:Destroy() end
         end)
-        reloadLastInvoke = now
+        task.delay(RELOAD_DURATION, function() isReloading = false end)
     end
 end
 
 local function fireAtTarget(targetPart, targetChar)
+    if isReloading then return end
     if not targetPart or not targetChar then return end
     local myChar = localPlayer.Character
     if not myChar or not myChar:FindFirstChild("Head") then return end
-
+    if not isHoldingTool(myChar) then return end
     local myHum = myChar:FindFirstChild("Humanoid")
-    if myHum and myHum.Health <= 0 then
-        return
-    end
+    if myHum and myHum.Health <= 0 then return end
 
     local startPos = myChar.Head.Position
-    local hitPos = targetPart.Position
+    local targetPos = targetPart.Position
 
-    local dir = hitPos - startPos
-    if dir.Magnitude > MAX_DISTANCE then return end
+    -- 使用最新估计速度与距离计算预测点以作弹道可视反馈
+    local plrVel = Vector3.new(0,0,0)
+    for p,_ in pairs(samples) do
+        if p and p.Character == targetChar then
+            plrVel = getPlayerVelocity(p)
+            break
+        end
+    end
+    local dist = (targetPos - startPos).Magnitude
+    local predT = computePredictionTime(dist)
+    local predictedPos = targetPos + plrVel * predT
 
-    local rp = RaycastParams.new()
-    rp.FilterType = Enum.RaycastFilterType.Blacklist
-    rp.FilterDescendantsInstances = {myChar}
-    rp.IgnoreWater = true
+    -- 兼顾自身微小运动，减少偏差（仅少量补偿）
+    local ownVel = getOwnVelocity()
+    predictedPos = predictedPos + ownVel * (predT * 0.12)
 
-    local ray = workspace:Raycast(startPos, dir, rp)
-    if ray and not ray.Instance:IsDescendantOf(targetChar) then
-        return
+    -- 如果预测点过远超出 MAX_DISTANCE，则回退为真实位置
+    if (predictedPos - startPos).Magnitude > MAX_DISTANCE then
+        predictedPos = targetPos
     end
 
-    local targetHum = targetChar:FindFirstChild("Humanoid")
-    local prevHealth = nil
-    if targetHum then prevHealth = targetHum.Health end
+    -- 绘制弹道到预测点（本地视觉）
+    drawTracer(startPos, predictedPos)
 
-    drawTracer(startPos, hitPos)
-
+    -- 仍向服务器发送真实 targetPart（服务器通常使用目标部位或射线）
     local packet = {
         {
             startPos,
-            hitPos,
+            targetPos,
             targetPart
         }
     }
     ShootEvent:FireServer(packet)
 
+    -- 简单命中回调检测：延迟检查血量变化以播放命中音
+    local targetHum = targetChar:FindFirstChild("Humanoid")
+    local prevHealth = nil
+    if targetHum then prevHealth = targetHum.Health end
     if targetHum and prevHealth then
-        task.delay(0.25, function()
+        task.delay(0.20, function()
             if not targetHum.Parent then return end
             local newHealth = targetHum.Health
             if newHealth < prevHealth then
                 playHitSound()
-                missCount = 0
-                if newHealth <= 0 then
-                    local deathTime = os.clock()
-                    task.delay(0.5, function()
-                        if lastFire <= deathTime then
-                            tryInvokeReload()
-                        end
-                    end)
-                end
-            else
-                missCount = missCount + 1
-                if missCount >= 2 and FuncReloadEvent then
-                    tryInvokeReload()
-                    missCount = 0
-                end
             end
         end)
     end
 end
 
+-- ========== 采样主循环（对所有玩家与自己高频采样） ==========
+-- 使用 Heartbeat 进行物理同步采样（极致反应倾向）
+RunService.Heartbeat:Connect(function(dt)
+    local now = tick()
+    -- 记录自身位置样本（HRP 或 Head）
+    local ownChar = localPlayer.Character
+    if ownChar then
+        local hrp = ownChar:FindFirstChild("HumanoidRootPart") or ownChar:FindFirstChild("Head")
+        if hrp and hrp:IsA("BasePart") then
+            recordOwnSample(hrp.Position, now)
+        end
+    end
+
+    -- 记录其他玩家样本
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= localPlayer then
+            local char = plr.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+                if hrp and hrp:IsA("BasePart") then
+                    recordSampleForPlayer(plr, hrp.Position, now)
+                end
+            end
+        end
+    end
+end)
+
+-- ========== RunService Heartbeat 射击循环（保留你的节奏） ==========
 RunService.Heartbeat:Connect(function()
     local myChar = localPlayer.Character
     if myChar then
         local myHum = myChar:FindFirstChild("Humanoid")
-        if myHum and myHum.Health <= 0 then
-            return
-        end
+        if myHum and myHum.Health <= 0 then return end
     end
 
     if not autoFireEnabled then return end
+    if isReloading then return end -- 换弹期间停止射击
+
     local now = os.clock()
     if now - lastFire < fireRate then return end
 
@@ -887,25 +1164,18 @@ end)
 
 updateUi()
 
+-- ========== ESP（保留原有更细血条等） ==========
 local ESP_MAX_DISTANCE = 2000
 local espMap = {}
 
 local function healthColorFromPercent(p)
     if p >= 0.66 then
-        return Color3.fromRGB(50,205,50)
+        return Color3.fromRGB(50,205,50) -- 绿
     elseif p >= 0.33 then
-        return Color3.fromRGB(255,215,0)
+        return Color3.fromRGB(255,215,0) -- 黄
     else
-        return Color3.fromRGB(255,69,0)
+        return Color3.fromRGB(255,69,0) -- 红
     end
-end
-
-local function chooseTorsoAdornee(char)
-    return char:FindFirstChild("UpperTorso")
-        or char:FindFirstChild("Torso")
-        or char:FindFirstChild("HumanoidRootPart")
-        or char:FindFirstChild("LowerTorso")
-        or char:FindFirstChild("Head")
 end
 
 local function createEspForPlayer(plr)
@@ -964,7 +1234,7 @@ local function createEspForPlayer(plr)
     nameLabel.Size = UDim2.new(0, 85, 0, 14)
     nameLabel.Position = UDim2.new(0, 8, 0, 3)
     nameLabel.BackgroundTransparency = 1
-    nameLabel.Text = plr.Name
+    nameLabel.Text = plr.Name -- 只显示真实用户名
     nameLabel.TextColor3 = Color3.fromRGB(230,230,230)
     nameLabel.Font = Enum.Font.GothamBold
     nameLabel.TextSize = 12
@@ -1125,6 +1395,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+-- ========== 近战自动循环（保持原逻辑） ==========
 task.spawn(function()
     while true do
         task.wait(0.2)
