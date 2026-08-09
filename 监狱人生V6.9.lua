@@ -52,9 +52,9 @@ local isReloading = false
 -- 你要极致响应，所以这些默认数值较激进（短窗口、高频率）
 local SAMPLE_WINDOW = 0.12      -- 样本保留的时间窗口（秒），短时间提高响应
 local SAMPLE_MAX = 6           -- 每个目标保留的最大样本数
-local PREDICTION_MIN = 0.04    -- 最小预测时间（秒）
-local PREDICTION_MAX = 0.45    -- 最大预测时间（秒）
-local PREDICTION_SPEED_FACTOR = 0.9 -- 用于将距离映射到预测时间（可调）
+local PREDICTION_MIN = 0.3    -- 最小预测时间（秒）
+local PREDICTION_MAX = 0.02  -- 最大预测时间（秒）
+local PREDICTION_SPEED_FACTOR = 0-- 用于将距离映射到预测时间（可调）
 -- 注意：更大的预测时间会更“超前”但容易错失高度机动目标
 
 local samples = {} -- samples[player] = { {pos=Vector3, t=time}, ... }
