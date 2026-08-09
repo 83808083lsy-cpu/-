@@ -650,7 +650,7 @@ local function showSoundSelector()
             spawn(function()
                 local s = Instance.new("Sound")
                 s.SoundId = selectedSoundId
-                s.Volume = 1.6
+                s.Volume = 1
                 s.PlaybackSpeed = 1
                 s.Parent = PlayerGui
                 SoundService:PlayLocalSound(s)
@@ -863,7 +863,7 @@ local function playHitSound()
     local id = selectedSoundId or SOUND_OPTIONS[1].id
     local s = Instance.new("Sound")
     s.SoundId = id
-    s.Volume = 2
+    s.Volume = 1
     s.PlaybackSpeed = 1
     s.Parent = PlayerGui
     SoundService:PlayLocalSound(s)
