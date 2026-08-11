@@ -1,39 +1,3 @@
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
-
-local function toVector2(pos)
-    if typeof(pos) == "Vector2" then
-        return pos
-    elseif typeof(pos) == "Vector3" then
-        return Vector2.new(pos.X, pos.Y)
-    else
-        return Vector2.new(0,0)
-    end
-end
-
-local function safeGetMouseLocation()
-    local ok, res = pcall(function() return UserInputService:GetMouseLocation() end)
-    if ok and typeof(res) == "Vector2" then
-        return res
-    end
-    return Vector2.new(0,0)
-end
-
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MeleeAutoAttack"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = game:GetService("CoreGui")
-
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0,420,0,480)
-MainFrame.Position = UDim2.new(0.02,0,0.12,0)
-MainFrame.BackgroundColor3 = Color3.fromRGB(255,245,250)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Parent = ScreenGui
