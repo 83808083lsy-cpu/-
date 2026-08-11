@@ -376,7 +376,7 @@ local function createWhitelistSection()
     title.Size = UDim2.new(1,0,0,20)
     title.Position = UDim2.new(0,6,0,0)
     title.BackgroundTransparency = 1
-    title.Text = "白名单（点击以切换，选中则跳过自动攻击与静默转向）"
+    title.Text = "白名单"
     title.TextColor3 = Color3.fromRGB(80,30,120)
     title.Font = Enum.Font.Gotham
     title.TextSize = 14
@@ -494,14 +494,14 @@ createWhitelistSection()
 local AlwaysHeadSwitch = createSwitch("始终攻击头部", false) -- 新增：始终攻击头部开关
 local AutoSwitch = createSwitch("杀戮光环", false)
 local SilentSwitch = createSwitch("静默转向", false)
-local TeamCheckSwitch = createSwitch("队伍检查（只攻击敌对）", false)
+local TeamCheckSwitch = createSwitch("队伍检查", false)
 
 -- 滑块：按新顺序排列，并把攻击距离上限改为 14
-local RangeSlider = createSlider("攻击距离 (米)", 0, 14, 14) -- 上限 14
-local SilentRangeSlider = createSlider("静默转向触发范围 (米)", 0, 20, 10)
-local MultiTargetSlider = createSlider("同时攻击目标数 (1-3)", 1, 3, 1)
-local CooldownSlider = createSlider("攻击冷却 (秒)", 0.5, 5, 0.5)
-local SilentCooldownSlider = createSlider("静默转向冷却 (秒，0可用)", 0, 5, 0)
+local RangeSlider = createSlider("攻击距离", 0, 14, 14) -- 上限 14
+local SilentRangeSlider = createSlider("静默转向触发范围", 0, 20, 10)
+local MultiTargetSlider = createSlider("同时攻击目标数", 1, 3, 1)
+local CooldownSlider = createSlider("攻击冷却", 0.5, 5, 0.5)
+local SilentCooldownSlider = createSlider("静默转向冷却", 0, 5, 0)
 
 local autoAttack = false
 local silentAim = false
@@ -932,7 +932,7 @@ do
         tFloat:Play()
         tTextIn.Completed:Wait()
 
-        task.wait(60)
+        task.wait(15)
 
         local tTextOut = TweenService:Create(centerText, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {TextTransparency = 1, TextStrokeTransparency = 1})
         tTextOut:Play()
