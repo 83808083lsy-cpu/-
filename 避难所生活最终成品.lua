@@ -354,6 +354,7 @@ end
 local AutoSwitch = createSwitch("杀戮光环", false)
 local SilentSwitch = createSwitch("静默转向", false)
 local TeamCheckSwitch = createSwitch("队伍检查（只攻击敌对）", false)
+local AlwaysHeadSwitch = createSwitch("始终攻击头部", false) -- 新增：始终攻击头部开关
 
 local RangeSlider = createSlider("攻击距离 (米)", 0, 15, 15)
 local CooldownSlider = createSlider("攻击冷却 (秒)", 0.5, 5, 0.5)
@@ -364,6 +365,7 @@ local SilentCooldownSlider = createSlider("静默转向冷却 (秒，0可用)", 
 local autoAttack = false
 local silentAim = false
 local teamCheck = false
+local alwaysHead = false -- 新增变量
 local attackRange = 15
 local attackCoolDown = 0.5
 local maxTargets = 1
@@ -420,6 +422,18 @@ spawn(function()
         if cur ~= prev then
             prev = cur
             teamCheck = cur
+        end
+        task.wait(0.08)
+    end
+end)
+
+spawn(function()
+    local prev = AlwaysHeadSwitch.Get()
+    while true do
+        local cur = AlwaysHeadSwitch.Get()
+        if cur ~= prev then
+            prev = cur
+            alwaysHead = cur
         end
         task.wait(0.08)
     end
@@ -522,10 +536,21 @@ local function collectTargets(maxCount, maxRange)
     return out
 end
 
-local function findTargetLimb(char)
+local function findTargetLimb(char, preferHead)
+    -- 若 preferHead 为 true，则优先返回 Head 部位（若存在）
+    if preferHead then
+        local head = char:FindFirstChild("Head") or char:FindFirstChild("head")
+        if head then
+            return head
+        end
+    end
     local limb = char:FindFirstChild("Right Arm") or char:FindFirstChild("RightHand") or char:FindFirstChild("RightLowerArm") or char:FindFirstChild("RightUpperArm")
     if not limb then
         limb = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+    end
+    -- 最后仍可尝试 Head 作为后备
+    if not limb then
+        limb = char:FindFirstChild("Head") or char:FindFirstChild("head")
     end
     return limb
 end
@@ -538,7 +563,7 @@ RunService.RenderStepped:Connect(function()
     local candidates = collectTargets(1, silentRange)
     local targetPlr = candidates[1]
     if targetPlr and targetPlr.Character then
-        local tarLimb = findTargetLimb(targetPlr.Character)
+        local tarLimb = findTargetLimb(targetPlr.Character, alwaysHead)
         if tarLimb then
             pcall(function()
                 rootPart.CFrame = CFrame.new(rootPart.Position, tarLimb.Position)
@@ -569,7 +594,7 @@ RunService.Heartbeat:Connect(function()
         else
             local tarChar = targetPlr.Character
             local tarHum = tarChar:FindFirstChild("Humanoid")
-            local tarLimb = findTargetLimb(tarChar)
+            local tarLimb = findTargetLimb(tarChar, alwaysHead)
             if not tarHum or not tarLimb then
             else
                 if silentAim then
@@ -628,6 +653,7 @@ if CooldownSlider and CooldownSlider.Set then CooldownSlider.Set(0.5) end
 if MultiTargetSlider and MultiTargetSlider.Set then MultiTargetSlider.Set(1) end
 if SilentRangeSlider and SilentRangeSlider.Set then SilentRangeSlider.Set(10) end
 if SilentCooldownSlider and SilentCooldownSlider.Set then SilentCooldownSlider.Set(0) end
+if AlwaysHeadSwitch and AlwaysHeadSwitch.Set then AlwaysHeadSwitch.Set(false) end
 
 MainFrame.Active = true
 local draggingWindow = false
