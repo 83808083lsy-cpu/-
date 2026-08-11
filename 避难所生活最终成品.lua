@@ -1,3 +1,61 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local LocalPlayer = Players.LocalPlayer
+
+local function toVector2(pos)
+    if typeof(pos) == "Vector2" then
+        return pos
+    elseif typeof(pos) == "Vector3" then
+        return Vector2.new(pos.X, pos.Y)
+    else
+        return Vector2.new(0,0)
+    end
+end
+
+local function safeGetMouseLocation()
+    local ok, res = pcall(function() return UserInputService:GetMouseLocation() end)
+    if ok and typeof(res) == "Vector2" then
+        return res
+    end
+    return Vector2.new(0,0)
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MeleeAutoAttack"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+ScreenGui.DisplayOrder = 99999
+ScreenGui.Parent = CoreGui
+
+local function enforceTopMost()
+    local desired = 99999
+    while true do
+        if not ScreenGui or ScreenGui.Parent ~= CoreGui then
+            pcall(function() ScreenGui.Parent = CoreGui end)
+        end
+        if ScreenGui.DisplayOrder ~= desired then
+            pcall(function() ScreenGui.DisplayOrder = desired end)
+        end
+        if ScreenGui.ZIndexBehavior ~= Enum.ZIndexBehavior.Global then
+            pcall(function() ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global end)
+        end
+        if ScreenGui.Enabled == false then
+            pcall(function() ScreenGui.Enabled = true end)
+        end
+        task.wait(0.4)
+    end
+end
+task.spawn(enforceTopMost)
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0,420,0,480)
+MainFrame.Position = UDim2.new(0.02,0,0.12,0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(255,245,250)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Parent = ScreenGui
@@ -626,7 +684,7 @@ do
     local overlayGui = Instance.new("ScreenGui")
     overlayGui.Name = "MeleeStartupOverlay"
     overlayGui.ResetOnSpawn = false
-    overlayGui.Parent = game:GetService("CoreGui")
+    overlayGui.Parent = CoreGui
 
     local overlay = Instance.new("Frame")
     overlay.Name = "BlackOverlay"
@@ -668,7 +726,7 @@ do
         tFloat:Play()
         tTextIn.Completed:Wait()
 
-        task.wait(0.5)
+        task.wait(60)
 
         local tTextOut = TweenService:Create(centerText, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {TextTransparency = 1, TextStrokeTransparency = 1})
         tTextOut:Play()
