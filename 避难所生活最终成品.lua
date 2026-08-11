@@ -148,9 +148,12 @@ local function createInfoLabel(text)
     return label, frame
 end
 
+-- 信息标签
 local InfoLabel, _ = createInfoLabel("状态：未启用")
 local WeaponCheckLabel, _ = createInfoLabel("手持武器检测：无目标武器")
+local WhitelistLabel, _ = createInfoLabel("白名单：无")
 
+-- 开关创建函数
 local function createSwitch(labelText, initial)
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1,-12,0,64)
@@ -217,6 +220,7 @@ local function createSwitch(labelText, initial)
     }
 end
 
+-- 滑块创建函数
 local function createSlider(labelText, minVal, maxVal, initial)
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1,-12,0,84)
@@ -351,22 +355,159 @@ local function createSlider(labelText, minVal, maxVal, initial)
     }
 end
 
+-- 重新排序：先白名单显示（列表区域），再开关，再滑块
+-- 白名单数据结构（UserId -> true）
+local whitelist = {}
+local whitelistButtons = {} -- UserId -> button
+
+local function isWhitelisted(plr)
+    if not plr then return false end
+    return whitelist[plr.UserId] == true
+end
+
+-- 创建白名单选择面板
+local function createWhitelistSection()
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(1,-12,0,140)
+    container.BackgroundTransparency = 1
+    container.Parent = ContentScroller
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1,0,0,20)
+    title.Position = UDim2.new(0,6,0,0)
+    title.BackgroundTransparency = 1
+    title.Text = "白名单（点击以切换，选中则跳过自动攻击与静默转向）"
+    title.TextColor3 = Color3.fromRGB(80,30,120)
+    title.Font = Enum.Font.Gotham
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = container
+
+    local listFrame = Instance.new("Frame")
+    listFrame.Size = UDim2.new(1,0,1,-28)
+    listFrame.Position = UDim2.new(0,0,0,28)
+    listFrame.BackgroundTransparency = 1
+    listFrame.Parent = container
+
+    local listScroller = Instance.new("ScrollingFrame")
+    listScroller.Size = UDim2.new(1,0,1,0)
+    listScroller.BackgroundTransparency = 1
+    listScroller.ScrollBarThickness = 6
+    listScroller.Parent = listFrame
+    listScroller.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    listScroller.ClipsDescendants = true
+
+    local listLayout = Instance.new("UIListLayout", listScroller)
+    listLayout.Padding = UDim.new(0,6)
+    listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local function makePlayerButton(plr)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1,-12,0,28)
+        btn.BackgroundColor3 = Color3.fromRGB(245,240,247)
+        btn.BorderSizePixel = 0
+        btn.Text = plr.Name .. " (" .. tostring(plr.UserId) .. ")"
+        btn.TextColor3 = Color3.fromRGB(80,30,120)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 14
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.AutoButtonColor = false
+        btn.Parent = listScroller
+        local corner = Instance.new("UICorner", btn)
+        corner.CornerRadius = UDim.new(0,8)
+
+        local function updateVisual()
+            if isWhitelisted(plr) then
+                btn.BackgroundColor3 = Color3.fromRGB(255,220,235)
+                btn.TextColor3 = Color3.fromRGB(160,40,140)
+            else
+                btn.BackgroundColor3 = Color3.fromRGB(245,240,247)
+                btn.TextColor3 = Color3.fromRGB(80,30,120)
+            end
+        end
+
+        btn.MouseButton1Click:Connect(function()
+            local uid = plr.UserId
+            if whitelist[uid] then
+                whitelist[uid] = nil
+            else
+                whitelist[uid] = true
+            end
+            updateVisual()
+            -- 更新常亮显示
+            local names = {}
+            for id,_ in pairs(whitelist) do
+                local p = Players:GetPlayerByUserId(id)
+                if p then table.insert(names, p.Name) end
+            end
+            if #names == 0 then
+                WhitelistLabel.Text = "白名单：无"
+            else
+                WhitelistLabel.Text = "白名单：" .. table.concat(names, "，")
+            end
+        end)
+
+        whitelistButtons[plr.UserId] = btn
+        updateVisual()
+    end
+
+    -- 初始化现有玩家
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            makePlayerButton(plr)
+        end
+    end
+
+    -- 监听玩家加入/离开
+    Players.PlayerAdded:Connect(function(plr)
+        -- 延迟一点以保证 Name 等可用
+        task.delay(0.05, function() 
+            makePlayerButton(plr)
+        end)
+    end)
+    Players.PlayerRemoving:Connect(function(plr)
+        local btn = whitelistButtons[plr.UserId]
+        if btn then
+            pcall(function() btn:Destroy() end)
+            whitelistButtons[plr.UserId] = nil
+        end
+        whitelist[plr.UserId] = nil
+        -- 更新常亮显示
+        local names = {}
+        for id,_ in pairs(whitelist) do
+            local p = Players:GetPlayerByUserId(id)
+            if p then table.insert(names, p.Name) end
+        end
+        if #names == 0 then
+            WhitelistLabel.Text = "白名单：无"
+        else
+            WhitelistLabel.Text = "白名单：" .. table.concat(names, "，")
+        end
+    end)
+end
+
+-- 先创建白名单面板（所以它会在界面上靠前）
+createWhitelistSection()
+
+-- 开关：重排顺序（常亮显示开关放前）
+local AlwaysHeadSwitch = createSwitch("始终攻击头部", false) -- 新增：始终攻击头部开关
 local AutoSwitch = createSwitch("杀戮光环", false)
 local SilentSwitch = createSwitch("静默转向", false)
 local TeamCheckSwitch = createSwitch("队伍检查（只攻击敌对）", false)
-local AlwaysHeadSwitch = createSwitch("始终攻击头部", false) -- 新增：始终攻击头部开关
 
-local RangeSlider = createSlider("攻击距离 (米)", 0, 15, 15)
-local CooldownSlider = createSlider("攻击冷却 (秒)", 0.5, 5, 0.5)
-local MultiTargetSlider = createSlider("同时攻击目标数 (1-3)", 1, 3, 1)
+-- 滑块：按新顺序排列，并把攻击距离上限改为 14
+local RangeSlider = createSlider("攻击距离 (米)", 0, 14, 14) -- 上限 14
 local SilentRangeSlider = createSlider("静默转向触发范围 (米)", 0, 20, 10)
+local MultiTargetSlider = createSlider("同时攻击目标数 (1-3)", 1, 3, 1)
+local CooldownSlider = createSlider("攻击冷却 (秒)", 0.5, 5, 0.5)
 local SilentCooldownSlider = createSlider("静默转向冷却 (秒，0可用)", 0, 5, 0)
 
 local autoAttack = false
 local silentAim = false
 local teamCheck = false
 local alwaysHead = false -- 新增变量
-local attackRange = 15
+local attackRange = 14
 local attackCoolDown = 0.5
 local maxTargets = 1
 local silentRange = 10
@@ -441,8 +582,8 @@ end)
 
 spawn(function()
     while true do
-        local r = RangeSlider.Get() or 15
-        if r > 15 then r = 15 end
+        local r = RangeSlider.Get() or 14
+        if r > 14 then r = 14 end
         attackRange = math.floor(r * 100 + 0.5) / 100
         RangeSlider.ValueLabel.Text = string.format("%.2f 米", attackRange)
 
@@ -503,37 +644,28 @@ local function getHeldWeapon()
     return nil
 end
 
-local function collectTargets(maxCount, maxRange)
-    if not rootPart then return {} end
-    local results = {}
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character then
-            local tarRoot = plr.Character:FindFirstChild("HumanoidRootPart")
-            local tarHum = plr.Character:FindFirstChild("Humanoid")
-            if tarRoot and tarHum and tarHum.Health > 0 and tarHum:GetState() ~= Enum.HumanoidStateType.Dead then
-                if teamCheck then
-                    if LocalPlayer.Team and plr.Team and LocalPlayer.Team == plr.Team then
-                    else
-                        local dis = (rootPart.Position - tarRoot.Position).Magnitude
-                        if dis <= maxRange then
-                            table.insert(results, {plr=plr, dist=dis})
-                        end
-                    end
-                else
-                    local dis = (rootPart.Position - tarRoot.Position).Magnitude
-                    if dis <= maxRange then
-                        table.insert(results, {plr=plr, dist=dis})
-                    end
-                end
-            end
-        end
+-- 视线检测函数：若从 attackerRoot 到 targetPart 有遮挡（非目标角色本身），则返回 false
+local function hasLineOfSight(attackerRoot, targetPart)
+    if not attackerRoot or not targetPart then return false end
+    local dir = targetPart.Position - attackerRoot.Position
+    if dir.Magnitude <= 0 then return true end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    -- 忽略攻击者自身以免检测到自己的腰带等
+    if character then
+        params.FilterDescendantsInstances = {character}
+    else
+        params.FilterDescendantsInstances = {}
     end
-    table.sort(results, function(a,b) return a.dist < b.dist end)
-    local out = {}
-    for i=1, math.min(#results, maxCount) do
-        table.insert(out, results[i].plr)
+    local ray = workspace:Raycast(attackerRoot.Position, dir, params)
+    if not ray then
+        return true
     end
-    return out
+    local hitInst = ray.Instance
+    if hitInst and hitInst:IsDescendantOf(targetPart.Parent) then
+        return true
+    end
+    return false
 end
 
 local function findTargetLimb(char, preferHead)
@@ -555,6 +687,53 @@ local function findTargetLimb(char, preferHead)
     return limb
 end
 
+-- collectTargets 增加白名单与视线/墙体检测
+local function collectTargets(maxCount, maxRange)
+    if not rootPart then return {} end
+    local results = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            -- 跳过白名单玩家
+            if isWhitelisted(plr) then
+                -- 跳过
+            else
+                local tarRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+                local tarHum = plr.Character:FindFirstChild("Humanoid")
+                if tarRoot and tarHum and tarHum.Health > 0 and tarHum:GetState() ~= Enum.HumanoidStateType.Dead then
+                    if teamCheck then
+                        if LocalPlayer.Team and plr.Team and LocalPlayer.Team == plr.Team then
+                            -- 同队则跳过
+                        else
+                            local dis = (rootPart.Position - tarRoot.Position).Magnitude
+                            if dis <= maxRange then
+                                -- 视线检查（优先头部检测）
+                                local limb = findTargetLimb(plr.Character, true)
+                                if limb and hasLineOfSight(rootPart, limb) then
+                                    table.insert(results, {plr=plr, dist=dis})
+                                end
+                            end
+                        end
+                    else
+                        local dis = (rootPart.Position - tarRoot.Position).Magnitude
+                        if dis <= maxRange then
+                            local limb = findTargetLimb(plr.Character, true)
+                            if limb and hasLineOfSight(rootPart, limb) then
+                                table.insert(results, {plr=plr, dist=dis})
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    table.sort(results, function(a,b) return a.dist < b.dist end)
+    local out = {}
+    for i=1, math.min(#results, maxCount) do
+        table.insert(out, results[i].plr)
+    end
+    return out
+end
+
 RunService.RenderStepped:Connect(function()
     if not silentAim or not rootPart then return end
     local now = os.clock()
@@ -563,6 +742,7 @@ RunService.RenderStepped:Connect(function()
     local candidates = collectTargets(1, silentRange)
     local targetPlr = candidates[1]
     if targetPlr and targetPlr.Character then
+        -- 确认目标不在白名单（collectTargets 已处理），并进行瞄准
         local tarLimb = findTargetLimb(targetPlr.Character, alwaysHead)
         if tarLimb then
             pcall(function()
@@ -648,7 +828,7 @@ CollapseBtn.MouseButton1Click:Connect(function()
     end
 end)
 
-if RangeSlider and RangeSlider.Set then RangeSlider.Set(15) end
+if RangeSlider and RangeSlider.Set then RangeSlider.Set(14) end
 if CooldownSlider and CooldownSlider.Set then CooldownSlider.Set(0.5) end
 if MultiTargetSlider and MultiTargetSlider.Set then MultiTargetSlider.Set(1) end
 if SilentRangeSlider and SilentRangeSlider.Set then SilentRangeSlider.Set(10) end
