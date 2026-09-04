@@ -1,5 +1,5 @@
 task.spawn(function()
-    task.wait(0.5)
+    task.wait(10)
     local UserInputService = game:GetService("UserInputService")
     local TweenService = game:GetService("TweenService")
     local CoreGui = game:GetService("CoreGui")
