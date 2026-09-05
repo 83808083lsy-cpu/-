@@ -278,11 +278,15 @@ task.spawn(function()
 
     local originalHoldDurations = {}
     local promptsDescendantConn = nil
+    local promptsRemovingConn = nil
+    local promptPropertyConns = {} -- store per-prompt property connections
     local holdEnforceState = false -- 默认关闭
-    local enforcedHoldDuration = 0 -- 始终为 0（已移除滑块，开启后直接设 0）
+    local enforcedHoldDuration = 0 -- 始终为 0（开启后直接设 0）
 
     local function setPromptHold(prompt)
         if not prompt or not prompt.Parent or not prompt:IsA("ProximityPrompt") then return end
+        -- Only enforce for E-key prompts when holdEnforceState is true
+        if holdEnforceState and prompt.KeyboardKeyCode ~= Enum.KeyCode.E then return end
         if originalHoldDurations[prompt] == nil then
             local ok, val = pcall(function() return prompt.HoldDuration end)
             if ok then originalHoldDurations[prompt] = val else originalHoldDurations[prompt] = 0 end
@@ -290,10 +294,21 @@ task.spawn(function()
         pcall(function() prompt.HoldDuration = enforcedHoldDuration end)
     end
 
-    local function applyToAllPrompts()
+    local function applyToAllEPrompts()
         for _, inst in ipairs(Workspace:GetDescendants()) do
             if inst:IsA("ProximityPrompt") then
-                setPromptHold(inst)
+                -- attach property changed connection for KeyboardKeyCode if not already
+                if not promptPropertyConns[inst] then
+                    local conn = inst:GetPropertyChangedSignal("KeyboardKeyCode"):Connect(function()
+                        if holdEnforceState and inst.KeyboardKeyCode == Enum.KeyCode.E then
+                            pcall(function() setPromptHold(inst) end)
+                        end
+                    end)
+                    promptPropertyConns[inst] = conn
+                end
+                if inst.KeyboardKeyCode == Enum.KeyCode.E then
+                    pcall(function() setPromptHold(inst) end)
+                end
             end
         end
     end
@@ -302,7 +317,24 @@ task.spawn(function()
         if promptsDescendantConn then return end
         promptsDescendantConn = Workspace.DescendantAdded:Connect(function(desc)
             if desc:IsA("ProximityPrompt") then
-                pcall(function() setPromptHold(desc) end)
+                -- attach property-changed connection
+                if not promptPropertyConns[desc] then
+                    local conn = desc:GetPropertyChangedSignal("KeyboardKeyCode"):Connect(function()
+                        if holdEnforceState and desc.KeyboardKeyCode == Enum.KeyCode.E then
+                            pcall(function() setPromptHold(desc) end)
+                        end
+                    end)
+                    promptPropertyConns[desc] = conn
+                end
+                if holdEnforceState and desc.KeyboardKeyCode == Enum.KeyCode.E then
+                    pcall(function() setPromptHold(desc) end)
+                end
+            end
+        end)
+        promptsRemovingConn = Workspace.DescendantRemoving:Connect(function(desc)
+            if desc and promptPropertyConns[desc] then
+                pcall(function() promptPropertyConns[desc]:Disconnect() end)
+                promptPropertyConns[desc] = nil
             end
         end)
     end
@@ -311,6 +343,15 @@ task.spawn(function()
         if promptsDescendantConn then
             promptsDescendantConn:Disconnect()
             promptsDescendantConn = nil
+        end
+        if promptsRemovingConn then
+            promptsRemovingConn:Disconnect()
+            promptsRemovingConn = nil
+        end
+        -- disconnect all per-prompt property connections
+        for prompt, conn in pairs(promptPropertyConns) do
+            pcall(function() conn:Disconnect() end)
+            promptPropertyConns[prompt] = nil
         end
     end
 
@@ -354,7 +395,7 @@ task.spawn(function()
         holdEnforceState = state
         if state then
             enforcedHoldDuration = 0
-            applyToAllPrompts()
+            applyToAllEPrompts() -- apply only to E-key prompts
             startPromptMonitor()
         else
             stopPromptMonitor()
@@ -389,7 +430,7 @@ task.spawn(function()
     end
 
     if holdEnforceState then
-        applyToAllPrompts()
+        applyToAllEPrompts()
         startPromptMonitor()
     end
 end)
