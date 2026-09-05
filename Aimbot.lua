@@ -1,12 +1,52 @@
--- Fixed & enhanced version of aimbot.lua
+-- Fixed & enhanced version of aimbot.lua with FPS cap attempt at startup
 -- Reduced number of local variables to avoid "Out of local registers" error.
 -- Grouped many values into tables (svc, ctx, state, ui) so single function doesn't exceed 200 local registers.
 -- Added "护盾检测" option: when enabled, skip targets that have shields.
--- Outputs the full script with the fixes applied.
+-- Enhanced lead calculation, adaptive auto-adjust, and visibility caching to reduce FPS impact.
+-- Attempts to set client FPS cap to 999 on startup if the environment exposes such a function.
 
 task.wait(2.6)
 
 loadstring(game:HttpGet("https://raw.githubusercontent.com/83808083lsy-cpu/-/refs/heads/main/Fov.lua"))()
+
+-- Try to increase client FPS cap to a high value if exploit/runtime exposes a function.
+-- This is optional and wrapped in safe checks/pcall so it won't error on standard Roblox environment.
+pcall(function()
+    local function trySetFPSCap(target)
+        local g = _G or {}
+        local candidates = {"setfpscap", "setfpslimit", "SetFPSCap", "SetFPSLimit", "set_fps_cap", "set_fps_limit"}
+        for _, name in ipairs(candidates) do
+            local fn = g[name]
+            if type(fn) == "function" then
+                pcall(fn, target)
+                return true
+            end
+        end
+        -- some exploit environments expose functions on 'syn' table
+        if type(syn) == "table" then
+            local synCandidates = {"set_request_fps", "set_request_fps_limit", "setfps", "set_fps"}
+            for _, n in ipairs(synCandidates) do
+                if type(syn[n]) == "function" then
+                    pcall(syn[n], target)
+                    return true
+                end
+            end
+        end
+        -- try other global lookup as fallback
+        if type(rawget) == "function" then
+            for _, name in ipairs({"setfpscap", "setfpslimit"}) do
+                local fn = rawget(_G, name)
+                if type(fn) == "function" then
+                    pcall(fn, target)
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    trySetFPSCap(999)
+end)
 
 -- Services grouped to reduce local declarations
 local svc = {}
@@ -1188,6 +1228,10 @@ state.prioritizeNearest = false
 -- 新增：护盾检测开关（如果目标有护盾则跳过）
 state.shieldCheckEnabled = false
 
+-- 可见性/墙体检测缓存，减少短时间重复 raycast
+state.visibilityCache = {} -- key: part => {t=timestamp, visible=bool, blocked=bool}
+state.visibilityCacheTTL = 0.12 -- seconds
+
 local function updateBindDisplay(inp)
     local txt = "未知"
     if typeof(inp) == "EnumItem" and inp.Name then
@@ -1212,7 +1256,8 @@ local function raycastSkipPassable(fromPos, toPos, ignoreModel)
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = {ctx.LocalPlayer.Character, svc.Workspace.CurrentCamera}
     params.FilterType = Enum.RaycastFilterType.Exclude
-    local maxIterations = 8
+    -- performance: limit iterations to 4 (good tradeoff between penetration checks and cost)
+    local maxIterations = 4
     for i = 1, maxIterations do
         local result = svc.Workspace:Raycast(origin, dirUnit * remaining, params)
         if not result then
@@ -1284,55 +1329,74 @@ local function getScreenCenterForFov()
     return Vector2.new(cam.ViewportSize.X * 0.5, cam.ViewportSize.Y * 0.5)
 end
 
--- isPartVisibleWithPenetration：用于判断部位是否可见（允许穿透一些透明/不可碰撞物）
+-- isPartVisibleWithPenetration：用于判断部位是否可见（允许穿透一些透明/不可碰撞物），并带短期缓存以减少 raycast 消耗
 local function isPartVisibleWithPenetration(part, cam, ignoreModel)
     if not part or not part:IsA("BasePart") then return false end
+    local now = tick()
+    local cache = state.visibilityCache[part]
+    if cache and (now - cache.t) < state.visibilityCacheTTL then
+        return cache.visible
+    end
+
     local origin = cam.CFrame.Position
     local dir = part.Position - origin
     local distTotal = dir.Magnitude
-    if distTotal <= 0 then return true end
+    if distTotal <= 0 then
+        state.visibilityCache[part] = { t = now, visible = true }
+        return true
+    end
     local dirUnit = dir.Unit
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = {ctx.LocalPlayer.Character, svc.Workspace.CurrentCamera}
     params.FilterType = Enum.RaycastFilterType.Exclude
     local originPos = origin
     local remaining = distTotal
-    local maxIter = 8
+    local maxIter = 4 -- performance: reduce from 8
+    local resultVisible = false
     for i = 1, maxIter do
         local result = svc.Workspace:Raycast(originPos, dirUnit * remaining, params)
         if not result then
-            return true
+            resultVisible = true
+            break
         end
         local inst = result.Instance
         if inst and ignoreModel and inst:IsDescendantOf(ignoreModel) then
-            return true
+            resultVisible = true
+            break
         end
         if inst and inst:IsA("BasePart") then
+            if inst:IsDescendantOf(part.Parent) then
+                resultVisible = true
+                break
+            end
             local transparency = inst.Transparency or 0
             local canCollide = inst.CanCollide
-            if inst:IsDescendantOf(part.Parent) then
-                return true
-            end
             if (transparency >= 0.6) or (canCollide == false) then
                 local hitPos = result.Position
                 local hitDist = (hitPos - origin).Magnitude
                 if hitDist >= distTotal - 0.01 then
-                    return true
+                    resultVisible = true
+                    break
                 end
                 originPos = origin + dirUnit * (hitDist + 0.01)
                 remaining = (part.Position - originPos).Magnitude
                 if remaining <= 0 then
-                    return true
+                    resultVisible = true
+                    break
                 end
                 -- continue loop
             else
-                return false
+                resultVisible = false
+                break
             end
         else
-            return false
+            resultVisible = false
+            break
         end
     end
-    return false
+
+    state.visibilityCache[part] = { t = now, visible = resultVisible }
+    return resultVisible
 end
 
 -- 部位映射：保留身体并新增 头、左右手、左右腿 等选项
@@ -1347,7 +1411,7 @@ local aimOptionsMapping = {
     ["右腿"] = {"RightUpperLeg","RightLowerLeg","RightFoot"},
 }
 
--- findBestVisiblePart：优先尝试已选部位
+-- findBestVisiblePart：优先尝试已选部位（使用缓存的可见性判定）
 local function findBestVisiblePart(char, cam, centerVec, radiusPx, selectedPrefs)
     local function checkList(list)
         for _,name in ipairs(list) do
@@ -1540,7 +1604,7 @@ local function playerHasAnythingInHand()
     return false
 end
 
--- Enhanced prediction
+-- Enhanced prediction with adaptive lead auto-adjust and smoothing compensation
 local function predictPositionForPart(part, origin)
     if not part or not part:IsA("BasePart") then return part and part.Position or nil end
 
@@ -1564,27 +1628,37 @@ local function predictPositionForPart(part, origin)
 
     if state.leadEnabled then
         local t = solveInterceptTime(origin, currentPos, estimatedVel, state.bulletSpeed)
-        local baseLeadBlend = math.clamp(1 - state.smoothFactor, 0, 1)
-        local fovFactor = math.clamp(state.fovValue / 180, 0, 1)
+        local dist = (currentPos - origin).Magnitude
+        local timeEstimate = t or (dist / math.max(1, state.bulletSpeed))
 
-        local leadBlend = baseLeadBlend
+        -- required lead magnitude (approx)
+        local requiredLeadMag = estimatedVel.Magnitude * math.max(0, timeEstimate)
+
+        -- base lead blend derived from smoothFactor (less smooth => more immediate => higher blend)
+        local baseLeadBlend = math.clamp(1 - state.smoothFactor, 0, 1)
+
+        -- lead importance: how big is required lead relative to a heuristic threshold
+        local importance = math.clamp(requiredLeadMag / math.max(10, dist * 0.05), 0, 1)
+
+        -- adaptive adjustment: combine user sensitivity and measured importance
+        local adaptiveFactor = 0
         if state.adaptiveLeadEnabled then
-            local reduction = state.adaptiveLeadSensitivity * fovFactor
-            leadBlend = leadBlend * (1 - reduction)
+            adaptiveFactor = state.adaptiveLeadSensitivity * importance
         end
+
+        -- final lead blend: ensure we boost lead when smoothFactor is high (so smoothing doesn't kill leading)
+        local leadBlend = baseLeadBlend + adaptiveFactor * (1 - baseLeadBlend)
         leadBlend = math.clamp(leadBlend, 0, 1)
 
-        if t and t > 0 then
-            predicted = currentPos + estimatedVel * t * leadBlend
+        -- compensation factor: when smooth is high, overshoot predicted to counter camera lerp smoothing
+        local compensation = 1 + state.smoothFactor * 0.8
+
+        if timeEstimate and timeEstimate > 0 then
+            predicted = currentPos + estimatedVel * timeEstimate * leadBlend * compensation
         else
-            local toTarget = currentPos - origin
-            local dist = toTarget.Magnitude
-            if dist <= 0 then
-                predicted = currentPos
-            else
-                local timeEstimate = dist / math.max(1, state.bulletSpeed)
-                predicted = currentPos + estimatedVel * timeEstimate * leadBlend
-            end
+            -- fallback: approximate
+            local fallbackTime = dist / math.max(1, state.bulletSpeed)
+            predicted = currentPos + estimatedVel * fallbackTime * leadBlend * compensation
         end
     else
         predicted = currentPos
@@ -1650,7 +1724,7 @@ local function SetAimbotState(stateBool)
     end
 end
 
--- predictAndAim：主瞄准函数
+-- predictAndAim：主瞄准函数（将预测位置用于构建目标 CFrame，同时在高平滑时仍尽量保留提前瞄准效果）
 local function predictAndAim(cam, part)
     if not cam or not part then return false end
     local aimPos = part.Position
@@ -1682,6 +1756,7 @@ local function predictAndAim(cam, part)
 
     local smoothLocal = state.smoothFactor
     if state.adaptiveLeadEnabled then
+        -- further reduce smoothing if predicted offset is large
         local predictedOffset = (aimPos - part.Position).Magnitude
         local fovFactor = math.clamp(state.fovValue / 180, 0, 1)
         local leadScale = math.clamp(predictedOffset / 20, 0, 1)
@@ -1689,6 +1764,7 @@ local function predictAndAim(cam, part)
         smoothLocal = math.clamp(state.smoothFactor - reduce, 0, 1)
     end
 
+    -- ensure interpolation alpha doesn't become too tiny (prevents smoothing fully blocking aiming)
     local lerpAlpha = math.clamp(1 - smoothLocal, 0.02, 1)
     if smoothLocal <= 0 then
         cam.CFrame = targetCf
