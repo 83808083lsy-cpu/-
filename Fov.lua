@@ -330,6 +330,37 @@ task.spawn(function()
     local fovLerpSpeed = 6          -- 控制平滑速度（越大越快）
     local fovActive = false         -- 用户开关状态（true = 强制目标 enforcedFOV；false = 处于恢复或空闲）
 
+    -- === 新增：防重置逻辑变量与绑定函数 ===
+    local CAM_FOV = nil
+    local CAM_FOV_Conn = nil
+
+    local function disconnect_CAM_FOV_Conn()
+        if CAM_FOV_Conn then
+            pcall(function() CAM_FOV_Conn:Disconnect() end)
+            CAM_FOV_Conn = nil
+        end
+    end
+
+    local function bind_CAM_FOV_to_camera(cam)
+        -- 断开旧的连接
+        disconnect_CAM_FOV_Conn()
+        if not cam then return end
+        -- 只有在没有使用 RenderStepped 插值（fovEnforceConn == nil）时启用防重置，
+        -- 避免与平滑插值互相干扰。如果你想在插值时仍要防止外部重置，可调整策略。
+        if CAM_FOV and (not fovEnforceConn) then
+            -- 先把当前 CAM_FOV 应用到摄像机
+            pcall(function() cam.FieldOfView = CAM_FOV end)
+            -- 绑定属性变化，检测外部脚本修改并恢复
+            CAM_FOV_Conn = cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+                -- 小阈值比较以避免无限循环
+                local ok, cur = pcall(function() return cam.FieldOfView end)
+                if ok and CAM_FOV and math.abs(cur - CAM_FOV) > 0.01 then
+                    pcall(function() cam.FieldOfView = CAM_FOV end)
+                end
+            end)
+        end
+    end
+
     -- 启动每帧插值连接（fromEnforce: true 表示这是用户主动开启的流程，需记录 originalFOV）
     local function startFOVEnforce(fromEnforce)
         if fovEnforceConn then return end
@@ -342,6 +373,10 @@ task.spawn(function()
         if fromEnforce then
             restoreTarget = nil
         end
+
+        -- 当使用 RenderStepped 插值时，取消防重置连接以避免竞争
+        disconnect_CAM_FOV_Conn()
+
         fovEnforceConn = RunService.RenderStepped:Connect(function(dt)
             local camLocal = Workspace.CurrentCamera
             if not camLocal then return end
@@ -368,6 +403,9 @@ task.spawn(function()
                     end
                     originalFOV = nil
                     restoreTarget = nil
+                    -- 插值结束后，如果 CAM_FOV 仍有设置（比如用户保存了值），重新绑定防重置到当前摄像机
+                    CAM_FOV = enforcedFOV
+                    bind_CAM_FOV_to_camera(Workspace.CurrentCamera)
                 end
                 return
             end
@@ -394,10 +432,13 @@ task.spawn(function()
                 fovEnforceConn = nil
             end
             restoreTarget = nil
+            -- 既然没有插值在跑，启用防重置（使用当前 enforcedFOV）
+            CAM_FOV = enforcedFOV
+            bind_CAM_FOV_to_camera(Workspace.CurrentCamera)
         end
     end
 
-    UI.AddToggle(Category, "强制 E 互动（启用）", false, function(state)
+    UI.AddToggle(Category, "瞬间互动", false, function(state)
         holdEnforceState = state
         if state then
             enforcedHoldDuration = 0
@@ -409,7 +450,7 @@ task.spawn(function()
         end
     end)
 
-    UI.AddToggle(Category, "启用 FOV 强制修改", false, function(state)
+    UI.AddToggle(Category, "启用 FOV 修改", false, function(state)
         if state then
             fovActive = true
             -- 用户开启：记录 originalFOV（若尚未记录），并启动插值朝用户配置的 enforcedFOV 前进
@@ -417,6 +458,8 @@ task.spawn(function()
                 pcall(function() originalFOV = Workspace.CurrentCamera.FieldOfView end)
             end
             restoreTarget = nil
+            -- 关闭防重置连接，避免与插值冲突
+            disconnect_CAM_FOV_Conn()
             startFOVEnforce(true)
         else
             -- 关闭时平滑恢复（不覆盖 enforcedFOV）
@@ -426,17 +469,22 @@ task.spawn(function()
 
     -- 移除 E 延迟滑块（不再需要）
 
-    UI.AddSlider(Category, "强制 FOV 值", 40, 120, enforcedFOV, function(value)
+    UI.AddSlider(Category, "FOV 值", 40, 120, enforcedFOV, function(value)
         enforcedFOV = value
         -- 滑块改动立即成为新的 enforcedFOV：
         -- - 若用户开启（fovActive == true），确保插值连接存在以朝新的 enforcedFOV 过渡
         -- - 若处于恢复流程（restoreTarget 有值 且 fovEnforceConn 存在），这会改变接下来要去的目标（如果你想中断恢复并立刻回到 enforcedFOV，开启后会如此）
         if fovActive then
+            -- 处于插值控制时，保持防重置断开，使用插值来平滑达到新值
             startFOVEnforce(true)
-        elseif fovEnforceConn and restoreTarget then
-            -- 若在恢复中并希望中断恢复以回到 enforcedFOV，可把 restoreTarget 清空并让连接朝 enforcedFOV 前进
-            restoreTarget = nil
-            -- 仍保持连接，下一帧循环会用 enforcedFOV 作为目标
+        else
+            -- 未开启（或在恢复/空闲），我们启用防重置逻辑来防止外部脚本覆盖 FieldOfView
+            CAM_FOV = enforcedFOV
+            bind_CAM_FOV_to_camera(Workspace.CurrentCamera)
+            -- 如果存在正在恢复的插值并且我们想中断恢复回到 enforcedFOV，可清空 restoreTarget
+            if fovEnforceConn and restoreTarget then
+                restoreTarget = nil
+            end
         end
     end)
 
@@ -449,6 +497,11 @@ task.spawn(function()
             if fovEnforceConn == nil and (fovActive or restoreTarget) then
                 startFOVEnforce(fovActive)
             end
+            -- 重新绑定防重置连接到新摄像机（仅当当前没有插值在跑）
+            bind_CAM_FOV_to_camera(Workspace.CurrentCamera)
+        else
+            -- 没有摄像机时断开防重置连接
+            disconnect_CAM_FOV_Conn()
         end
     end)
 
