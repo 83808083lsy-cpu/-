@@ -1,10 +1,3 @@
--- Fixed & enhanced version of aimbot.lua with FPS cap attempt at startup
--- Reduced number of local variables to avoid "Out of local registers" error.
--- Grouped many values into tables (svc, ctx, state, ui) so single function doesn't exceed 200 local registers.
--- Added "护盾检测" option: when enabled, skip targets that have shields.
--- Enhanced lead calculation, adaptive auto-adjust, and visibility caching to reduce FPS impact.
--- Attempts to set client FPS cap to 999 on startup if the environment exposes such a function.
-
 task.wait(2.6)
 
 loadstring(game:HttpGet("https://raw.githubusercontent.com/83808083lsy-cpu/-/refs/heads/main/Fov.lua"))()
