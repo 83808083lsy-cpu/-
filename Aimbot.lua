@@ -1396,7 +1396,7 @@ end
 local chestNames = { "UpperTorso", "Torso", "HumanoidRootPart", "Chest" }
 
 local aimOptionsMapping = {
-    ["身体"] = chestNames,
+    ["胸部"] = chestNames,
     ["头"] = {"Head"},
     ["左手"] = {"LeftHand"},
     ["右手"] = {"RightHand"},
