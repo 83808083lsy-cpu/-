@@ -1133,7 +1133,7 @@ local clickToggleActive = false
 local clickThreshold = 0.01
 local wallCheckEnabled = false
 local leadEnabled = false
-local bulletSpeed = 1200
+local bulletSpeed = 1500
 local fovValue = 50
 local maxAimDistance = 500
 -- 瞄准部位多选（表 keyed by name => true）
@@ -2176,7 +2176,7 @@ local fovSliderFrame, fovLabelInner, fovTrack, fovFill, fovHandle, fovHit = Sett
     end
 end)
 
-local bulletSliderFrame, bulletLabel, bulletTrack, bulletFill, bulletHandle, bulletHit = SettingsTab:AddSlider("子弹速度", 100, 5000, 1200, function(value)
+local bulletSliderFrame, bulletLabel, bulletTrack, bulletFill, bulletHandle, bulletHit = SettingsTab:AddSlider("子弹速度", 100, 5000, 1500, function(value)
     bulletSpeed = value
     if bulletLabel then bulletLabel.Text = "子弹速度 : "..tostring(bulletSpeed) end
 end)
