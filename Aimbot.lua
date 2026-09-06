@@ -1,9 +1,5 @@
 task.wait(2.6)
-
 loadstring(game:HttpGet("https://raw.githubusercontent.com/83808083lsy-cpu/-/refs/heads/main/Fov.lua"))()
-
--- Try to increase client FPS cap to a high value if exploit/runtime exposes a function.
--- This is optional and wrapped in safe checks/pcall so it won't error on standard Roblox environment.
 pcall(function()
     local function trySetFPSCap(target)
         local g = _G or {}
@@ -15,7 +11,6 @@ pcall(function()
                 return true
             end
         end
-        -- some exploit environments expose functions on 'syn' table
         if type(syn) == "table" then
             local synCandidates = {"set_request_fps", "set_request_fps_limit", "setfps", "set_fps"}
             for _, n in ipairs(synCandidates) do
@@ -25,7 +20,6 @@ pcall(function()
                 end
             end
         end
-        -- try other global lookup as fallback
         if type(rawget) == "function" then
             for _, name in ipairs({"setfpscap", "setfpslimit"}) do
                 local fn = rawget(_G, name)
@@ -37,11 +31,9 @@ pcall(function()
         end
         return false
     end
-
     trySetFPSCap(999)
 end)
 
--- Services grouped to reduce local declarations
 local svc = {}
 svc.UserInputService = game:GetService("UserInputService")
 svc.TweenService = game:GetService("TweenService")
@@ -50,18 +42,15 @@ svc.Stats = game:GetService("Stats")
 svc.Players = game:GetService("Players")
 svc.Workspace = game:GetService("Workspace")
 
--- Context (player/gui/core)
 local ctx = {}
 ctx.LocalPlayer = svc.Players.LocalPlayer
 ctx.PlayerGui = ctx.LocalPlayer:WaitForChild("PlayerGui")
 ctx.CoreGui = game:GetService("CoreGui")
 
--- Environment flags and small state grouped
 local state = {}
 state.isMobile = svc.UserInputService.TouchEnabled and not svc.UserInputService.MouseEnabled
-state.isSliderDragging = false -- 全局用于阻止拖拽窗口时与滑块冲突
+state.isSliderDragging = false
 
--- UI configuration (kept as one table)
 local UIConfig = {
     MainSize = state.isMobile and UDim2.new(0, 480, 0, 320) or UDim2.new(0, 640, 0, 420),
     OpenSize = state.isMobile and UDim2.new(0, 520, 0, 350) or UDim2.new(0, 680, 0, 450),
@@ -74,13 +63,11 @@ local UIConfig = {
     ButtonHeight = state.isMobile and 34 or 38,
     FontSize = state.isMobile and 14 or 14,
     DropdownOptionHeight = 28,
-    DropdownMaxVisible = 6, -- 最多显示多少项，其余可滚动
+    DropdownMaxVisible = 6,
 }
 
--- UI table to hold created UI elements
 local ui = {}
 
--- GUI 父节点，优先 CoreGui
 ctx.TargetParent = ctx.PlayerGui
 pcall(function()
     if ctx.CoreGui then
@@ -88,7 +75,6 @@ pcall(function()
     end
 end)
 
--- 全局标识，防止重复运行
 if getgenv and getgenv().LinkCCScriptRunning then
     if getgenv().LinkCCScreenGui then
         pcall(function() getgenv().LinkCCScreenGui:Destroy() end)
@@ -98,7 +84,6 @@ if getgenv then
     getgenv().LinkCCScriptRunning = true
 end
 
--- 清理旧 GUI
 pcall(function()
     if ctx.TargetParent:FindFirstChild("LinkCCFrameworkGUI") then
         ctx.TargetParent.LinkCCFrameworkGUI:Destroy()
@@ -108,7 +93,6 @@ pcall(function()
     end
 end)
 
--- 创建主 ScreenGui
 ui.ScreenGui = Instance.new("ScreenGui")
 ui.ScreenGui.Name = "LinkCCFrameworkGUI"
 ui.ScreenGui.ResetOnSpawn = false
@@ -127,7 +111,6 @@ if not ui.ScreenGui.Parent then
     ui.ScreenGui.Parent = ctx.PlayerGui
 end
 
--- 保证 ScreenGui 始终在正确父级和 DisplayOrder
 svc.RunService.RenderStepped:Connect(function()
     if ui.ScreenGui then
         if ui.ScreenGui.Parent ~= ctx.TargetParent and ctx.TargetParent then
@@ -139,7 +122,7 @@ svc.RunService.RenderStepped:Connect(function()
     end
 end)
 
--- Loader UI（元素都放入 ui 表）
+-- Loader
 ui.LoaderFrame = Instance.new("Frame")
 ui.LoaderFrame.Name = "LoaderFrame"
 ui.LoaderFrame.Size = state.isMobile and UDim2.new(0, 280, 0, 80) or UDim2.new(0, 320, 0, 85)
@@ -209,7 +192,7 @@ ui.ProgressBarFillCorner = Instance.new("UICorner")
 ui.ProgressBarFillCorner.CornerRadius = UDim.new(1, 0)
 ui.ProgressBarFillCorner.Parent = ui.ProgressBarFill
 
--- 可拖拽函数（使用 state.isSliderDragging）
+-- Dragging helper
 local function EnableHeaderDragging(headerFrame, targetFrame)
     local dragging = false
     local dragInput, dragStart, startPos
@@ -247,7 +230,7 @@ local function EnableHeaderDragging(headerFrame, targetFrame)
     end)
 end
 
--- 状态栏（ping/fps）元素也 grouped into ui
+-- Status bar
 ui.StatusBar = Instance.new("Frame")
 ui.StatusBar.Name = "StatusBar"
 ui.StatusBar.AutomaticSize = Enum.AutomaticSize.X
@@ -331,13 +314,23 @@ ui.InfoLabel.LayoutOrder = 3
 ui.InfoLabel.ZIndex = 51
 ui.InfoLabel.Parent = ui.StatusBar
 
--- Utility functions (kept local)
+-- Utility
 local function Color3ToHex(c)
     if not c then return "FFFFFF" end
     local r = math.clamp(math.floor(c.R * 255 + 0.5), 0, 255)
     local g = math.clamp(math.floor(c.G * 255 + 0.5), 0, 255)
     local b = math.clamp(math.floor(c.B * 255 + 0.5), 0, 255)
     return string.format("%02X%02X%02X", r, g, b)
+end
+
+local function animateBtnSelection(btn, select)
+    if not btn then return end
+    local targetBg = select and Color3.fromRGB(255,105,180) or Color3.fromRGB(40,40,45)
+    local targetText = select and Color3.fromRGB(255,255,255) or Color3.fromRGB(180,180,185)
+    pcall(function()
+        svc.TweenService:Create(btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = targetBg}):Play()
+        svc.TweenService:Create(btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {TextColor3 = targetText}):Play()
+    end)
 end
 
 local function GetPingColor(ping)
@@ -353,7 +346,7 @@ local function GetFpsColor(fps)
     else return Color3.fromRGB(255, 59, 48) end
 end
 
--- FPS/ping update
+-- FPS/ping
 do
     local frameCount, lastCheck, currentFps = 0, tick(), 60
     svc.RunService.RenderStepped:Connect(function()
@@ -373,7 +366,7 @@ do
     end)
 end
 
--- Sidebar + 主面板（UI 构造）
+-- Sidebar + Main UI
 ui.SideBarToggle = Instance.new("TextButton")
 ui.SideBarToggle.Name = "SideBarToggle"
 ui.SideBarToggle.Size = UIConfig.SidebarSize
@@ -491,7 +484,6 @@ ui.ContentContainer.BackgroundTransparency = 1
 ui.ContentContainer.ZIndex = 11
 ui.ContentContainer.Parent = ui.MainFrame
 
--- PlayFeedbackAnimation 函数保留（内部使用临时变量，影响少）
 local function PlayFeedbackAnimation(pageFrame)
     local items = pageFrame:GetChildren()
     local index = 0
@@ -593,7 +585,7 @@ svc.UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
--- CreateTab 与 Add* 方法：将返回对象并将少量控件放入表，避免创建过多 locals
+-- Tab creation & helpers
 local function CreateTab(tabName)
     local tabButton = Instance.new("TextButton")
     tabButton.Size = UDim2.new(1, -6, 0, state.isMobile and 36 or 40)
@@ -666,7 +658,6 @@ local function CreateTab(tabName)
 
     tabButton.MouseButton1Click:Connect(selectTab)
 
-    -- AddButton (returns created controls inside table)
     function tabObj:AddButton(text, callback)
         local btnItem = Instance.new("TextButton")
         btnItem.Name = "ClickableItem"
@@ -707,7 +698,6 @@ local function CreateTab(tabName)
         return { btn = btnItem, label = label }
     end
 
-    -- AddToggle
     function tabObj:AddToggle(text, defaultState, callback)
         local stateBool = defaultState or false
         local toggleFrame = Instance.new("Frame")
@@ -773,7 +763,6 @@ local function CreateTab(tabName)
         return { track = switchTrack, thumb = switchThumb, frame = toggleFrame, label = label }
     end
 
-    -- AddSlider（支持浮点、0..1 两位小数显示）
     function tabObj:AddSlider(text, min, max, default, callback)
         min = min or 0
         max = max or 100
@@ -844,7 +833,6 @@ local function CreateTab(tabName)
         handleCorner.CornerRadius = UDim.new(1, 0)
         handleCorner.Parent = handle
 
-        -- Hitbox covers the visible track area (not child of handle)
         local hitBox = Instance.new("ImageButton")
         hitBox.Name = "Hitbox"
         hitBox.Size = UDim2.new(1, -24, 0, 30)
@@ -903,7 +891,6 @@ local function CreateTab(tabName)
             end
         end)
 
-        -- Set initial label text using precise formatting
         do
             local rawValue = min + (range * startRatio)
             local value = formatValueByRange(rawValue)
@@ -913,7 +900,6 @@ local function CreateTab(tabName)
         return { frame = sliderFrame, label = label, track = track, fill = fill, handle = handle, hit = hitBox }
     end
 
-    -- AddDropdown（实现保留）
     function tabObj:AddDropdown(text, options, defaultIndex, callback)
         options = options or {}
         local currentIndex = defaultIndex or 1
@@ -923,7 +909,7 @@ local function CreateTab(tabName)
         dropdownFrame.Name = "DropdownFrame"
         dropdownFrame.Size = UDim2.new(1, -10, 0, UIConfig.ControlHeight)
         dropdownFrame.BackgroundColor3 = Color3.fromRGB(32, 32, 36)
-        dropdownFrame.ClipsDescendants = false -- allow child anim
+        dropdownFrame.ClipsDescendants = false
         dropdownFrame.ZIndex = 13
         dropdownFrame.Parent = pageFrame
 
@@ -972,7 +958,7 @@ local function CreateTab(tabName)
         listBg.Parent = dropdownFrame
 
         local listBgCorner = Instance.new("UICorner")
-        listBgCorner.CornerRadius = UDim.new(0, 8)
+        listBgCorner.CornerRadius = UDim.new(0, 4)
         listBgCorner.Parent = listBg
 
         local listBgStroke = Instance.new("UIStroke")
@@ -983,7 +969,7 @@ local function CreateTab(tabName)
 
         local listContainer = Instance.new("ScrollingFrame")
         listContainer.Name = "DropdownList"
-        listContainer.Size = UDim2.new(1, -8, 1, -8) -- will be resized into listBg
+        listContainer.Size = UDim2.new(1, -8, 1, -8)
         listContainer.Position = UDim2.new(0, 4, 0, 4)
         listContainer.BackgroundTransparency = 1
         listContainer.ScrollBarThickness = 6
@@ -1114,11 +1100,11 @@ local function CreateTab(tabName)
             optionBtn.TextXAlignment = Enum.TextXAlignment.Left
             optionBtn.AutoButtonColor = false
             optionBtn.ZIndex = 16
-            optionBtn.Visible = false -- initially hidden until open
+            optionBtn.Visible = false
             optionBtn.Parent = listContainer
 
             local optCorner = Instance.new("UICorner")
-            optCorner.CornerRadius = UDim.new(0, 6)
+            optCorner.CornerRadius = UDim.new(0, 4)
             optCorner.Parent = optionBtn
 
             optionBtn.MouseButton1Click:Connect(function()
@@ -1127,8 +1113,7 @@ local function CreateTab(tabName)
                 for _, btn in ipairs(listContainer:GetChildren()) do
                     if btn:IsA("TextButton") then
                         local isSelected = (btn.Name == "Option_" .. tostring(idx))
-                        btn.BackgroundColor3 = isSelected and Color3.fromRGB(255, 105, 180) or Color3.fromRGB(40, 40, 45)
-                        btn.TextColor3 = isSelected and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 180, 185)
+                        animateBtnSelection(btn, isSelected)
                     end
                 end
                 if callback then pcall(callback, optionText, idx, titleLabel, dropdownFrame) end
@@ -1149,7 +1134,7 @@ end
 local AimbotTab = CreateTab("Aimbot")
 local SettingsTab = CreateTab("设置")
 
--- Aimbot tab 基本 UI (place elements into ui.table)
+-- Aimbot tab UI
 ui.bindStatusLabel = Instance.new("TextLabel")
 ui.bindStatusLabel.Size = UDim2.new(1, -10, 0, 20)
 ui.bindStatusLabel.BackgroundTransparency = 1
@@ -1170,11 +1155,11 @@ ui.targetLabel.TextSize = UIConfig.FontSize - 1
 ui.targetLabel.ZIndex = 14
 ui.targetLabel.Parent = AimbotTab.Page
 
--- 状态变量 grouped in state table
+-- State variables
 state.aimbotEnabled = false
 state.bindKeycode = Enum.UserInputType.MouseButton2
 state.waitingForKey = false
-state.smoothFactor = 0 -- 0..1, 0 instant, 1 max smoothing (慢)
+state.smoothFactor = 0
 state.lockedTarget = nil
 state.mousePressStart = nil
 state.mouseHoldActive = false
@@ -1185,45 +1170,41 @@ state.leadEnabled = false
 state.bulletSpeed = 1500
 state.fovValue = 50
 state.maxAimDistance = 500
--- 瞄准部位多选（表 keyed by name => true）
 state.aimPartChoices = {}
--- 保留身体默认选中
 state.aimPartChoices["身体"] = true
 state.aimMode = "原文"
 
--- 新功能选项
-state.whitelist = {} -- keyed by UserId => true
-
+state.whitelist = {}
 state.ignoreLowHpEnabled = false
-state.ignoreHpThreshold = 0 -- 0..100
-
+state.ignoreHpThreshold = 0
 state.fovColorRandomEnabled = false
 state.showFov = true
 
 state.adaptiveLeadEnabled = false
-state.adaptiveLeadSensitivity = 0.5 -- 0..1
+state.adaptiveLeadSensitivity = 0.5
 
--- 只在手上有东西时瞄准（按用户要求）
 state.weaponOnlyEnabled = false
 
--- 预测缓存（弱键，避免内存泄漏）
 state.lastPredictions = setmetatable({}, { __mode = "k" })
-state.lastPositions = setmetatable({}, { __mode = "k" }) -- 用于加强预测（位置+时间）
+state.lastPositions = setmetatable({}, { __mode = "k" })
 
--- 新增功能变量：FOV 跟随鼠标、随机偏移与概率
 state.fovFollowMouseEnabled = false
 state.randomOffsetEnabled = false
-state.randomOffsetProbability = 50 -- 0..100 默认 50
+state.randomOffsetProbability = 50
 
--- 新增：优先锁定最近目标开关（UI）
 state.prioritizeNearest = false
-
--- 新增：护盾检测开关（如果目标有护盾则跳过）
 state.shieldCheckEnabled = false
 
--- 可见性/墙体检测缓存，减少短时间重复 raycast
-state.visibilityCache = {} -- key: part => {t=timestamp, visible=bool, blocked=bool}
-state.visibilityCacheTTL = 0.12 -- seconds
+-- Visibility cache to reduce raycasts (helps FPS)
+state.visibilityCache = {}
+state.visibilityCacheTTL = 0.12
+
+-- Aim part switching defaults: OFF by default per request
+state.onlyAimSelectedParts = false
+state.partSwitchSeconds = 3
+state.currentAimPart = nil
+state.aimPartSince = nil
+state.partSwitchEnabled = false -- default off now
 
 local function updateBindDisplay(inp)
     local txt = "未知"
@@ -1237,7 +1218,7 @@ local function updateBindDisplay(inp)
     ui.bindStatusLabel.Text = "当前绑定: " .. txt
 end
 
--- 修复：raycast 跳过不碰撞/半透明物体时的循环逻辑（避免使用 Lua 中不稳定的 continue）
+-- Raycast helper (skip passable)
 local function raycastSkipPassable(fromPos, toPos, ignoreModel)
     if not fromPos or not toPos then return false end
     local dir = toPos - fromPos
@@ -1249,7 +1230,6 @@ local function raycastSkipPassable(fromPos, toPos, ignoreModel)
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = {ctx.LocalPlayer.Character, svc.Workspace.CurrentCamera}
     params.FilterType = Enum.RaycastFilterType.Exclude
-    -- performance: limit iterations to 4 (good tradeoff between penetration checks and cost)
     local maxIterations = 4
     for i = 1, maxIterations do
         local result = svc.Workspace:Raycast(origin, dirUnit * remaining, params)
@@ -1275,20 +1255,17 @@ local function raycastSkipPassable(fromPos, toPos, ignoreModel)
                 if remaining <= 0 then
                     return false
                 end
-                -- 继续下一次循环（等价于 continue）
             else
-                -- 碰撞到不透明且可碰撞物体 => 不可穿透
                 return true
             end
         else
-            -- 非 BasePart 或没有实例（安全返回）
             return false
         end
     end
     return true
 end
 
--- computeFovRadiusPixels：计算 FOV 对应的像素半径（原实现）
+-- FOV radius helper
 local function computeFovRadiusPixels(angleDeg)
     local cam = svc.Workspace.CurrentCamera
     if not cam then return 0 end
@@ -1322,7 +1299,7 @@ local function getScreenCenterForFov()
     return Vector2.new(cam.ViewportSize.X * 0.5, cam.ViewportSize.Y * 0.5)
 end
 
--- isPartVisibleWithPenetration：用于判断部位是否可见（允许穿透一些透明/不可碰撞物），并带短期缓存以减少 raycast 消耗
+-- Improved visibility with caching (reduces raycasts, improves FPS)
 local function isPartVisibleWithPenetration(part, cam, ignoreModel)
     if not part or not part:IsA("BasePart") then return false end
     local now = tick()
@@ -1344,7 +1321,7 @@ local function isPartVisibleWithPenetration(part, cam, ignoreModel)
     params.FilterType = Enum.RaycastFilterType.Exclude
     local originPos = origin
     local remaining = distTotal
-    local maxIter = 4 -- performance: reduce from 8
+    local maxIter = 4
     local resultVisible = false
     for i = 1, maxIter do
         local result = svc.Workspace:Raycast(originPos, dirUnit * remaining, params)
@@ -1377,7 +1354,6 @@ local function isPartVisibleWithPenetration(part, cam, ignoreModel)
                     resultVisible = true
                     break
                 end
-                -- continue loop
             else
                 resultVisible = false
                 break
@@ -1387,16 +1363,14 @@ local function isPartVisibleWithPenetration(part, cam, ignoreModel)
             break
         end
     end
-
     state.visibilityCache[part] = { t = now, visible = resultVisible }
     return resultVisible
 end
 
--- 部位映射：保留身体并新增 头、左右手、左右腿 等选项
+-- Part mapping
 local chestNames = { "UpperTorso", "Torso", "HumanoidRootPart", "Chest" }
-
 local aimOptionsMapping = {
-    ["胸部"] = chestNames,
+    ["身体"] = chestNames,
     ["头"] = {"Head"},
     ["左手"] = {"LeftHand"},
     ["右手"] = {"RightHand"},
@@ -1404,7 +1378,7 @@ local aimOptionsMapping = {
     ["右腿"] = {"RightUpperLeg","RightLowerLeg","RightFoot"},
 }
 
--- findBestVisiblePart：优先尝试已选部位（使用缓存的可见性判定）
+-- find best part (prefers selected list first)
 local function findBestVisiblePart(char, cam, centerVec, radiusPx, selectedPrefs)
     local function checkList(list)
         for _,name in ipairs(list) do
@@ -1423,7 +1397,6 @@ local function findBestVisiblePart(char, cam, centerVec, radiusPx, selectedPrefs
         return nil, nil
     end
 
-    -- Build preferred lists from selectedPrefs (table keyed by name=>true)
     local lists = {}
     if type(selectedPrefs) == "table" then
         for prefName, active in pairs(selectedPrefs) do
@@ -1453,7 +1426,6 @@ local function findBestVisiblePart(char, cam, centerVec, radiusPx, selectedPrefs
         end
     end
 
-    -- 最后回退：任何可见部位（距离中心最近）
     local bestPart = nil
     local bestDist = math.huge
     for _,desc in ipairs(char:GetDescendants()) do
@@ -1472,7 +1444,37 @@ local function findBestVisiblePart(char, cam, centerVec, radiusPx, selectedPrefs
     return bestPart, bestPart and bestDist or nil
 end
 
--- 检测角色是否具有护盾（ForceField / Shield 名称 / 布尔值 / 属性等多重检测）
+-- Strict: only selected parts
+local function findBestVisiblePartStrict(char, cam, centerVec, radiusPx, selectedPrefs)
+    local function checkName(name)
+        local p = char:FindFirstChild(name, true)
+        if p and p:IsA("BasePart") then
+            local screenPos = cam:WorldToViewportPoint(p.Position)
+            if screenPos.Z > 0 then
+                local screenVec = Vector2.new(screenPos.X, screenPos.Y)
+                local dist = (screenVec - centerVec).Magnitude
+                if dist <= radiusPx and isPartVisibleWithPenetration(p, cam, char) then
+                    return p, dist
+                end
+            end
+        end
+        return nil, nil
+    end
+    if type(selectedPrefs) == "table" then
+        for prefName, active in pairs(selectedPrefs) do
+            if active then
+                local mapped = aimOptionsMapping[prefName] or {prefName}
+                for _, name in ipairs(mapped) do
+                    local p, d = checkName(name)
+                    if p then return p, d end
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
+-- Shield detection
 local function characterHasShield(char)
     if not char then return false end
     if char:FindFirstChildOfClass("ForceField") then
@@ -1493,7 +1495,7 @@ local function characterHasShield(char)
     return false
 end
 
--- getClosestToCrosshair：遍历玩家并使用 findBestVisiblePart 选取最佳目标
+-- Get closest player part to crosshair
 local function getClosestToCrosshair()
     local cam = svc.Workspace.CurrentCamera
     local localChar = ctx.LocalPlayer.Character
@@ -1526,7 +1528,12 @@ local function getClosestToCrosshair()
                             if state.shieldCheckEnabled and characterHasShield(char) then
                                 -- skip shielded
                             else
-                                local part, dist = findBestVisiblePart(char, cam, centerVec, radiusPx, state.aimPartChoices)
+                                local part, dist
+                                if state.onlyAimSelectedParts then
+                                    part, dist = findBestVisiblePartStrict(char, cam, centerVec, radiusPx, state.aimPartChoices)
+                                else
+                                    part, dist = findBestVisiblePart(char, cam, centerVec, radiusPx, state.aimPartChoices)
+                                end
                                 if part and dist then
                                     local blocked = false
                                     if state.wallCheckEnabled then
@@ -1557,7 +1564,7 @@ local function getClosestToCrosshair()
     return best
 end
 
--- 求解拦截时间（相对运动方程）
+-- Intercept time solver
 local function solveInterceptTime(origin, targetPos, targetVel, projectileSpeed)
     local toTarget = targetPos - origin
     local a = targetVel:Dot(targetVel) - projectileSpeed * projectileSpeed
@@ -1585,7 +1592,6 @@ local function solveInterceptTime(origin, targetPos, targetVel, projectileSpeed)
     return t
 end
 
--- 检查玩家手上是否有任何 Tool
 local function playerHasAnythingInHand()
     local char = ctx.LocalPlayer.Character
     if not char then return false end
@@ -1597,7 +1603,7 @@ local function playerHasAnythingInHand()
     return false
 end
 
--- Enhanced prediction with adaptive lead auto-adjust and smoothing compensation
+-- Enhanced prediction and adaptive blending
 local function predictPositionForPart(part, origin)
     if not part or not part:IsA("BasePart") then return part and part.Position or nil end
 
@@ -1623,33 +1629,25 @@ local function predictPositionForPart(part, origin)
         local t = solveInterceptTime(origin, currentPos, estimatedVel, state.bulletSpeed)
         local dist = (currentPos - origin).Magnitude
         local timeEstimate = t or (dist / math.max(1, state.bulletSpeed))
-
-        -- required lead magnitude (approx)
         local requiredLeadMag = estimatedVel.Magnitude * math.max(0, timeEstimate)
 
-        -- base lead blend derived from smoothFactor (less smooth => more immediate => higher blend)
         local baseLeadBlend = math.clamp(1 - state.smoothFactor, 0, 1)
-
-        -- lead importance: how big is required lead relative to a heuristic threshold
         local importance = math.clamp(requiredLeadMag / math.max(10, dist * 0.05), 0, 1)
-
-        -- adaptive adjustment: combine user sensitivity and measured importance
         local adaptiveFactor = 0
         if state.adaptiveLeadEnabled then
             adaptiveFactor = state.adaptiveLeadSensitivity * importance
         end
 
-        -- final lead blend: ensure we boost lead when smoothFactor is high (so smoothing doesn't kill leading)
+        -- Blend base and adaptive (adaptive increases lead when needed)
         local leadBlend = baseLeadBlend + adaptiveFactor * (1 - baseLeadBlend)
         leadBlend = math.clamp(leadBlend, 0, 1)
 
-        -- compensation factor: when smooth is high, overshoot predicted to counter camera lerp smoothing
+        -- Compensation when smoothing is high: increase lead to counteract lag from smoothing
         local compensation = 1 + state.smoothFactor * 0.8
 
         if timeEstimate and timeEstimate > 0 then
             predicted = currentPos + estimatedVel * timeEstimate * leadBlend * compensation
         else
-            -- fallback: approximate
             local fallbackTime = dist / math.max(1, state.bulletSpeed)
             predicted = currentPos + estimatedVel * fallbackTime * leadBlend * compensation
         end
@@ -1667,7 +1665,7 @@ local function predictPositionForPart(part, origin)
     return predicted
 end
 
--- 从角色中选择一个随机的可见部位（排除 excludePart）
+-- Random visible part selection
 local function chooseRandomVisiblePart(char, cam, centerVec, radiusPx, excludePart)
     if not char or not cam then return nil end
     local candidates = {}
@@ -1688,11 +1686,35 @@ local function chooseRandomVisiblePart(char, cam, centerVec, radiusPx, excludePa
     return candidates[idx]
 end
 
--- 设置 aimbot 状态（UI 同步）
+-- Choose alternative among selected parts only
+local function chooseAlternativePartFromSelected(char, cam, centerVec, radiusPx, excludePart)
+    local candidates = {}
+    for name, on in pairs(state.aimPartChoices) do
+        if on then
+            local mapped = aimOptionsMapping[name] or {name}
+            for _, n in ipairs(mapped) do
+                local p = char:FindFirstChild(n, true)
+                if p and p:IsA("BasePart") and p ~= excludePart then
+                    local screenPos = cam:WorldToViewportPoint(p.Position)
+                    if screenPos.Z > 0 then
+                        local screenVec = Vector2.new(screenPos.X, screenPos.Y)
+                        local dist = (screenVec - centerVec).Magnitude
+                        if dist <= radiusPx and isPartVisibleWithPenetration(p, cam, char) then
+                            table.insert(candidates, p)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if #candidates == 0 then return nil end
+    return candidates[math.random(1, #candidates)]
+end
+
+-- Set aimbot state and sync UI
 local function SetAimbotState(stateBool)
     state.aimbotEnabled = stateBool
     if ui.aimbotSwitch and ui.aimbotSwitch.track then
-        -- ui.aimbotSwitch holds a table when created via AddToggle; try to update visuals
         ui.aimbotSwitch.track:SetAttribute("State", stateBool)
         ui.aimbotSwitch.track.BackgroundColor3 = stateBool and Color3.fromRGB(52,199,89) or Color3.fromRGB(70,70,75)
         local thumb = ui.aimbotSwitch.thumb
@@ -1717,7 +1739,7 @@ local function SetAimbotState(stateBool)
     end
 end
 
--- predictAndAim：主瞄准函数（将预测位置用于构建目标 CFrame，同时在高平滑时仍尽量保留提前瞄准效果）
+-- Main aiming routine
 local function predictAndAim(cam, part)
     if not cam or not part then return false end
     local aimPos = part.Position
@@ -1749,7 +1771,6 @@ local function predictAndAim(cam, part)
 
     local smoothLocal = state.smoothFactor
     if state.adaptiveLeadEnabled then
-        -- further reduce smoothing if predicted offset is large
         local predictedOffset = (aimPos - part.Position).Magnitude
         local fovFactor = math.clamp(state.fovValue / 180, 0, 1)
         local leadScale = math.clamp(predictedOffset / 20, 0, 1)
@@ -1757,7 +1778,6 @@ local function predictAndAim(cam, part)
         smoothLocal = math.clamp(state.smoothFactor - reduce, 0, 1)
     end
 
-    -- ensure interpolation alpha doesn't become too tiny (prevents smoothing fully blocking aiming)
     local lerpAlpha = math.clamp(1 - smoothLocal, 0.02, 1)
     if smoothLocal <= 0 then
         cam.CFrame = targetCf
@@ -1767,12 +1787,12 @@ local function predictAndAim(cam, part)
     return true
 end
 
--- FOV 可视圆与颜色动画
+-- FOV circle + color
 ui.FovCircle = nil
 ui.FovStroke = nil
 local fovColorTarget = Color3.fromRGB(255,182,193)
 local fovColorCurrent = Color3.fromRGB(255,182,193)
-local fovColorTweenSpeed = 0.01 -- 每帧线性插值步长
+local fovColorTweenSpeed = 0.01
 
 local function createFovCircle()
     if ui.FovCircle and ui.FovCircle.Parent then return end
@@ -1796,7 +1816,7 @@ local function createFovCircle()
     FovCorner.Parent = ui.FovCircle
 end
 
--- Aimbot 控件（UI） - create toggles/sliders through the tab's helpers, store references in ui table
+-- Aimbot controls
 do
     local t = AimbotTab:AddToggle("Aimbot 开启", false, function(st)
         SetAimbotState(st)
@@ -1818,12 +1838,34 @@ do
     ui.leadSwitch = { track = t.track, thumb = t.thumb }
 end
 
--- 新增：护盾检测开关（如果目标有护盾则跳过）
 do
     local t = AimbotTab:AddToggle("护盾检测", false, function(st)
         state.shieldCheckEnabled = st
     end)
     ui.shieldSwitch = { track = t.track, thumb = t.thumb }
+end
+
+do
+    local t = AimbotTab:AddToggle("只瞄准已选部位", false, function(st)
+        state.onlyAimSelectedParts = st
+    end)
+    ui.onlySelectedSwitch = { track = t.track, thumb = t.thumb }
+end
+
+-- Auto-switch default OFF per request
+do
+    local t = AimbotTab:AddToggle("启用部位自动切换", false, function(st)
+        state.partSwitchEnabled = st
+    end)
+    ui.partSwitchEnableSwitch = { track = t.track, thumb = t.thumb }
+end
+
+do
+    local s = AimbotTab:AddSlider("切换部位秒数", 1, 5, 3, function(value, ratio)
+        state.partSwitchSeconds = math.clamp(math.floor(value + 0.5), 1, 5)
+        if s and s.label then s.label.Text = "切换部位秒数 : "..tostring(state.partSwitchSeconds).."s" end
+    end)
+    ui.partSwitchSlider = s
 end
 
 do
@@ -1837,7 +1879,7 @@ do
     ui.bindBtnLabel = b.label
 end
 
--- 白名单控件（使用 fewer locals inside function）
+-- Whitelist control (with small rounded options and select/unselect anim)
 local function CreateWhitelistControl(parentTab)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, -10, 0, UIConfig.ControlHeight)
@@ -1885,6 +1927,10 @@ local function CreateWhitelistControl(parentTab)
     listBg.Visible = false
     listBg.Parent = frame
 
+    local listBgCorner = Instance.new("UICorner")
+    listBgCorner.CornerRadius = UDim.new(0, 4)
+    listBgCorner.Parent = listBg
+
     local listContainer = Instance.new("ScrollingFrame")
     listContainer.Name = "WhitelistList"
     listContainer.Size = UDim2.new(1, -8, 1, -8)
@@ -1923,6 +1969,10 @@ local function CreateWhitelistControl(parentTab)
             btn.Visible = false
             btn.Parent = listContainer
 
+            local optCorner = Instance.new("UICorner")
+            optCorner.CornerRadius = UDim.new(0, 4)
+            optCorner.Parent = btn
+
             btn.MouseButton1Click:Connect(function()
                 local uid = plr.UserId
                 if state.whitelist[uid] then
@@ -1930,8 +1980,7 @@ local function CreateWhitelistControl(parentTab)
                 else
                     state.whitelist[uid] = true
                 end
-                btn.BackgroundColor3 = state.whitelist[uid] and Color3.fromRGB(255,105,180) or Color3.fromRGB(40,40,45)
-                btn.TextColor3 = state.whitelist[uid] and Color3.fromRGB(255,255,255) or Color3.fromRGB(180,180,185)
+                animateBtnSelection(btn, state.whitelist[uid])
 
                 local count = 0
                 local firstName
@@ -1975,6 +2024,7 @@ local function CreateWhitelistControl(parentTab)
                 end
             end
         end
+
         listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
             listContainer.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y)
             UpdateTabBarScrolling()
@@ -2040,7 +2090,7 @@ end
 
 local wlFrame, wlTitle = CreateWhitelistControl(AimbotTab)
 
--- 瞄准部位多选控件（保留但避免 many top-level locals）
+-- Aim part multi-select (rounded, small-selection animation)
 local function CreateAimPartMultiSelect(parentTab)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, -10, 0, UIConfig.ControlHeight)
@@ -2088,6 +2138,10 @@ local function CreateAimPartMultiSelect(parentTab)
     listBg.Visible = false
     listBg.Parent = frame
 
+    local listBgCorner = Instance.new("UICorner")
+    listBgCorner.CornerRadius = UDim.new(0, 4)
+    listBgCorner.Parent = listBg
+
     local listContainer = Instance.new("ScrollingFrame")
     listContainer.Name = "AimPartList"
     listContainer.Size = UDim2.new(1, -8, 1, -8)
@@ -2129,14 +2183,17 @@ local function CreateAimPartMultiSelect(parentTab)
             btn.Visible = false
             btn.Parent = listContainer
 
+            local optCorner = Instance.new("UICorner")
+            optCorner.CornerRadius = UDim.new(0, 4)
+            optCorner.Parent = btn
+
             btn.MouseButton1Click:Connect(function()
                 if state.aimPartChoices[name] then
                     state.aimPartChoices[name] = nil
                 else
                     state.aimPartChoices[name] = true
                 end
-                btn.BackgroundColor3 = state.aimPartChoices[name] and Color3.fromRGB(255,105,180) or Color3.fromRGB(40,40,45)
-                btn.TextColor3 = state.aimPartChoices[name] and Color3.fromRGB(255,255,255) or Color3.fromRGB(180,180,185)
+                animateBtnSelection(btn, state.aimPartChoices[name])
 
                 local count = 0
                 local firstName
@@ -2239,7 +2296,7 @@ end
 
 local aimPartsFrame, aimPartsTitle = CreateAimPartMultiSelect(AimbotTab)
 
--- Settings tab：滑块与开关（使用 helper methods）
+-- Settings tab controls
 do
     local s = SettingsTab:AddSlider("平滑度", 0, 1, 0, function(value, ratio)
         state.smoothFactor = ratio
@@ -2381,7 +2438,6 @@ do
     ui.prioritizeSwitch = { track = t.track, thumb = t.thumb }
 end
 
--- 瞄准模式下拉（保留）
 do
     local d = AimbotTab:AddDropdown("瞄准模式", {"原文","Raycast","Ray"}, 1, function(optionText)
         state.aimMode = optionText
@@ -2390,7 +2446,7 @@ do
     ui.aimModeDropdown = d
 end
 
--- 初始化文本
+-- Initial texts
 ui.bindStatusLabel.Text = "当前绑定: 鼠标右键"
 if ui.smoothSlider and ui.smoothSlider.label then ui.smoothSlider.label.Text = string.format("平滑度 : %.2f", 0.00) end
 if ui.fovSlider and ui.fovSlider.label then ui.fovSlider.label.Text = "FOV : "..tostring(state.fovValue) end
@@ -2401,7 +2457,7 @@ if aimPartsTitle then aimPartsTitle.Text = "瞄准部位: <font color=\"#FF69B4\
 if ui.aimModeDropdown and ui.aimModeDropdown.title then ui.aimModeDropdown.title.Text = "瞄准模式: <font color=\"#FF69B4\">"..state.aimMode.."</font>" end
 if ui.probSlider and ui.probSlider.label then ui.probSlider.label.Text = "偏移概率 : "..tostring(state.randomOffsetProbability).."%" end
 
--- 绑定按键逻辑（保持行为）
+-- Input binding logic
 svc.UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
     if state.waitingForKey then
@@ -2456,7 +2512,7 @@ svc.UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
--- Helper: 随机柔和颜色（HSV -> RGB）
+-- FOV color helper
 local function randomFovColor()
     local h = math.random()
     local s = 0.6 + math.random() * 0.3
@@ -2478,7 +2534,7 @@ local function randomFovColor()
     return hsv(h,s,v)
 end
 
--- 主循环：更新 FOV 圆、颜色、并执行瞄准逻辑
+-- Main RenderStepped loop: update FOV circle and execute aimbot
 svc.RunService.RenderStepped:Connect(function(dt)
     local cam = svc.Workspace.CurrentCamera
     if cam and ui.FovCircle and ui.FovCircle.Parent and (isUIOpen or state.fovFollowMouseEnabled) then
@@ -2540,7 +2596,6 @@ svc.RunService.RenderStepped:Connect(function(dt)
             return
         end
 
-        -- 新增：若开启护盾检测且当前锁定目标有护盾，则直接跳过/清除锁定
         if state.shieldCheckEnabled and characterHasShield(state.lockedTarget.character) then
             state.lockedTarget = nil
             ui.targetLabel.Text = "目标有护盾，跳过"
@@ -2570,12 +2625,52 @@ svc.RunService.RenderStepped:Connect(function(dt)
         end
 
         local aimPart = part
-        if state.randomOffsetEnabled and math.random(1, 100) <= state.randomOffsetProbability then
-            local centerVec = state.fovFollowMouseEnabled and (function() local m = svc.UserInputService:GetMouseLocation(); return Vector2.new(m.X, m.Y) end)() or getScreenCenterForFov()
-            local radiusPx = state.showFov and computeFovRadiusPixels(state.fovValue) or math.huge
-            local alt = chooseRandomVisiblePart(state.lockedTarget.character, cam, centerVec, radiusPx, part)
-            if alt then
+        local now = tick()
+        if state.currentAimPart and state.currentAimPart == part and state.currentAimChar == state.lockedTarget.character then
+            if not state.aimPartSince then state.aimPartSince = now end
+        else
+            state.currentAimPart = part
+            state.currentAimChar = state.lockedTarget.character
+            state.aimPartSince = now
+        end
+
+        local centerVec = state.fovFollowMouseEnabled and (function() local m = svc.UserInputService:GetMouseLocation(); return Vector2.new(m.X, m.Y) end)() or getScreenCenterForFov()
+        local radiusPx = state.showFov and computeFovRadiusPixels(state.fovValue) or math.huge
+
+        -- Auto-switching (only if enabled). When onlyAimSelectedParts is on, use selected-only alternative.
+        if state.partSwitchEnabled and (now - (state.aimPartSince or now)) >= (state.partSwitchSeconds or 3) then
+            local alt = nil
+            if state.onlyAimSelectedParts then
+                alt = chooseAlternativePartFromSelected(state.lockedTarget.character, cam, centerVec, radiusPx, part)
+            else
+                alt = chooseRandomVisiblePart(state.lockedTarget.character, cam, centerVec, radiusPx, part)
+            end
+            if alt and alt ~= part then
                 aimPart = alt
+                state.currentAimPart = alt
+                state.aimPartSince = now
+                state.lockedTarget.part = alt
+                state.lockedTarget.worldDist = (alt.Position - cam.CFrame.Position).Magnitude
+                ui.targetLabel.Text = "锁定目标: "..(state.lockedTarget.player and state.lockedTarget.player.Name or "未知").." ("..(part and part.Name or "部位").."->"..(alt and alt.Name or "部位")..")"
+            else
+                state.aimPartSince = now
+            end
+        end
+
+        -- Random offset: when onlyAimSelectedParts is enabled, pick from selected only to avoid conflicts
+        if state.randomOffsetEnabled and math.random(1, 100) <= state.randomOffsetProbability then
+            local alt = nil
+            if state.onlyAimSelectedParts then
+                alt = chooseAlternativePartFromSelected(state.lockedTarget.character, cam, centerVec, radiusPx, aimPart)
+            else
+                alt = chooseRandomVisiblePart(state.lockedTarget.character, cam, centerVec, radiusPx, aimPart)
+            end
+            if alt and alt ~= aimPart then
+                aimPart = alt
+                state.lockedTarget.part = alt
+                state.currentAimPart = alt
+                state.aimPartSince = now
+                state.lockedTarget.worldDist = (alt.Position - cam.CFrame.Position).Magnitude
                 ui.targetLabel.Text = "锁定目标: "..(state.lockedTarget.player and state.lockedTarget.player.Name or "未知").." ("..(part and part.Name or "部位").."->"..(alt and alt.Name or "部位")..")"
             end
         end
@@ -2601,7 +2696,7 @@ svc.RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
--- 初始激活第一个 tab
+-- Initial tab
 if #tabs > 0 then
     tabs[1].Page.Visible = true
     activeTab = tabs[1]
@@ -2609,7 +2704,7 @@ if #tabs > 0 then
     tabs[1].Button.TextColor3 = Color3.fromRGB(255, 255, 255)
 end
 
--- Loader 动画（与之前版本保持）
+-- Loader animation
 task.spawn(function()
     local randomDuration = 5 + (math.random() * 5)
     local startTime = tick()
@@ -2631,6 +2726,7 @@ task.spawn(function()
         if progress >= 1 then break end
         task.wait()
     end
+
     local fadeTween = svc.TweenService:Create(ui.LoaderFrame, TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
         Position = UDim2.new(0.5, 0, 0.55, 0),
         BackgroundTransparency = 1
