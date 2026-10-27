@@ -33,13 +33,6 @@ local COMPAT = {
 if genv.__BTRHUB then
 	local OLD = genv.__BTRHUB
 	pcall(function()
-		if OLD.api and OLD.api.clearOrigin then OLD.api.clearOrigin() end
-		if OLD.cfg then
-			OLD.cfg.aimbot = false
-			OLD.cfg.silentPacket = false
-			OLD.cfg.packetMode = false
-			OLD.cfg.autoFire = false
-		end
 		if OLD.destroy then OLD.destroy() end
 	end)
 	genv.__BTRHUB = nil
@@ -66,24 +59,25 @@ if not LP then return end
 local Internal = {}
 
 local HUB = {
-	conns = {}, drawing = {}, destroy = nil, fps = 0, warned = false, worldOn = false,
+	conns = {}, destroy = nil, fps = 0, warned = false, worldOn = false,
 	otherBeams = 0, otherDrawn = 0, otherSkip = 0,
-	rayHits = 0, rayCasts = 0, rayLast = nil, raySkip = nil,
+	rayHits = 0, rayCasts = 0,
 	maxOffsetOK = 4, offsetAccepted = 0, offsetRejected = 0,
 	packetOK = 0, packetTries = 0, packetStrat = 1, packetStratFail = 0,
 	packetShots = 0, packetGaveUp = false, silentIdle = 0, silentIdleAt = 0,
 	reloadAt = 0, reloadNotified = false, silentPacketShots = 0, badDirs = 0,
-	ammoCount = 0, packetStratOK = {}, packetStratN = {}, packetRetryAt = 0,
+	ammoCount = 0, packetStratOK = {}, packetStratN = {},
 	renderMode = "", reserveOK = false, silentAmmo = nil, fireInterval = 0.12,
 	silentAcc = 0, silentFallbackReal = false, silentWallCap = 2.5, silentObsCap = 4,
 	noDamage = 0, aimPartCycle = 0, silentBypass = {}, silentNoCast = {},
 	silentBypassHits = 0, ourCasts = 0, netCheckAt = 0, packetCall = 0,
 	packetWarned = false, packetWarnedAt = 0,
-	reloadBusy = false, api = nil, cfg = nil, stats = nil,
+	reloadBusy = false, cfg = nil, stats = nil,
 	lastPellets = 1, hitSends = 0, pelletOverride = nil, mainFrame = nil,
-	netReady = true, lastHitAt = 0,
+	netReady = true, lastHitAt = 0, trailSet = {},
+	verifyRejects = 0, stratLock = false,
+	originAppliedAt = 0, originAppliedPos = nil,
 }
-genv.__BTRHUB = HUB
 
 local PALETTE = {
 	Color3.fromRGB(255, 60, 60), Color3.fromRGB(255, 140, 0),
@@ -102,17 +96,19 @@ local CFG = {
 	aimbot = false, silent = true, autoFire = false,
 	aimPart = "Head", fov = 600, visibleOnly = true,
 	aimMonsters = true, aimPlayers = false, aimSmartPart = true, aim360 = true,
+	headPriority = true, strictMuzzle = true,
 	fovAngle = 180, dropComp = true, spoofCam = true,
 	noShield = false, muzzleOffset = true, muzzleRadius = 4, muzzleStep = 0.5,
-	silentWallOffset = 2.5, silentObsOffset = 4,
+	silentWallOffset = 2.5, silentObsOffset = 4, offsetSide = "near",
+	autoInteract = false, interactRadius = 14, interactDelay = 0.5, interactAmmoOnly = false,
 	packetMode = false,
 	debugLog = false,
 	hotkeyEnabled = true,
 	islandClickExpand = true,
 	islandLongPressDrag = true,
 	silentPacket = false,
-	silentReal = false,          
-	autoReload = true,           
+	silentReal = false,
+	autoReload = true,
 	trail = true, trailTime = 5, muzzleTrail = true,
 	trailColor = Color3.fromRGB(255, 190, 60),
 	otherTrails = true, colorTeamTrail = Color3.fromRGB(70, 255, 110),
@@ -134,10 +130,10 @@ STATS.hitCalls = STATS.hitCalls or 0
 
 local Aim = {
 	point = nil, target = nil, gunCfg = nil, occluded = false, part = nil,
-	origin = nil, originAt = 0, muzzle = nil, offsetUsed = nil, offsetDir = nil,
+	origin = nil, muzzle = nil, offsetUsed = nil, offsetDir = nil,
 	forceOrigin = nil, muzzleAt = 0, muzzleBlocked = false, lastOffset = nil,
 	hadOrigin = false, shotOK = false, shotDist = 0, offsetKind = nil,
-	packetMuzzle = nil, packetTarget = nil,
+	packetMuzzle = nil, packetTarget = nil, reject = nil, verifyOK = false,
 }
 
 local losClearFrom, getRealMuzzle, resolveMuzzleShot, findFiringOrigin
@@ -219,6 +215,31 @@ end
 
 local spawnTrail, spawnImpact
 local trailBudget = {}
+local trailQueue = { head = 1, tail = 0, size = 0, cap = 420 }
+local function trailPush(inst)
+	trailQueue.tail = trailQueue.tail + 1
+	trailQueue[trailQueue.tail] = inst
+	trailQueue.size = trailQueue.size + 1
+	HUB.trailSet[inst] = true
+	if trailQueue.size > trailQueue.cap then
+		local old = trailQueue[trailQueue.head]
+		trailQueue[trailQueue.head] = nil
+		trailQueue.head = trailQueue.head + 1
+		trailQueue.size = trailQueue.size - 1
+		if old then
+			HUB.trailSet[old] = nil
+			if old.Parent then pcall(function() old:Destroy() end) end
+		end
+	end
+end
+local function trailClearAll()
+	for inst in pairs(HUB.trailSet) do
+		if inst.Parent then pcall(function() inst:Destroy() end) end
+	end
+	HUB.trailSet = {}
+	trailQueue = { head = 1, tail = 0, size = 0, cap = 420 }
+	trailBudget = {}
+end
 
 local function onFirePacket(tool, cfg, dir) STATS.fires = STATS.fires + 1 end
 local function onHitPacket(hit, tool, cfg, payload)
@@ -289,12 +310,13 @@ local function installNetHooks()
 				local hum = pl[1]
 				local charInst = (typeof(hum) == "Instance" and hum:IsA("Humanoid")) and hum.Parent or nil
 				local sameTarget = (not Aim.packetTarget) or (not charInst) or (Aim.packetTarget == charInst)
-				if typeof(m) == "Vector3" and typeof(pl[5]) == "Vector3" and sameTarget
+				if charInst ~= nil
+					and typeof(m) == "Vector3" and typeof(pl[5]) == "Vector3" and sameTarget
 					and (Aim.offsetUsed or 0) > 0 then
 					local real = getRealMuzzle()
 					local md = real and (m - real).Magnitude or 0
 					if (m - pl[5]).Magnitude > 0.75 and md <= 14
-						and (typeof(hp) ~= "Vector3" or not charInst or losClearFrom(m, hp, charInst)) then
+						and (typeof(hp) ~= "Vector3" or losClearFrom(m, hp, charInst)) then
 						pl[5] = m
 					end
 				end
@@ -326,14 +348,11 @@ local function installNetHooks()
 		return oldInvoke(self, channel, ...)
 	end
 end
+
 spawnTrail = function(from, to, duration, flash, color)
 	if (to - from).Magnitude < 1 then return end
 	duration = duration or CFG.trailTime
 	color = color or CFG.trailColor
-	if #trailBudget > 420 then
-		local old = table.remove(trailBudget, 1)
-		if old and old.Parent then old:Destroy() end
-	end
 	local part = Instance.new("Part")
 	part.Name = "__btrTrail"
 	part.Anchored = true
@@ -347,7 +366,7 @@ spawnTrail = function(from, to, duration, flash, color)
 	part.CFrame = CFrame.lookAt(from + (to - from) * 0.5, to)
 	part.Transparency = 0.1
 	part.Parent = workspace.Terrain
-	table.insert(trailBudget, part)
+	trailPush(part)
 	Tween:Create(part, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Transparency = 1 }):Play()
 	Debris:AddItem(part, duration + 0.2)
 
@@ -366,7 +385,7 @@ spawnTrail = function(from, to, duration, flash, color)
 		m.CFrame = CFrame.new(from)
 		m.Transparency = 0.05
 		m.Parent = workspace.Terrain
-		table.insert(trailBudget, m)
+		trailPush(m)
 		Tween:Create(m, TweenInfo.new(duration * 0.95, Enum.EasingStyle.Quad), {
 			Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05),
 		}):Play()
@@ -375,10 +394,6 @@ spawnTrail = function(from, to, duration, flash, color)
 end
 
 spawnImpact = function(pos)
-	if #trailBudget > 420 then
-		local old = table.remove(trailBudget, 1)
-		if old and old.Parent then old:Destroy() end
-	end
 	local p = Instance.new("Part")
 	p.Name = "__btrImpact"
 	p.Shape = Enum.PartType.Ball
@@ -393,7 +408,7 @@ spawnImpact = function(pos)
 	p.CFrame = CFrame.new(pos)
 	p.Transparency = 0.1
 	p.Parent = workspace.Terrain
-	table.insert(trailBudget, p)
+	trailPush(p)
 	Tween:Create(p, TweenInfo.new(CFG.trailTime, Enum.EasingStyle.Quad), {
 		Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05),
 	}):Play()
@@ -421,6 +436,8 @@ end
 
 local RAY = genv.__BTRHUB_RAY
 if not RAY then RAY = {}; genv.__BTRHUB_RAY = RAY end
+RAY.castConns = setmetatable({}, { __mode = "k" })
+RAY.castConnCount = 0
 
 RAY.restore = function()
 	if RAY.mod then
@@ -431,6 +448,8 @@ RAY.restore = function()
 	RAY.oldNew = nil
 	RAY.oldFire = nil
 	RAY.ready = false
+	RAY.castConns = setmetatable({}, { __mode = "k" })
+	RAY.castConnCount = 0
 end
 
 local function ensureRaycastWrapped()
@@ -449,14 +468,17 @@ local function ensureRaycastWrapped()
 	RaycastMod.new = function(self, ...)
 		local cast = oldNew(self, ...)
 		RAY.casts = (RAY.casts or 0) + 1
-		pcall(function()
-			cast.RayHit:Connect(function(c, result)
-				if RAY.onHit then RAY.onHit(c, result) end
+		if RAY.castConnCount < 400 then
+			RAY.castConnCount = RAY.castConnCount + 1
+			pcall(function()
+				cast.RayHit:Connect(function(c, result)
+					if RAY.onHit then RAY.onHit(c, result) end
+				end)
+				cast.RayPierced:Connect(function(c, result, vel)
+					if RAY.onPierce then RAY.onPierce(c, result, vel) end
+				end)
 			end)
-			cast.RayPierced:Connect(function(c, result, vel)
-				if RAY.onPierce then RAY.onPierce(c, result, vel) end
-			end)
-		end)
+		end
 		return cast
 	end
 	RaycastMod.Fire = function(self, origin, dir, speed, behavior)
@@ -499,6 +521,8 @@ local function installRayHooks()
 		if typeof(o) ~= "Vector3" then return nil end
 		local real = getRealMuzzle()
 		if real and (o - real).Magnitude > 20 then return nil end
+		HUB.originAppliedAt = os.clock()
+		HUB.originAppliedPos = o
 		return o
 	end
 	RAY.onAim = function(origin, dir)
@@ -534,12 +558,11 @@ local function installRayHooks()
 	RAY.onHit = function(c, result)
 		RAY.hits = (RAY.hits or 0) + 1
 		HUB.rayHits = RAY.hits
-		if not CFG.trail then HUB.raySkip = "trail"; return end
-		if not (c and result) then HUB.raySkip = "args"; return end
+		if not CFG.trail then return end
+		if not (c and result) then return end
 		local origin = c.__btrLast or c.__btrOrigin or (c.RayInfo and c.RayInfo.Origin)
 		c.__btrLast = result.Position
 		if typeof(origin) ~= "Vector3" or typeof(result.Position) ~= "Vector3" then
-			HUB.raySkip = "origin"
 			return
 		end
 		local now = os.clock()
@@ -657,17 +680,19 @@ local function isFriend(pl)
 		friendPending[pl.UserId] = true
 		task.spawn(function()
 			local ok, res = pcall(function() return LP:IsFriendsWith(pl.UserId) end)
-			friendCache[pl.UserId] = (ok and res) and true or false
+			if pl.Parent then
+				friendCache[pl.UserId] = (ok and res) and true or false
+			end
 			friendPending[pl.UserId] = nil
 		end)
 	end
 	return false
 end
 
-Players.PlayerRemoving:Connect(function(pl)
+table.insert(HUB.conns, Players.PlayerRemoving:Connect(function(pl)
 	friendCache[pl.UserId] = nil
 	friendPending[pl.UserId] = nil
-end)
+end))
 
 local function buildTargets()
 	local list = {}
@@ -904,9 +929,6 @@ table.insert(HUB.conns, workspace.DescendantAdded:Connect(function(v)
 	end)
 end))
 
-local function installAimHook() end
-local function removeAimHook() end
-
 local Fire = { down = false }
 local VIM = game:FindFirstChild("VirtualInputManager") or game:GetService("VirtualInputManager")
 
@@ -1008,6 +1030,95 @@ local function toastTick()
 	if toastLabel and toastLabel.Visible and os.clock() >= toastUntil then
 		toastLabel.Visible = false
 	end
+end
+local promptCache = {}
+local promptSeen = setmetatable({}, { __mode = "k" })
+local lastPromptScan = 0
+local lastInteractAt = 0
+
+local function addPrompt(p)
+	if promptSeen[p] then return end
+	promptSeen[p] = true
+	promptCache[#promptCache + 1] = p
+end
+
+local function prunePrompts()
+	for i = #promptCache, 1, -1 do
+		local p = promptCache[i]
+		if not p.Parent then
+			promptSeen[p] = nil
+			table.remove(promptCache, i)
+		end
+	end
+end
+
+local function scanPrompts()
+	prunePrompts()
+	local now = os.clock()
+	if now - lastPromptScan < 3 then return end
+	lastPromptScan = now
+	local budget = 30000
+	for _, d in ipairs(workspace:GetDescendants()) do
+		budget = budget - 1
+		if budget <= 0 then break end
+		if d:IsA("ProximityPrompt") then addPrompt(d) end
+	end
+end
+
+table.insert(HUB.conns, workspace.DescendantAdded:Connect(function(v)
+	if v:IsA("ProximityPrompt") then addPrompt(v) end
+end))
+
+local AMMO_HINTS = { "ammo", "弹药", "补给", "supply", "box", "crate", "loot", "pickup", "拾取" }
+local function isAmmoPrompt(p)
+	local text = string.lower(tostring(p.ActionText or "") .. " " .. tostring(p.ObjectText or "")
+		.. " " .. tostring(p.Parent and p.Parent.Name or ""))
+	for _, h in ipairs(AMMO_HINTS) do
+		if string.find(text, h, 1, true) then return true end
+	end
+	return false
+end
+
+local function promptPos(p, parent)
+	if parent:IsA("Attachment") then return parent.WorldPosition end
+	if parent:IsA("BasePart") then return parent.Position end
+	if parent:IsA("Model") then
+		local ok, cf = pcall(function() return parent:GetPivot() end)
+		if ok and cf then return cf.Position end
+	end
+	return nil
+end
+
+local function autoInteractTick(now)
+	if not CFG.autoInteract then return end
+	if now - lastInteractAt < math.max(tonumber(CFG.interactDelay) or 0.5, 0.2) then return end
+	local ch = getMyChar()
+	local root = ch and ch:FindFirstChild("HumanoidRootPart")
+	local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+	if not (root and hum and hum.Health > 0) then return end
+	scanPrompts()
+	local radius = math.clamp(tonumber(CFG.interactRadius) or 14, 4, 40)
+	local best, bestD
+	for _, p in ipairs(promptCache) do
+		local parent = p.Parent
+		if parent and p.Enabled and (not CFG.interactAmmoOnly or isAmmoPrompt(p)) then
+			local pos = promptPos(p, parent)
+			if pos then
+				local d = (pos - root.Position).Magnitude
+				local maxd = math.min(radius, (tonumber(p.MaxActivationDistance) or 10) + 1.5)
+				if d <= maxd and (not bestD or d < bestD) then
+					best, bestD = p, d
+				end
+			end
+		end
+	end
+	if not best then return end
+	lastInteractAt = now
+	local hold = math.clamp(tonumber(best.HoldDuration) or 0, 0, 2)
+	pcall(function() best:InputHoldBegin() end)
+	task.delay(math.max(hold, 0.05) + 0.03, function()
+		pcall(function() best:InputHoldEnd() end)
+	end)
 end
 
 local Cam = {
@@ -1439,18 +1550,25 @@ local function packetShot(gun, cfg, t, partHint)
 				local ok, ret = pcall(function() return N:InvokeServer("hit", gun, cfg, pl) end)
 				if ok and ret ~= false and ret ~= nil then
 					HUB.packetOK = (HUB.packetOK or 0) + 1
-					HUB.packetStratOK = HUB.packetStratOK or {}
-					HUB.packetStratOK[idx] = (HUB.packetStratOK[idx] or 0) + 1
-					HUB.packetStratN = HUB.packetStratN or {}
-					HUB.packetStratN[idx] = (HUB.packetStratN[idx] or 0) + 1
+					if isFirst then
+						while HUB.stratLock do task.wait() end
+						HUB.stratLock = true
+						HUB.packetStratOK = HUB.packetStratOK or {}
+						HUB.packetStratOK[idx] = (HUB.packetStratOK[idx] or 0) + 1
+						HUB.packetStratN = HUB.packetStratN or {}
+						HUB.packetStratN[idx] = (HUB.packetStratN[idx] or 0) + 1
+						HUB.stratLock = false
+					end
 					if isFirst and CFG.trail then
 						pcall(spawnTrail, origin, ctx.hitPos, nil, true)
 					end
 				else
-					HUB.packetStratFail = (HUB.packetStratFail or 0) + 1
-					HUB.packetStratN = HUB.packetStratN or {}
-					HUB.packetStratN[idx] = (HUB.packetStratN[idx] or 0) + 1
 					if isFirst then
+						while HUB.stratLock do task.wait() end
+						HUB.stratLock = true
+						HUB.packetStratFail = (HUB.packetStratFail or 0) + 1
+						HUB.packetStratN = HUB.packetStratN or {}
+						HUB.packetStratN[idx] = (HUB.packetStratN[idx] or 0) + 1
 						local okN = HUB.packetStratOK or {}
 						local nN = HUB.packetStratN or {}
 						local best, bestScore = nil, -1
@@ -1466,6 +1584,7 @@ local function packetShot(gun, cfg, t, partHint)
 						if (HUB.packetTries or 0) >= 40 and (HUB.packetOK or 0) == 0 then
 							CFG.packetMode = false
 						end
+						HUB.stratLock = false
 					end
 				end
 			end)
@@ -1854,9 +1973,14 @@ local function pickVisiblePart(t, rot)
 	local function add(p)
 		if p and p:IsA("BasePart") and not seen[p] then seen[p] = true; cands[#cands + 1] = p end
 	end
+	if CFG.headPriority and t.head and muzzleSees(t.head, t.inst) then
+		t.visiblePart = t.head
+		return t.head, true
+	end
 	if rot and rot > 0 then
 		for i = 0, #PART_ROT - 1 do
-			add(t.inst and t.inst:FindFirstChild(PART_ROT[((i + rot) % #PART_ROT) + 1]))
+			local p = t.inst and t.inst:FindFirstChild(PART_ROT[((i + rot) % #PART_ROT) + 1])
+			if not (CFG.headPriority and p and p == t.head) then add(p) end
 		end
 	end
 	if t.head then add(t.head) end
@@ -1876,12 +2000,12 @@ losClearFrom = function(pos, targetPos, targetInst)
 	local excl = { workspace.Terrain:FindFirstChild("Ignore"), getMyChar() }
 	local rp = rayParams(excl)
 	local cur, left = pos, dist
-	for _ = 1, 4 do
+	for _ = 1, 5 do
 		local res = workspace:Raycast(cur, dir * left, rp)
 		if res == nil then return true end
 		if targetInst and (res.Instance == targetInst or res.Instance:IsDescendantOf(targetInst)) then return true end
 		local p = res.Instance
-		local soft = (p.CanCollide == false) or (p.Transparency and p.Transparency > 0.6)
+		local soft = (p.CanCollide == false) or ((p.Transparency or 0) >= 0.99)
 		if not soft then return false end
 		local adv = (res.Position - cur).Magnitude + 0.06
 		left = left - adv
@@ -1891,11 +2015,11 @@ losClearFrom = function(pos, targetPos, targetInst)
 	return false
 end
 
-local function pointIsOpen(p)
+local function pointIsOpen(p, radius)
 	local op = OverlapParams.new()
 	op.FilterType = Enum.RaycastFilterType.Exclude
 	op.FilterDescendantsInstances = { getMyChar(), workspace.Terrain:FindFirstChild("Ignore") }
-	local parts = workspace:GetPartBoundsInRadius(p, 0.35, op)
+	local parts = workspace:GetPartBoundsInRadius(p, radius or 0.35, op)
 	for _, part in ipairs(parts) do
 		if part.CanCollide then return false end
 	end
@@ -1937,7 +2061,7 @@ local function firstBlocker(from, to, targetInst)
 		if res == nil then return nil, nil, true end
 		local p = res.Instance
 		if targetInst and (p == targetInst or p:IsDescendantOf(targetInst)) then return nil, nil, true end
-		local soft = (p.CanCollide == false) or (p.Transparency and p.Transparency > 0.6)
+		local soft = (p.CanCollide == false) or ((p.Transparency or 0) >= 0.99)
 		if not soft then return p, res.Position, false, res.Normal end
 		local adv = (res.Position - cur).Magnitude + 0.06
 		left = left - adv
@@ -1980,6 +2104,7 @@ local function findSilentOffset(fromPos, targetPos, targetInst)
 	if wall then cap = math.min(CFG.silentWallOffset or 2.5, HUB.silentWallCap or 2.5, OFFSET_MAX_WALL)
 	else cap = math.min(CFG.silentObsOffset or 4, HUB.silentObsCap or 4, OFFSET_MAX_OBSTACLE) end
 	cap = math.max(0.8, cap)
+	local fixedSide = tostring(CFG.offsetSide or "near")
 	local kind = wall and "wall" or "obstacle"
 	local function sameSide(cand)
 		if not (bPos and bNormal) then return true end
@@ -1996,9 +2121,18 @@ local function findSilentOffset(fromPos, targetPos, targetInst)
 	local right = toT:Cross(Vector3.new(0, 1, 0))
 	if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) end
 	right = right.Unit
-	for i = 0, 11 do
-		local a = math.rad(i * 30)
-		dirs[#dirs + 1] = (right * math.cos(a) + toT * math.sin(a)).Unit
+	if fixedSide == "right" or fixedSide == "left" then
+		local side = (fixedSide == "right") and right or -right
+		dirs[1] = side
+	else
+		for i = 0, 11 do
+			local a = math.rad(i * 30)
+			dirs[#dirs + 1] = (right * math.cos(a) + toT * math.sin(a)).Unit
+		end
+		local toT2 = toT * 0.94
+		for _, s in ipairs({ right, -right }) do
+			dirs[#dirs + 1] = (s * 0.34 + toT2).Unit
+		end
 	end
 	local heights = { 0, 0.7, -0.7, 1.4 }
 	local step = math.max(math.min(CFG.muzzleStep or 0.5, 1.0), 0.3)
@@ -2138,6 +2272,39 @@ findFiringOrigin = function(targetPos)
 	return nil
 end
 
+local function offsetReachable(from, to)
+	if typeof(from) ~= "Vector3" or typeof(to) ~= "Vector3" then return false end
+	local d = to - from
+	local dist = d.Magnitude
+	if dist < 0.05 then return true end
+	local rp = rayParams({ workspace.Terrain:FindFirstChild("Ignore"), getMyChar() })
+	local res = workspace:Raycast(from, d, rp)
+	if not res then return true end
+	local p = res.Instance
+	local soft = (p.CanCollide == false) or ((p.Transparency or 0) >= 0.99)
+	if not soft then return false end
+	return true
+end
+
+local function verifyShot(t, part, point)
+	if not (t and part) then return false, "no-part" end
+	local real = getRealMuzzle()
+	if typeof(real) ~= "Vector3" then return false, "no-muzzle" end
+	local origin = Aim.origin
+	if typeof(origin) ~= "Vector3" then origin = real end
+	local targetPos = (typeof(point) == "Vector3") and point or part.Position
+	local off = (origin - real).Magnitude
+	if off > 0.75 then
+		if CFG.strictMuzzle then return false, "strict-muzzle" end
+		if off > math.max(CFG.muzzleRadius or 4, 1) + 1.0 then return false, "offset-far" end
+		if not (RAY.ready and type(RAY.onOrigin) == "function") then return false, "no-rayhook" end
+		if not offsetReachable(real, origin) then return false, "offset-wall" end
+	end
+	if not pointIsOpen(origin, 0.22) then return false, "origin-embedded" end
+	if not losClearFrom(origin, targetPos, t.inst) then return false, "ray-hit-wall" end
+	return true, "ok"
+end
+
 local silentScan = { at = 0, t = nil, part = nil, origin = nil, dist = 0, kind = "none" }
 local silentFailAt = setmetatable({}, { __mode = "k" })
 local function silentTarget(maxDist)
@@ -2201,7 +2368,12 @@ local function pickTarget(targets)
 	local angleLimit = math.min(CFG.fovAngle, math.max(angleFromPx, 1))
 	for _, t in ipairs(targets) do
 		if not t.isSelf then
-			local allowed = t.isPlayer and CFG.aimPlayers or CFG.aimMonsters
+			local allowed
+			if t.isPlayer then
+				allowed = CFG.aimPlayers
+			else
+				allowed = CFG.aimMonsters
+			end
 			if allowed then
 				local pos = (t.head or t.root).Position
 				local score
@@ -2246,10 +2418,20 @@ local function computeAimPoint(t, gun, part)
 		local cfg = getGunConfig(gun)
 		if cfg and type(cfg.fire) == "table" then
 			local speed = cfg.fire.fireSpeed or 3000
-			local d = (p - workspace.CurrentCamera.CFrame.Position).Magnitude
+			local cam = workspace.CurrentCamera
+			local from = (typeof(Aim.muzzle) == "Vector3" and Aim.muzzle)
+				or (cam and cam.CFrame.Position) or p
+			local d = (p - from).Magnitude
 			local tt = d / math.max(speed, 1)
 			local vel = t.root.AssemblyLinearVelocity
-			if vel and vel.Magnitude > 2 then p = p + vel * tt * 0.85 end
+			if vel and vel.Magnitude > 2 then
+				p = p + vel * tt * 0.85
+				local radius = math.max(part.Size.Magnitude * 0.35, 0.6)
+				local off = p - part.Position
+				if off.Magnitude > radius then
+					p = part.Position + off.Unit * radius
+				end
+			end
 		end
 	end
 	return p
@@ -2296,6 +2478,7 @@ local function onRender(dt)
 		local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
 		local alive = hum and hum.Health > 0
 		local gun = getEquippedGun()
+		pcall(autoInteractTick, now)
 
 		pcall(dmgWatchTick, now)
 
@@ -2303,11 +2486,19 @@ local function onRender(dt)
 			HUB.netCheckAt = now
 			local okN, m = pcall(require, RS.Assets.Modules.Network)
 			if okN and type(m) == "table" and NB and NB.net ~= m then
+				local oldNB = NB
 				Network = nil
 				NB = nil
 				genv.__BTRHUB_NET = nil
 				installNetHooks()
-				if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
+				if NB then
+					NB.onFire = onFirePacket
+					NB.onHit = onHitPacket
+				else
+					NB = oldNB
+					Network = oldNB.net
+					genv.__BTRHUB_NET = oldNB
+				end
 			end
 		end
 
@@ -2508,6 +2699,19 @@ local function onRender(dt)
 				Aim.muzzleBlocked = not visible
 				Aim.shotOK = visible == true
 			end
+			if Aim.shotOK and not CFG.silentPacket and not Aim.forceOrigin then
+				local vok, vwhy = verifyShot(aimTarget, part, Aim.point)
+				if not vok then
+					Aim.shotOK = false
+					Aim.shotDist = 0
+					Aim.muzzleBlocked = true
+					Aim.reject = vwhy
+					HUB.verifyRejects = (HUB.verifyRejects or 0) + 1
+				else
+					Aim.reject = nil
+				end
+			end
+			Aim.verifyOK = Aim.shotOK
 			if not CFG.silent then
 				local aimPart = (CFG.aimPart == "Head" and aimTarget.head) or aimTarget.root
 				local cam = workspace.CurrentCamera
@@ -2523,6 +2727,7 @@ local function onRender(dt)
 			Aim.point = nil; Aim.target = nil; Aim.gunCfg = nil; Aim.occluded = false
 			Aim.origin = nil; Aim.muzzle = nil; Aim.offsetUsed = nil; Aim.offsetKind = nil
 			Aim.muzzleBlocked = false; Aim.shotOK = false; Aim.shotDist = 0
+			Aim.reject = nil; Aim.verifyOK = false
 			STATS.target = "-"
 		end
 
@@ -2538,7 +2743,6 @@ local function onRender(dt)
 			if gun:GetAttribute("Reloading") == true then wantFire = false end
 		end
 
-		
 		if CFG.silentPacket and alive and gun and HUB.netReady then
 			local cfgP = getGunConfig(gun)
 			local sa = ensureSilentAmmo(gun)
@@ -2550,7 +2754,6 @@ local function onRender(dt)
 				pT, pPart, pOrigin, pDist, pKind = silentTarget(320)
 			end
 			local fired = 0
-			
 			if CFG.autoReload and sa.clip <= 0 and not HUB.reloadBusy then
 				startReloadCycle(gun, cfgP)
 				toast("Ragebot · 弹夹空了，自动换弹", 1.6)
@@ -2677,7 +2880,6 @@ local function onRender(dt)
 				Aim.shotOK = true
 				Aim.shotDist = pDist or 0
 				if clip ~= nil and clip <= 0 then
-					
 					if CFG.autoReload and not reloading and not HUB.reloadBusy and now - (HUB.reloadAt or 0) > 1.0 then
 						startReloadCycle(gun, cfg)
 						toast("弹匣打空 · 正在自动换弹", 2.2)
@@ -2920,24 +3122,24 @@ local UISuccess, UIErr = pcall(function()
 
 	local function MakeDraggable(dragHandle, targetFrame)
 		local dragging, dragStart, startPos
-		dragHandle.InputBegan:Connect(function(input)
+		table.insert(HUB.conns, dragHandle.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 				dragging = true
 				dragStart = Vector2.new(input.Position.X, input.Position.Y)
 				startPos = targetFrame.Position
 			end
-		end)
-		UIS.InputChanged:Connect(function(input)
+		end))
+		table.insert(HUB.conns, UIS.InputChanged:Connect(function(input)
 			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 				local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
 				targetFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 			end
-		end)
-		UIS.InputEnded:Connect(function(input)
+		end))
+		table.insert(HUB.conns, UIS.InputEnded:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 				dragging = false
 			end
-		end)
+		end))
 	end
 
 	local MainFrame = Instance.new("CanvasGroup")
@@ -3662,7 +3864,7 @@ local UISuccess, UIErr = pcall(function()
 		local SubScroll = CreateScrollList(parent, 104)
 		AddToggle(SubScroll, "自瞄", nil, CFG.aimbot, function(v)
 			CFG.aimbot = v
-			if not v then removeAimHook(); Aim.point = nil end
+			if not v then Aim.point = nil end
 		end)
 		AddToggle(SubScroll, "开火", nil, CFG.autoFire, function(v)
 			CFG.autoFire = v
@@ -3944,9 +4146,9 @@ local UISuccess, UIErr = pcall(function()
 								CFG.camBodyVisible = v
 								pcall(camApply)
 							end)
-							AddSlider(scroll, "近距", 0.5, 20, CFG.camMinZoom, "", function(v) CFG.camMinZoom = v; pcall(camApply) end)
+							AddSlider(scroll, "近距", 0.5, 60, CFG.camMinZoom, "", function(v) CFG.camMinZoom = v; pcall(camApply) end)
 							AddSlider(scroll, "远距", 10, 400, CFG.camMaxZoom, "", function(v) CFG.camMaxZoom = v; pcall(camApply) end)
-							AddSlider(scroll, "三人距", 6, 40, CFG.camForceMin, "", function(v) CFG.camForceMin = v; pcall(camApply) end)
+							AddSlider(scroll, "三人距", 6, 60, CFG.camForceMin, "", function(v) CFG.camForceMin = v; pcall(camApply) end)
 							AddToggle(scroll, "视角锁", "锁中心", CFG.camLock, function(v)
 								CFG.camLock = v
 								if v then
@@ -3985,12 +4187,14 @@ local UISuccess, UIErr = pcall(function()
 							AddButton(scroll, "切三人", nil, function() pcall(camSetThird, true); toast("已切三人", 1.6) end)
 							AddButton(scroll, "切一人", nil, function() pcall(camSetThird, false); toast("已切一人", 1.6) end)
 						else
+							AddToggle(scroll, "自动交互", "补给/拾取", CFG.autoInteract, function(v)
+								CFG.autoInteract = v
+								toast(v and "自动交互已开" or "自动交互已关", 2)
+							end)
+							AddSlider(scroll, "交互半径", 4, 40, CFG.interactRadius, "", function(v) CFG.interactRadius = v end)
+							AddToggle(scroll, "仅补给", "过滤交互", CFG.interactAmmoOnly, function(v) CFG.interactAmmoOnly = v end)
 							AddButton(scroll, "清轨迹", "移除弹道线", function()
-								for _, v in ipairs(workspace.Terrain:GetChildren()) do
-									if v.Name == "__btrTrail" or v.Name == "__btrMuzzle" or v.Name == "__btrImpact" then
-										v:Destroy()
-									end
-								end
+								trailClearAll()
 							end)
 							AddButton(scroll, "重连接", "修复发包", function()
 								Network = nil
@@ -4011,7 +4215,7 @@ local UISuccess, UIErr = pcall(function()
 				CreateSubSegmentNav(MainConfigCard, { "自瞄", "偏移" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "自瞄" then
-							AddToggle(scroll, "自瞄", nil, CFG.aimbot, function(v) CFG.aimbot = v; if not v then removeAimHook() end end)
+							AddToggle(scroll, "自瞄", nil, CFG.aimbot, function(v) CFG.aimbot = v end)
 							AddToggle(scroll, "静默", nil, CFG.silent, function(v) CFG.silent = v end)
 							AddToggle(scroll, "伪装", "上报对齐", CFG.spoofCam, function(v) CFG.spoofCam = v end)
 							AddToggle(scroll, "开火", "自动", CFG.autoFire, function(v) CFG.autoFire = v; if not v then forceRelease() end end)
@@ -4021,6 +4225,11 @@ local UISuccess, UIErr = pcall(function()
 							AddToggle(scroll, "打怪", nil, CFG.aimMonsters, function(v) CFG.aimMonsters = v end)
 							AddToggle(scroll, "打人", nil, CFG.aimPlayers, function(v) CFG.aimPlayers = v end)
 							AddToggle(scroll, "智能部位", nil, CFG.aimSmartPart, function(v) CFG.aimSmartPart = v end)
+							AddToggle(scroll, "优先头部", "爆头优先", CFG.headPriority, function(v) CFG.headPriority = v end)
+							AddToggle(scroll, "严格枪口", "看不到不打", CFG.strictMuzzle, function(v)
+								CFG.strictMuzzle = v
+								toast(v and "严格枪口已开" or "严格枪口已关", 2.4)
+							end)
 							AddToggle(scroll, "补偿", "落点", CFG.dropComp, function(v) CFG.dropComp = v end)
 							AddToggle(scroll, "枪口偏移", "绕掩体", CFG.muzzleOffset, function(v) CFG.muzzleOffset = v end)
 							AddToggle(scroll, "破盾", nil, CFG.noShield, function(v) CFG.noShield = v end)
@@ -4049,7 +4258,6 @@ local UISuccess, UIErr = pcall(function()
 				renderStatusPanel(SubConfigCard)
 			end,
 		},
-		
 		["Ragebot"] = {
 			hasSub = true,
 			render = function()
@@ -4058,8 +4266,12 @@ local UISuccess, UIErr = pcall(function()
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "核心" then
 							AddToggle(scroll, "Ragebot", "静默", CFG.silentPacket, function(v) CFG.silentPacket = v end)
-							
 							AddToggle(scroll, "自动换弹", "瞬间补充", CFG.autoReload, function(v) CFG.autoReload = v end)
+							AddToggle(scroll, "严格枪口", "看不到不打", CFG.strictMuzzle, function(v)
+								CFG.strictMuzzle = v
+								toast(v and "严格枪口已开" or "严格枪口已关", 2.4)
+							end)
+							AddToggle(scroll, "优先头部", "爆头优先", CFG.headPriority, function(v) CFG.headPriority = v end)
 						else
 							AddSlider(scroll, "静默·隔墙最大偏移", 1, 4, CFG.silentWallOffset, "", function(v)
 								CFG.silentWallOffset = v; HUB.silentWallCap = v
@@ -4068,6 +4280,13 @@ local UISuccess, UIErr = pcall(function()
 								CFG.silentObsOffset = v; HUB.silentObsCap = v
 							end)
 							AddSlider(scroll, "偏移步长", 0.3, 2, CFG.muzzleStep, "", function(v) CFG.muzzleStep = v end)
+							local sideNames = { "智能", "固定右", "固定左" }
+							local sideIdx = 1
+							if CFG.offsetSide == "right" then sideIdx = 2
+							elseif CFG.offsetSide == "left" then sideIdx = 3 end
+							AddDropdown(scroll, "偏移方向", sideNames, sideIdx, function(sel, idx)
+								CFG.offsetSide = (idx == 2 and "right") or (idx == 3 and "left") or "near"
+							end)
 						end
 					end)
 				end)
@@ -4155,34 +4374,34 @@ local UISuccess, UIErr = pcall(function()
 				lbl.TextSize = 10
 				lbl.TextColor3 = DynamicContext.CurrentSubTextColor
 				lbl.Text = table.concat({
-					"v2.4",
+					"v2.7",
 					"──────────────────────────",
 					"",
-					"【用户请求】",
-					"· 删除 Ragebot 内「真实Ragebot」开关",
-					"  （silentReal 字段保留默认 false）",
-					"· Ragebot 新增独立「自动换弹」开关",
-					"  默认开，可关闭",
-					"· 全部功能按中文重新分类",
-					"· 功能副标题大幅精简",
-					"· 单击 Logo 直接缩小（v2.3 起）",
+					"【修复自瞄打人】",
+					"· pickTarget 的 and/or 优先级 bug",
+					"  导致「打怪=false 打人=false 时怪物优先级误用于玩家」",
+					"· 现在未开「打人」时，玩家一律不会被选为目标",
+					"· Ragebot / 自动开火 / 静默射击同样受此约束",
 					"",
-					"【v2.3 深度审计修复】",
-					"· N-01 Raycast hook 可还原",
-					"· N-02 视角锁定鼠标逻辑修复",
-					"· N-03 监听全纳入 HUB.conns",
-					"· N-04 hlCache 弱引用 + destroy 清理",
-					"· N-05 副作用方法收入 Internal",
-					"· N-06 缓存弱引用",
-					"· N-07 spawnImpact 预算",
-					"· N-08 dmgWatch 双条件",
-					"· N-09 换弹 10 次轮询",
-					"· N-10 camMinZoom 参与约束",
-					"· N-11 自瞄排除 isSelf",
-					"· N-12 好友 pending 中性色",
-					"· N-13 gunConfig 模糊匹配",
-					"· N-14 _newindex 链式",
-					"· N-15 packetWarned 冷却",
+					"【Ragebot 精简】",
+					"· 删除「强化」子段及全部武器 Config 篡改",
+					"  含伤害/爆头/弹丸/穿透/射速/无后坐/无散布",
+					"· 移除共享表全局污染风险",
+					"· Ragebot 保留：核心（静默·自动换弹·严格枪口·优先头部）",
+					"  与辅助（隔墙/绕障/步长/偏移方向）",
+					"",
+					"【审计修复（P0/P1）】",
+					"· V-01 删除 installAimHook/removeAimHook 死代码",
+					"· V-02 删除 api.targets() 敏感信息暴露",
+					"· V-03 网络热重载保留旧引用，消除战力空窗",
+					"· V-05 packetStrat 计数器加锁，修复竞态",
+					"",
+					"──────────────────────────",
+					"历史版本:",
+					"· v2.6 枪口射线拦截 / 优先头部 / 自动交互",
+					"· v2.5 全局信号/暴露面/特效队列审计版",
+					"· v2.4 Ragebot 自动换弹独立开关 / 中文重分类",
+					"· v2.3 深度审计修复版（N-01~N-15）",
 				}, "\n")
 				table.insert(DynamicContext.TextElements, { Obj = lbl, Type = "Sub" })
 			end,
@@ -4346,8 +4565,9 @@ local UISuccess, UIErr = pcall(function()
 
 		if DynamicContext.StatusLabel and DynamicContext.StatusLabel.Parent then
 			DynamicContext.StatusLabel.Text = string.format(
-				"目标: %s\n开火: %d   命中: %d/%d\n发包: %d/%d\n枪口: %s %.1f\nFPS: %d",
+				"目标: %s\n开火: %d   命中: %d/%d   拦截: %d\n发包: %d/%d\n枪口: %s %.1f\nFPS: %d",
 				STATS.target, STATS.fires, STATS.hits, STATS.hitCalls or 0,
+				HUB.verifyRejects or 0,
 				HUB.packetOK or 0, HUB.packetTries or 0,
 				tostring(Aim.offsetKind or (Aim.shotOK and "muzzle" or "none")), Aim.offsetUsed or 0,
 				math.floor(HUB.fps or 0))
@@ -4466,7 +4686,7 @@ local UISuccess, UIErr = pcall(function()
 	local isPressing = false
 	local longPressTask = nil
 
-	Island.InputBegan:Connect(function(input)
+	table.insert(HUB.conns, Island.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			isPressing = true
 			pressStartTime = os.clock()
@@ -4482,8 +4702,9 @@ local UISuccess, UIErr = pcall(function()
 				end
 			end)
 		end
-	end)
-	UIS.InputEnded:Connect(function(input)
+	end))
+
+	table.insert(HUB.conns, UIS.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			if isPressing then
 				local duration = os.clock() - pressStartTime
@@ -4497,14 +4718,15 @@ local UISuccess, UIErr = pcall(function()
 				end
 			end
 		end
-	end)
-	UIS.InputChanged:Connect(function(input)
+	end))
+
+	table.insert(HUB.conns, UIS.InputChanged:Connect(function(input)
 		if isIslandDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			local delta = Vector2.new(input.Position.X, input.Position.Y) - islandDragStartVec
 			Island.Position = UDim2.new(islandStartPosUDim.X.Scale, islandStartPosUDim.X.Offset + delta.X,
 				islandStartPosUDim.Y.Scale, islandStartPosUDim.Y.Offset + delta.Y)
 		end
-	end)
+	end))
 
 	local function HideMainAndShowIsland()
 		local shrinkTweenInfo = TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
@@ -4570,12 +4792,12 @@ local UISuccess, UIErr = pcall(function()
 	SwitchTabWithAnimation("General")
 	safeTween(MainFrame, TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 })
 
-	UIS.InputBegan:Connect(function(input, gpe)
+	table.insert(HUB.conns, UIS.InputBegan:Connect(function(input, gpe)
 		if gpe or not CFG.hotkeyEnabled then return end
 		if input.KeyCode == Enum.KeyCode.RightShift then
 			if MainFrame.Visible then HideMainAndShowIsland() else HideIslandAndShowMain() end
 		end
-	end)
+	end))
 
 	Internal.hideToIsland = HideMainAndShowIsland
 	Internal.showMain = HideIslandAndShowMain
@@ -4607,6 +4829,7 @@ local function onRespawn()
 	Aim.offsetKind = nil; Aim.muzzleBlocked = false; Aim.hadOrigin = false
 	Aim.shotOK = false; Aim.shotDist = 0; Aim.lastOffset = nil
 	Aim.packetMuzzle = nil; Aim.packetTarget = nil
+	Aim.reject = nil; Aim.verifyOK = false
 	gunCfgCache = setmetatable({}, { __mode = "k" })
 	staminaGui.bar = nil; staminaGui.vig = nil; staminaGui.last = 0
 	forceRelease()
@@ -4626,6 +4849,7 @@ local function onRespawn()
 	HUB.silentWallCap = CFG.silentWallOffset or 2.5
 	HUB.silentObsCap = CFG.silentObsOffset or 4
 	HUB.maxOffsetOK = CFG.muzzleRadius or 4
+	HUB.verifyRejects = 0
 	shotCache.inst, shotCache.ok, shotCache.at = nil, false, 0
 	silentScan.at, silentScan.t, silentScan.part = 0, nil, nil
 	silentFailAt = setmetatable({}, { __mode = "k" })
@@ -4652,7 +4876,8 @@ table.insert(HUB.conns, LP.CharacterAdded:Connect(function() pcall(onRespawn) en
 
 HUB.cfg = CFG
 HUB.stats = STATS
-HUB.api = {
+
+local publicApi = {
 	aimInfo = function()
 		return Aim.point, Aim.occluded, Aim.origin, Aim.muzzle,
 			Aim.part and Aim.part.Name, Aim.offsetUsed, Aim.muzzleBlocked
@@ -4661,7 +4886,7 @@ HUB.api = {
 		return Aim.shotOK == true, tostring(Aim.offsetKind or "none"), Aim.shotDist or 0,
 			HUB.noDamage or 0, HUB.aimPartCycle or 0, HUB.silentBypassHits or 0,
 			HUB.packetOK or 0, HUB.silentWallCap or 2.5, HUB.silentObsCap or 4,
-			HUB.silentPacketShots or 0
+			HUB.silentPacketShots or 0, HUB.verifyRejects or 0, tostring(Aim.reject or "-")
 	end,
 	camInfo = function()
 		local cam = workspace.CurrentCamera
@@ -4708,32 +4933,58 @@ HUB.api = {
 		end
 		return total, vis
 	end,
-	targets = function() return buildTargets() end,
 	pellets = function() return HUB.lastPellets or 1 end,
 }
 
+local genvRef = genv
+
+local function resetAllConfig()
+	CFG.aimbot = false
+	CFG.silentPacket = false
+	CFG.packetMode = false
+	CFG.autoFire = false
+	CFG.autoReload = true
+	CFG.silent = true
+	CFG.camUnlock = false
+	CFG.camForceThird = false
+	CFG.camLock = false
+	CFG.camFreeze = false
+	CFG.hotkeyEnabled = true
+	CFG.islandClickExpand = true
+	CFG.islandLongPressDrag = true
+	CFG.noFog = false
+	CFG.mapGlow = false
+	CFG.infStamina = false
+	CFG.customWalkSpeed = false
+	CFG.customJumpPower = false
+	CFG.noFall = false
+	CFG.autoInteract = false
+end
+
 HUB.destroy = function()
-	pcall(removeAimHook)
 	pcall(removeSpeedHook)
 	pcall(forceRelease)
 	CFG.camUnlock = false
 	CFG.camForceThird = false
+	CFG.camLock = false
+	CFG.camFreeze = false
 	pcall(camUnbind)
 	pcall(camRestoreOriginals)
 	pcall(RAY.restore)
-	local ORIG = genv.__BTRHUB_NET_ORIG
+	local ORIG = genvRef.__BTRHUB_NET_ORIG
 	if ORIG and ORIG.net then
 		pcall(function() ORIG.net.FireServer = ORIG.FireServer end)
 		pcall(function() ORIG.net.InvokeServer = ORIG.InvokeServer end)
 	end
-	genv.__BTRHUB_NET = nil
-	genv.__BTRHUB_NET_ORIG = nil
+	genvRef.__BTRHUB_NET = nil
+	genvRef.__BTRHUB_NET_ORIG = nil
 	NB = nil
 	if lightBackup then
 		CFG.noFog = false
 		CFG.mapGlow = false
 		pcall(applyWorld)
 	end
+	pcall(trailClearAll)
 	for _, c in ipairs(HUB.conns) do pcall(function() c:Disconnect() end) end
 	HUB.conns = {}
 	for inst, hl in pairs(hlCache) do
@@ -4749,14 +5000,6 @@ HUB.destroy = function()
 	end
 	pool = {}
 	lastDraw = {}
-	pcall(function()
-		for _, v in ipairs(workspace.Terrain:GetChildren()) do
-			if v.Name == "__btrTrail" or v.Name == "__btrMuzzle" or v.Name == "__btrImpact" or v.Name == "__btrHL" then
-				v:Destroy()
-			end
-		end
-	end)
-	trailBudget = {}
 	gunCfgCache = setmetatable({}, { __mode = "k" })
 	ammoCache = {}
 	ammoSeen = setmetatable({}, { __mode = "k" })
@@ -4786,7 +5029,16 @@ HUB.destroy = function()
 			end
 		end
 	end)
-	genv.__BTRHUB = nil
-	genv.__BTRHUB_STATS = nil
-	genv.__BTRHUB_RAY = nil
+	resetAllConfig()
+	genvRef.__BTRHUB = nil
+	genvRef.__BTRHUB_STATS = nil
+	genvRef.__BTRHUB_RAY = nil
+	genvRef.__BTRHUB_LIGHT = nil
 end
+
+genv.__BTRHUB = {
+	cfg = CFG,
+	stats = STATS,
+	destroy = HUB.destroy,
+	api = publicApi,
+}
