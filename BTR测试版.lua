@@ -85,7 +85,7 @@ local HUB = {
 	noDamage = 0, aimPartCycle = 0, silentBypass = {}, silentNoCast = {},
 	silentBypassHits = 0, ourCasts = 0, netCheckAt = 0, packetCall = 0,
 	packetWarned = false, reloadBusy = false, api = nil, cfg = nil, stats = nil,
-	lastPellets = 1, hitSends = 0, pelletOverride = nil,}
+	lastPellets = 1, hitSends = 0, pelletOverride = nil, mainFrame = nil,}
 genv.__BTRHUB = HUB
 
 local PALETTE = {
@@ -116,6 +116,11 @@ local CFG = {
 	colorEnemyTrail = Color3.fromRGB(255, 45, 45),
 	noFog = false, mapGlow = false, infStamina = false, customWalkSpeed = false, walkSpeed = 24, customJumpPower = false, jumpPower = 60,
 	noFall = false, fallSpeed = 45,
+	-- 相机解锁 / 强制第三人称
+	camUnlock = false, camForceThird = false, camBodyVisible = true,
+	camMinZoom = 0.5, camMaxZoom = 200, camForceMin = 8,
+	-- 视角锁定（第三人称·鼠标锁屏幕中心） / 可选：冻结镜头朝向
+	camLock = false, camLockMode = "fixed", camFreeze = false,
 }
 
 local STATS = genv.__BTRHUB_STATS
@@ -958,6 +963,320 @@ local function toastTick()
 	if toastLabel and toastLabel.Visible and os.clock() >= toastUntil then
 		toastLabel.Visible = false
 	end
+end
+
+--============================================================================
+-- 相机解锁 / 强制第三人称
+--
+--   实测这个游戏在出生时做三件事：
+--     ① Player.CameraMode = LockFirstPerson                     （锁死第一人称）
+--     ② CameraMinZoomDistance / CameraMaxZoomDistance = 0.5 / 4 （几乎不能缩放）
+--     ③ 于是第一人称下角色 64 个部件的 LocalTransparencyModifier 全被设成 1（人物隐形）
+--
+--   这里在「相机更新之后」的 RenderStep（Camera 优先级 +1）里把这三项改回来：
+--     · 解锁：CameraMode = Classic + 放大 zoom 区间 → 滚轮自由缩放，第一/第三人称随便切
+--     · 强制第三人称：把「最小缩放距离」抬到 6~30 格，相机物理上进不去第一人称
+--     · 同时把角色所有部件的 LocalTransparencyModifier 清 0 → 第三人称能看到全部部件
+--   （只改 LTM，不动 Transparency：本来就是透明的东西依然透明）
+--============================================================================
+local Cam = {
+	bound = false, name = "__btrCameraApply",
+	origMode = nil, origMin = nil, origMax = nil, origTaken = false,
+	lastBodyAt = 0, wasOn = false, lastReason = "-",
+	snapUntil = 0, snapDist = 0.5,
+	-- 视角锁定
+	lockPitch = nil, lockYaw = nil, lockCharYaw = nil,
+	locked = false, lockDist = 0, lockAt = 0, lockModeUsed = "-",
+	mouseApplied = false, mouseOrigIcon = nil,
+}
+
+local function camTakeOriginals()
+	if Cam.origTaken then return end
+	Cam.origTaken = true
+	pcall(function()
+		Cam.origMode = LP.CameraMode
+		Cam.origMin = LP.CameraMinZoomDistance
+		Cam.origMax = LP.CameraMaxZoomDistance
+	end)
+end
+
+local function camRestoreOriginals()
+	if not Cam.origTaken then return end
+	pcall(function()
+		if Cam.origMax then LP.CameraMaxZoomDistance = Cam.origMax end
+		if Cam.origMin then LP.CameraMinZoomDistance = Cam.origMin end
+		if Cam.origMode then LP.CameraMode = Cam.origMode end
+	end)
+end
+
+local function camBodyReveal()
+	local ch = LP.Character
+	if not ch then return 0 end
+	local n = 0
+	for _, d in ipairs(ch:GetDescendants()) do
+		if d:IsA("BasePart") then
+			if (d.LocalTransparencyModifier or 0) > 0.001 then
+				d.LocalTransparencyModifier = 0
+				n = n + 1
+			end
+		end
+	end
+	return n
+end
+
+--============================================================================
+-- 自动锁定视角（仅第三人称）
+--   Roblox 内置的 CameraType 里没有「第三人称 + 锁住朝向」这种组合：
+--     Attach 会把相机直接放到部件上（变成第一人称视角），Follow/Track 仍然吃鼠标输入。
+--   所以这里自己做：保留默认相机算出来的位置（跟着人走、能撞墙拉近/滚轮缩放），
+--   只把「朝向」按锁定时的 yaw/pitch 钉死 —— 鼠标怎么甩画面都不转。
+--   camLockMode = "person" 时，钉的是「相对人物朝向」的角度：人转身，视角跟着转。
+--============================================================================
+local function camYawOf(v)
+	if v.Magnitude < 1e-4 then return 0 end
+	return math.atan2(-v.X, -v.Z)
+end
+
+local function camCaptureLook()
+	local cam = workspace.CurrentCamera
+	if not cam then return false end
+	local lv = cam.CFrame.LookVector
+	if lv.Magnitude < 0.1 then return false end
+	lv = lv.Unit
+	Cam.lockPitch = math.asin(math.clamp(lv.Y, -1, 1))
+	Cam.lockYaw = camYawOf(lv)
+	local root = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+	Cam.lockCharYaw = camYawOf(root and root.CFrame.LookVector or lv)
+	Cam.lockAt = os.clock()
+	return true
+end
+
+local function camApplyLock(cam)
+	local ch = LP.Character
+	local head = ch and ch:FindFirstChild("Head")
+	local root = ch and ch:FindFirstChild("HumanoidRootPart")
+	if not (head and root and cam) then
+		Cam.locked = false
+		return
+	end
+	local dist = (cam.CFrame.Position - head.Position).Magnitude
+	Cam.lockDist = dist
+	-- 只在第三人称锁：第一人称（贴脸）保持游戏原本的手感
+	if dist <= 1.5 then
+		Cam.locked = false
+		Cam.lastReason = "第一人称不锁视角"
+		return
+	end
+	if Cam.lockPitch == nil then
+		if not camCaptureLook() then
+			Cam.locked = false
+			return
+		end
+	end
+
+	local yaw
+	if CFG.camLockMode == "person" then
+		local charYaw = camYawOf(root.CFrame.LookVector)
+		local base = Cam.lockCharYaw or charYaw
+		local delta = charYaw - base
+		-- 角度归一到 [-pi, pi]，免得人物转圈后视角乱跳
+		while delta > math.pi do delta = delta - math.pi * 2 end
+		while delta < -math.pi do delta = delta + math.pi * 2 end
+		yaw = Cam.lockYaw + delta
+		Cam.lockModeUsed = "跟随人物"
+	else
+		yaw = Cam.lockYaw
+		Cam.lockModeUsed = "固定朝向"
+	end
+
+	local dir = CFrame.fromEulerAnglesYXZ(Cam.lockPitch, yaw, 0).LookVector
+	local pos = cam.CFrame.Position
+	cam.CFrame = CFrame.lookAt(pos, pos + dir)
+	Cam.locked = true
+	Cam.lastReason = "锁定视角(" .. Cam.lockModeUsed .. ")"
+end
+
+--============================================================================
+-- 视角锁定 = 第三人称下把鼠标/准星钉在屏幕正中（第一人称那种手感）
+--
+--   实测：游戏默认第一人称时 MouseBehavior = LockCenter（鼠标锁中心、能动视角）；
+--   一旦我们把 CameraMode 解锁成 Classic 进第三人称，Roblox 的 ControlModule 会把
+--   MouseBehavior 改成 Default —— 鼠标变自由光标，移动鼠标不再转视角，只能右键拖。
+--   所以这里每帧（相机更新之后）把它抢回 LockCenter：
+--     · 准星永远是屏幕正中
+--     · 老鼠一动就转视角，跟第一人称完全一样
+--   两种情况会主动让开（不然点不到东西）：
+--     · 我们自己的面板打开时
+--     · 游戏把光标图标显示出来时（说明它在开菜单 / 需要指针）
+--============================================================================
+local function camApplyMouseLock(third)
+	if not CFG.camLock then
+		if Cam.mouseApplied then
+			Cam.mouseApplied = false
+			pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
+		end
+		return
+	end
+	local allow = third
+	if HUB.mainFrame and HUB.mainFrame.Visible then allow = false end
+	if UIS.MouseIconEnabled then allow = false end
+	if allow then
+		Cam.mouseApplied = true
+		if UIS.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
+			pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.LockCenter end)
+		end
+		if UIS.MouseIconEnabled then
+			pcall(function() UIS.MouseIconEnabled = false end)
+		end
+		Cam.lastReason = "视角锁定(鼠标锁中心)"
+	elseif Cam.mouseApplied then
+		Cam.mouseApplied = false
+		pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
+	end
+end
+
+local function camApply()
+	local on = CFG.camUnlock or CFG.camForceThird or CFG.camLock
+	if not on then
+		if Cam.wasOn then
+			Cam.wasOn = false
+			Cam.locked = false
+			camRestoreOriginals()
+			Cam.lastReason = "已关闭，恢复游戏默认"
+		end
+		return
+	end
+	Cam.wasOn = true
+	camTakeOriginals()
+
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+
+	-- 强制拉近/拉远窗口：默认相机每帧会把 zoom 夹到 [min,max]，
+	-- 所以把 min=max=目标距离保持 0.3 秒，相机就会弹到那个距离（不然只改 min 是「不生效」的）
+	if Cam.snapUntil and os.clock() < Cam.snapUntil then
+		pcall(function()
+			if LP.CameraMode ~= Enum.CameraMode.Classic then LP.CameraMode = Enum.CameraMode.Classic end
+			LP.CameraMaxZoomDistance = Cam.snapDist
+			LP.CameraMinZoomDistance = Cam.snapDist
+		end)
+		return
+	end
+
+	local minZ, maxZ
+	if CFG.camForceThird then
+		minZ = math.clamp(tonumber(CFG.camForceMin) or 8, 6, 60)
+		maxZ = math.max(tonumber(CFG.camMaxZoom) or 200, minZ + 10)
+	else
+		minZ = math.clamp(tonumber(CFG.camMinZoom) or 0.5, 0.5, 60)
+		maxZ = math.max(tonumber(CFG.camMaxZoom) or 200, minZ + 1)
+	end
+
+	-- CameraMode 必须最后改：先放开 zoom 区间再切 Classic，避免被 clamp 回第一人称
+	if math.abs((LP.CameraMaxZoomDistance or 0) - maxZ) > 0.05 then
+		pcall(function() LP.CameraMaxZoomDistance = maxZ end)
+	end
+	if math.abs((LP.CameraMinZoomDistance or 0) - minZ) > 0.05 then
+		pcall(function() LP.CameraMinZoomDistance = minZ end)
+	end
+	if LP.CameraMode ~= Enum.CameraMode.Classic then
+		pcall(function() LP.CameraMode = Enum.CameraMode.Classic end)
+		Cam.lastReason = CFG.camForceThird and "强制第三人称" or "解锁相机"
+	end
+
+	-- 相机类型被游戏改成 Fixed/Attach 时拉回 Custom（Scriptable 留给过场/自瞄，不动）
+	if cam.CameraType == Enum.CameraType.Fixed or cam.CameraType == Enum.CameraType.Attach then
+		pcall(function() cam.CameraType = Enum.CameraType.Custom end)
+	end
+
+	-- 第三人称才露身体：第一人称（解锁后滚轮拉近）保持游戏原本的「看不到自己」
+	if CFG.camForceThird and CFG.camBodyVisible ~= false then
+		local now = os.clock()
+		if now - Cam.lastBodyAt > 0.1 then
+			Cam.lastBodyAt = now
+			camBodyReveal()
+		end
+	end
+
+	-- 第三人称判定（相机到头部的距离）
+	local dist = 9e9
+	do
+		local ch = LP.Character
+		local head = ch and ch:FindFirstChild("Head")
+		if head then dist = (cam.CFrame.Position - head.Position).Magnitude end
+	end
+	Cam.lockDist = dist
+
+	-- ① 视角锁定：第三人称把鼠标锁在屏幕正中（第一人称手感）
+	camApplyMouseLock(dist > 1.5)
+
+	-- ② 可选：冻结镜头朝向（画面完全不跟鼠标转）
+	if CFG.camFreeze then
+		if CFG.aimbot and not CFG.silent and Aim.point then
+			Cam.locked = false
+			Cam.lastReason = "自瞄接管视角，冻结暂停"
+		else
+			pcall(camApplyLock, cam)
+		end
+	else
+		Cam.locked = false
+	end
+end
+
+local function camBind()
+	if Cam.bound then return end
+	Cam.bound = true
+	camTakeOriginals()
+	-- 上一次注入可能还绑着同名 RenderStep，先解绑再绑（不会有副作用）
+	pcall(function() Run:UnbindFromRenderStep(Cam.name) end)
+	local ok = pcall(function()
+		Run:BindToRenderStep(Cam.name, Enum.RenderPriority.Camera.Value + 1, function()
+			pcall(camApply)
+		end)
+	end)
+	if not ok then Cam.bound = false end
+	return ok
+end
+
+local function camUnbind()
+	if not Cam.bound then return end
+	Cam.bound = false
+	pcall(function() Run:UnbindFromRenderStep(Cam.name) end)
+end
+
+-- 切第三人称 / 第一人称（给按钮和 API 用）
+local function camSnap(dist, hold)
+	dist = math.clamp(tonumber(dist) or 0.5, 0.5, 400)
+	Cam.snapDist = dist
+	Cam.snapUntil = os.clock() + (hold or 0.35)
+	pcall(function()
+		if LP.CameraMode ~= Enum.CameraMode.Classic then LP.CameraMode = Enum.CameraMode.Classic end
+		LP.CameraMaxZoomDistance = dist
+		LP.CameraMinZoomDistance = dist
+	end)
+end
+
+local function camSetThird(on)
+	if on then
+		CFG.camForceThird = true
+		if not CFG.camUnlock then CFG.camUnlock = true end
+		Cam.snapUntil = 0
+		pcall(function()
+			LP.CameraMaxZoomDistance = math.max(tonumber(CFG.camMaxZoom) or 200, 60)
+			LP.CameraMinZoomDistance = math.clamp(tonumber(CFG.camForceMin) or 8, 6, 60)
+			LP.CameraMode = Enum.CameraMode.Classic
+		end)
+		pcall(camApply)
+	else
+		CFG.camForceThird = false
+		pcall(function()
+			LP.CameraMinZoomDistance = 0.5
+			LP.CameraMode = Enum.CameraMode.Classic
+		end)
+		camSnap(0.5, 0.35)   -- 立刻把镜头拉回第一人称
+		task.delay(0.4, function() pcall(camApply) end)
+	end
+	return true
 end
 
 local silentGui, silentLabel = nil, nil
@@ -2635,6 +2954,7 @@ local UISuccess, UIErr = pcall(function()
 
 	local MainFrame = Instance.new("CanvasGroup")
 	MainFrame.Name = "MainFrame"
+	HUB.mainFrame = MainFrame   -- 相机锁定要读它：面板开着时先把鼠标放开，不然点不到开关
 	MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 	MainFrame.Size = UDim2.new(0, 530, 0, 320)
 	MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
@@ -3681,7 +4001,7 @@ local UISuccess, UIErr = pcall(function()
 			hasSub = true,
 			render = function()
 				CreateTitle(MainConfigCard, "通用功能")
-				CreateSubSegmentNav(MainConfigCard, { "世界", "移动", "其它" }, function(seg)
+				CreateSubSegmentNav(MainConfigCard, { "世界", "移动", "相机", "其它" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "世界" then
 							AddToggle(scroll, "除雾", "清除场景雾效", CFG.noFog, function(v) CFG.noFog = v; applyWorld() end)
@@ -3694,6 +4014,73 @@ local UISuccess, UIErr = pcall(function()
 							AddSlider(scroll, "跳跃力", 50, 200, CFG.jumpPower, "", function(v) CFG.jumpPower = v end)
 							AddToggle(scroll, "无落地伤害", "限速缓降", CFG.noFall, function(v) CFG.noFall = v end)
 							AddSlider(scroll, "安全下落速度", 20, 200, CFG.fallSpeed, "", function(v) CFG.fallSpeed = v end)
+						elseif seg == "相机" then
+							AddToggle(scroll, "解锁相机限制", "第一/第三人称 + 滚轮自由缩放", CFG.camUnlock, function(v)
+								CFG.camUnlock = v
+								pcall(camApply)
+								toast(v and "相机已解锁 · 滚轮可自由缩放" or "相机已恢复游戏默认", 1.8)
+							end)
+							AddToggle(scroll, "强制第三人称", "从第一人称切成第三人称", CFG.camForceThird, function(v)
+								CFG.camForceThird = v
+								if v and not CFG.camUnlock then CFG.camUnlock = true end
+								pcall(camApply)
+								toast(v and "已强制第三人称" or "已退出强制第三人称", 1.8)
+							end)
+							AddToggle(scroll, "第三人称显示全部部件", "人物身体/装备全部可见", CFG.camBodyVisible, function(v)
+								CFG.camBodyVisible = v
+								pcall(camApply)
+							end)
+							AddSlider(scroll, "最大缩放距离", 10, 400, CFG.camMaxZoom, "格", function(v) CFG.camMaxZoom = v; pcall(camApply) end)
+							AddSlider(scroll, "强制第三人称距离", 6, 40, CFG.camForceMin, "格", function(v) CFG.camForceMin = v; pcall(camApply) end)
+							AddToggle(scroll, "视角锁定", "第三人称·准星锁屏幕正中（收起面板后生效）", CFG.camLock, function(v)
+								CFG.camLock = v
+								if v then
+									if not CFG.camUnlock then CFG.camUnlock = true end
+									toast("视角锁定已开启 · 准星锁屏幕正中（按 RightShift 收起面板后生效）", 2.6)
+								else
+									UIS.MouseBehavior = Enum.MouseBehavior.Default
+									Cam.mouseApplied = false
+									toast("视角锁定已关闭 · 鼠标恢复自由", 1.6)
+								end
+								pcall(camApply)
+							end)
+							AddToggle(scroll, "冻结镜头朝向", "进阶：画面完全不跟鼠标转", CFG.camFreeze, function(v)
+								CFG.camFreeze = v
+								if v then
+									if not CFG.camUnlock then CFG.camUnlock = true end
+									if not Cam.lockPitch then camCaptureLook() end
+								else
+									Cam.locked = false
+									Cam.lockPitch, Cam.lockYaw, Cam.lockCharYaw = nil, nil, nil
+								end
+								pcall(camApply)
+							end)
+							local lockModes = { "固定朝向", "跟随人物" }
+							AddDropdown(scroll, "冻结方式", lockModes, CFG.camLockMode == "person" and 2 or 1, function(selected, idx)
+								CFG.camLockMode = (idx == 2) and "person" or "fixed"
+								-- 换方式时重新取一次基准角度
+								Cam.lockPitch = nil
+								Cam.lockYaw = nil
+								Cam.lockCharYaw = nil
+								pcall(camCaptureLook)
+								pcall(camApply)
+							end)
+							AddButton(scroll, "重新捕获当前朝向", "冻结镜头用", function()
+								Cam.lockPitch = nil
+								Cam.lockYaw = nil
+								Cam.lockCharYaw = nil
+								local okc = camCaptureLook()
+								pcall(camApply)
+								toast(okc and "已捕获当前朝向" or "捕获失败", 1.6)
+							end)
+							AddButton(scroll, "切到第三人称", "立刻生效", function()
+								pcall(camSetThird, true)
+								toast("已切到第三人称", 1.6)
+							end)
+							AddButton(scroll, "切回第一人称", "解除强制并拉近", function()
+								pcall(camSetThird, false)
+								toast("已切回第一人称", 1.6)
+							end)
 						else
 							AddButton(scroll, "清除所有轨迹", "移除场景中的弹道线", function()
 								for _, v in ipairs(workspace.Terrain:GetChildren()) do
@@ -4314,6 +4701,9 @@ if NB then
 end
 if CFG.noFog or CFG.mapGlow then applyWorld() end
 
+-- 相机解锁 / 强制第三人称：挂到「相机更新之后」的 RenderStep 上（每帧自动重新应用）
+camBind()
+
 task.spawn(function()
 	task.wait(0.5)
 	pcall(scanAmmo)
@@ -4350,6 +4740,10 @@ local function onRespawn()
 	silentFailAt = {}
 	dmgWatch.inst, dmgWatch.hp, dmgWatch.t = nil, nil, 0
 	Aim.muzzleAt = 0
+	-- 复活后游戏会重新锁第一人称 / 重新限制缩放，立刻再应用一次
+	if CFG.camUnlock or CFG.camForceThird then
+		task.defer(function() pcall(camApply) end)
+	end
 
 	task.delay(0.8, function()
 		Network = nil
@@ -4414,6 +4808,57 @@ HUB.api = {
 	end,
 	setOrigin = function(p) Aim.forceOrigin = p end,
 	clearOrigin = function() Aim.forceOrigin = nil; Aim.origin = nil end,
+	-- 相机：立即应用 / 切第三人称 / 查状态
+	camApply = function() pcall(camApply); return true end,
+	camThird = function(on) return camSetThird(on == true) end,
+	camInfo = function()
+		local cam = workspace.CurrentCamera
+		local ch = LP.Character
+		local head = ch and ch:FindFirstChild("Head")
+		local hidden = 0
+		if ch then
+			for _, d in ipairs(ch:GetDescendants()) do
+				if d:IsA("BasePart") and (d.LocalTransparencyModifier or 0) > 0.001 then
+					hidden = hidden + 1
+				end
+			end
+		end
+		return tostring(LP.CameraMode), LP.CameraMinZoomDistance or -1, LP.CameraMaxZoomDistance or -1,
+			cam and tostring(cam.CameraType) or "nil",
+			(head and cam) and (cam.CFrame.Position - head.Position).Magnitude or -1,
+			hidden, tostring(Cam.lastReason),
+			Cam.locked == true, tostring(CFG.camLockMode or "fixed"), tostring(Cam.lockModeUsed or "-")
+	end,
+	-- 视角锁定：开/关 + 重新捕获当前朝向（冻结镜头用）
+	camLock = function(on)
+		CFG.camLock = (on ~= false)
+		if CFG.camLock then
+			CFG.camUnlock = true
+		else
+			Cam.mouseApplied = false
+			pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
+		end
+		pcall(camApply)
+		return CFG.camLock
+	end,
+	camFreeze = function(on)
+		CFG.camFreeze = (on ~= false)
+		if CFG.camFreeze then
+			CFG.camUnlock = true
+			if not Cam.lockPitch then camCaptureLook() end
+		else
+			Cam.locked = false
+			Cam.lockPitch, Cam.lockYaw, Cam.lockCharYaw = nil, nil, nil
+		end
+		pcall(camApply)
+		return CFG.camFreeze
+	end,
+	camLockRecapture = function()
+		Cam.lockPitch, Cam.lockYaw, Cam.lockCharYaw = nil, nil, nil
+		local ok = camCaptureLook()
+		pcall(camApply)
+		return ok == true
+	end,
 	offsetStats = function() return HUB.maxOffsetOK or 0, HUB.offsetAccepted or 0, HUB.offsetRejected or 0 end,
 	packetStats = function()
 		return HUB.packetOK or 0, HUB.packetTries or 0, HUB.packetStrat or 1,
@@ -4448,6 +4893,11 @@ HUB.destroy = function()
 	pcall(removeAimHook)
 	pcall(removeSpeedHook)
 	pcall(forceRelease)
+	-- 相机：解绑并把游戏原本的 CameraMode / 缩放区间还回去
+	CFG.camUnlock = false
+	CFG.camForceThird = false
+	pcall(camUnbind)
+	pcall(camRestoreOriginals)
 	local ORIG = genv.__BTRHUB_NET_ORIG
 	if ORIG and ORIG.net then
 		pcall(function() ORIG.net.FireServer = ORIG.FireServer end)
