@@ -6,7 +6,6 @@ local function envTable()
 	ENVT = _G
 	return ENVT
 end
-
 local function safeGet(name)
 	local env = envTable()
 	local ok, v = pcall(function() return env[name] end)
@@ -15,7 +14,6 @@ local function safeGet(name)
 	if ok2 and v2 ~= nil then return v2 end
 	return nil
 end
-
 local genv
 do
 	local gf = safeGet("getgenv")
@@ -25,7 +23,6 @@ do
 	end
 	if not genv then genv = envTable() end
 end
-
 local COMPAT = {
 	hook = safeGet("hookmetamethod"),
 	restore = safeGet("restorefunction") or safeGet("restorefunction_"),
@@ -33,7 +30,6 @@ local COMPAT = {
 	m1release = safeGet("mouse1release"),
 	m1click = safeGet("mouse1click"),
 }
-
 if genv.__BTRHUB then
 	local OLD = genv.__BTRHUB
 	pcall(function()
@@ -48,7 +44,6 @@ if genv.__BTRHUB then
 	end)
 	genv.__BTRHUB = nil
 end
-
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local Run = game:GetService("RunService")
@@ -58,7 +53,6 @@ local Tween = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local CoreGui = game:GetService("CoreGui")
 local SoundService = game:GetService("SoundService")
-
 local LP = Players.LocalPlayer
 if not LP then
 	for _ = 1, 120 do
@@ -67,9 +61,9 @@ if not LP then
 		task.wait(0.05)
 	end
 end
-if not LP then
-	return
-end
+if not LP then return end
+
+local Internal = {}
 
 local HUB = {
 	conns = {}, drawing = {}, destroy = nil, fps = 0, warned = false, worldOn = false,
@@ -81,11 +75,14 @@ local HUB = {
 	reloadAt = 0, reloadNotified = false, silentPacketShots = 0, badDirs = 0,
 	ammoCount = 0, packetStratOK = {}, packetStratN = {}, packetRetryAt = 0,
 	renderMode = "", reserveOK = false, silentAmmo = nil, fireInterval = 0.12,
-	silentAcc = 0, silentFallbackReal = false, silentWallCap = 4, silentObsCap = 6,
+	silentAcc = 0, silentFallbackReal = false, silentWallCap = 2.5, silentObsCap = 4,
 	noDamage = 0, aimPartCycle = 0, silentBypass = {}, silentNoCast = {},
 	silentBypassHits = 0, ourCasts = 0, netCheckAt = 0, packetCall = 0,
-	packetWarned = false, reloadBusy = false, api = nil, cfg = nil, stats = nil,
-	lastPellets = 1, hitSends = 0, pelletOverride = nil, mainFrame = nil,}
+	packetWarned = false, packetWarnedAt = 0,
+	reloadBusy = false, api = nil, cfg = nil, stats = nil,
+	lastPellets = 1, hitSends = 0, pelletOverride = nil, mainFrame = nil,
+	netReady = true, lastHitAt = 0,
+}
 genv.__BTRHUB = HUB
 
 local PALETTE = {
@@ -105,21 +102,25 @@ local CFG = {
 	aimbot = false, silent = true, autoFire = false,
 	aimPart = "Head", fov = 600, visibleOnly = true,
 	aimMonsters = true, aimPlayers = false, aimSmartPart = true, aim360 = true,
-	fovAngle = 180, dropComp = true, spoofCam = true, 
+	fovAngle = 180, dropComp = true, spoofCam = true,
 	noShield = false, muzzleOffset = true, muzzleRadius = 4, muzzleStep = 0.5,
-	silentWallOffset = 4, silentObsOffset = 6,
-	ricochet = true, packetMode = false, packetForge = false,
-	silentPacket = false, silentReal = false,
+	silentWallOffset = 2.5, silentObsOffset = 4,
+	packetMode = false,
+	debugLog = false,
+	hotkeyEnabled = true,
+	islandClickExpand = true,
+	islandLongPressDrag = true,
+	silentPacket = false,
+	silentReal = false,          -- 保留字段，UI 已隐藏（永远 false → 全走发包）
+	autoReload = true,           -- v2.4 新增：Ragebot 自动换弹开关
 	trail = true, trailTime = 5, muzzleTrail = true,
 	trailColor = Color3.fromRGB(255, 190, 60),
 	otherTrails = true, colorTeamTrail = Color3.fromRGB(70, 255, 110),
 	colorEnemyTrail = Color3.fromRGB(255, 45, 45),
 	noFog = false, mapGlow = false, infStamina = false, customWalkSpeed = false, walkSpeed = 24, customJumpPower = false, jumpPower = 60,
 	noFall = false, fallSpeed = 45,
-	-- 相机解锁 / 强制第三人称
 	camUnlock = false, camForceThird = false, camBodyVisible = true,
 	camMinZoom = 0.5, camMaxZoom = 200, camForceMin = 8,
-	-- 视角锁定（第三人称·鼠标锁屏幕中心） / 可选：冻结镜头朝向
 	camLock = false, camLockMode = "fixed", camFreeze = false,
 }
 
@@ -150,7 +151,6 @@ local function w2s(pos)
 	end
 	return Vector2.new(), false
 end
-
 local function rayParams(exclude)
 	local rp = RaycastParams.new()
 	rp.FilterType = Enum.RaycastFilterType.Exclude
@@ -159,18 +159,15 @@ local function rayParams(exclude)
 	rp.RespectCanCollide = false
 	return rp
 end
-
 local function getMyChar()
 	local c = LP.Character
 	if c and c.Parent then return c end
 	return nil
 end
-
 local function getMyHumanoid()
 	local c = getMyChar()
 	return c and c:FindFirstChildOfClass("Humanoid") or nil
 end
-
 local function getEquippedGun()
 	local c = getMyChar()
 	if not c then return nil end
@@ -180,16 +177,32 @@ local function getEquippedGun()
 	return nil
 end
 
-local gunCfgCache = {}
+local gunCfgCache = setmetatable({}, { __mode = "k" })
 local function getGunConfig(tool)
 	if not tool then return nil end
 	local hit = gunCfgCache[tool]
 	if hit then return hit end
 	local found
 	for _, c in ipairs(tool:GetChildren()) do
-		if c:IsA("ModuleScript") and c.Name == "" then
-			local ok, r = pcall(require, c)
-			if ok and type(r) == "table" and r.fire and r.ammo then found = r; break end
+		if c:IsA("ModuleScript") then
+			local nm = string.lower(c.Name)
+			local nameOk = (c.Name == "")
+				or string.find(nm, "config", 1, true) ~= nil
+				or string.find(nm, "gun", 1, true) ~= nil
+				or string.find(nm, "weapon", 1, true) ~= nil
+				or string.find(nm, "fire", 1, true) ~= nil
+			if nameOk then
+				local ok, r = pcall(require, c)
+				if ok and type(r) == "table" and r.fire and r.ammo then found = r; break end
+			end
+		end
+	end
+	if not found then
+		for _, c in ipairs(tool:GetChildren()) do
+			if c:IsA("ModuleScript") then
+				local ok, r = pcall(require, c)
+				if ok and type(r) == "table" and r.fire and r.ammo then found = r; break end
+			end
 		end
 	end
 	if found then gunCfgCache[tool] = found end
@@ -208,9 +221,11 @@ local spawnTrail, spawnImpact
 local trailBudget = {}
 
 local function onFirePacket(tool, cfg, dir) STATS.fires = STATS.fires + 1 end
-
 local function onHitPacket(hit, tool, cfg, payload)
-	if hit then STATS.hits = STATS.hits + 1 end
+	if hit then
+		STATS.hits = STATS.hits + 1
+		HUB.lastHitAt = os.clock()
+	end
 	if not CFG.trail or not CFG.muzzleTrail then return end
 	if type(payload) == "table" and typeof(payload[3]) == "Vector3" then
 		spawnImpact(payload[3])
@@ -295,9 +310,9 @@ local function installNetHooks()
 					else
 						HUB.offsetRejected = (HUB.offsetRejected or 0) + 1
 						if kind == "wall" then
-							HUB.silentWallCap = math.max(1, math.min(HUB.silentWallCap or 4, used - 0.5))
+							HUB.silentWallCap = math.max(1, math.min(HUB.silentWallCap or 2.5, used - 0.5))
 						elseif kind == "obstacle" then
-							HUB.silentObsCap = math.max(1, math.min(HUB.silentObsCap or 6, used - 0.5))
+							HUB.silentObsCap = math.max(1, math.min(HUB.silentObsCap or 4, used - 0.5))
 						else
 							HUB.maxOffsetOK = math.max(1, math.min(HUB.maxOffsetOK or used, used - 0.5))
 						end
@@ -311,7 +326,6 @@ local function installNetHooks()
 		return oldInvoke(self, channel, ...)
 	end
 end
-
 spawnTrail = function(from, to, duration, flash, color)
 	if (to - from).Magnitude < 1 then return end
 	duration = duration or CFG.trailTime
@@ -361,6 +375,10 @@ spawnTrail = function(from, to, duration, flash, color)
 end
 
 spawnImpact = function(pos)
+	if #trailBudget > 420 then
+		local old = table.remove(trailBudget, 1)
+		if old and old.Parent then old:Destroy() end
+	end
 	local p = Instance.new("Part")
 	p.Name = "__btrImpact"
 	p.Shape = Enum.PartType.Ball
@@ -375,6 +393,7 @@ spawnImpact = function(pos)
 	p.CFrame = CFrame.new(pos)
 	p.Transparency = 0.1
 	p.Parent = workspace.Terrain
+	table.insert(trailBudget, p)
 	Tween:Create(p, TweenInfo.new(CFG.trailTime, Enum.EasingStyle.Quad), {
 		Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05),
 	}):Play()
@@ -403,13 +422,30 @@ end
 local RAY = genv.__BTRHUB_RAY
 if not RAY then RAY = {}; genv.__BTRHUB_RAY = RAY end
 
+RAY.restore = function()
+	if RAY.mod then
+		if RAY.oldNew then pcall(function() RAY.mod.new = RAY.oldNew end) end
+		if RAY.oldFire then pcall(function() RAY.mod.Fire = RAY.oldFire end) end
+	end
+	RAY.mod = nil
+	RAY.oldNew = nil
+	RAY.oldFire = nil
+	RAY.ready = false
+end
+
 local function ensureRaycastWrapped()
 	local mod = RS.Assets.Modules:FindFirstChild("Raycast")
 	if not mod then return false end
 	local okm, RaycastMod = pcall(require, mod)
 	if not (okm and type(RaycastMod) == "table") then return false end
 	if RAY.mod == RaycastMod then return true end
+	if RAY.mod and RAY.oldNew then pcall(function() RAY.mod.new = RAY.oldNew end) end
+	if RAY.mod and RAY.oldFire then pcall(function() RAY.mod.Fire = RAY.oldFire end) end
 	local oldNew = RaycastMod.new
+	local oldFire = RaycastMod.Fire
+	RAY.oldNew = oldNew
+	RAY.oldFire = oldFire
+	RAY.mod = RaycastMod
 	RaycastMod.new = function(self, ...)
 		local cast = oldNew(self, ...)
 		RAY.casts = (RAY.casts or 0) + 1
@@ -423,7 +459,6 @@ local function ensureRaycastWrapped()
 		end)
 		return cast
 	end
-	local oldFire = RaycastMod.Fire
 	RaycastMod.Fire = function(self, origin, dir, speed, behavior)
 		if RAY.onOrigin then
 			local okO, no = pcall(RAY.onOrigin, origin, dir)
@@ -450,7 +485,6 @@ local function ensureRaycastWrapped()
 		end)
 		return cast
 	end
-	RAY.mod = RaycastMod
 	RAY.ready = true
 	return true
 end
@@ -536,7 +570,6 @@ local BOSS_NAMES = {
 	Vorax = true, Lurker = true, Deceiver = true, ViralSin = true, Bulldozer = true,
 	Mikhail = true, Shielder = true,
 }
-
 local function classifyMonster(model, hum)
 	local base = model.Name:gsub("%d+$", "")
 	if BOSS_NAMES[base] or (hum.MaxHealth and hum.MaxHealth >= 500) then return "boss" end
@@ -545,7 +578,6 @@ end
 
 local monsterCache = {}
 local lastMonsterScan = 0
-
 local function scanMonsters()
 	local out = {}
 	local chars = workspace:FindFirstChild("Characters")
@@ -609,12 +641,15 @@ local function otherShotTrail(beam)
 	end)
 end
 
-workspace.Terrain.ChildAdded:Connect(function(v)
+table.insert(HUB.conns, workspace.Terrain.ChildAdded:Connect(function(v)
 	if not CFG.otherTrails then return end
 	if v:IsA("Beam") then otherShotTrail(v) end
-end)
+end))
 
-local friendCache, friendPending = {}, {}
+local friendCache = {}
+local friendPending = {}
+local NEUTRAL_PLAYER_COLOR = Color3.fromRGB(160, 160, 175)
+
 local function isFriend(pl)
 	local v = friendCache[pl.UserId]
 	if v ~= nil then return v end
@@ -653,10 +688,16 @@ local function buildTargets()
 						local d = (head.Position - origin).Magnitude
 						if d <= CFG.maxDist then
 							local isFr = isFriend(pl)
+							local pending = friendPending[pl.UserId] == true
+							local col
+							if isFr then col = CFG.colorFriend
+							elseif pending then col = NEUTRAL_PLAYER_COLOR
+							else col = CFG.colorPlayer end
 							list[#list + 1] = {
 								inst = ch, hum = hum, head = head, root = root,
 								kind = "player", isPlayer = true, friend = isFr,
-								color = isFr and CFG.colorFriend or CFG.colorPlayer,
+								isSelf = (pl == LP),
+								color = col,
 								label = (isFr and "[好友] " or "") .. pl.Name, dist = d,
 								part = nil, visible = false, visiblePart = nil,
 							}
@@ -680,7 +721,7 @@ local function buildTargets()
 							local kind = classifyMonster(m, hum)
 							list[#list + 1] = {
 								inst = m, hum = hum, head = head or root, root = root,
-								kind = kind, isPlayer = false,
+								kind = kind, isPlayer = false, isSelf = false,
 								color = kind == "boss" and CFG.colorBoss or CFG.colorMonster,
 								label = m.Name, dist = d,
 								part = nil, visible = false, visiblePart = nil,
@@ -700,20 +741,17 @@ local ITEM_PATTERNS = {
 	"Glowstick", "Chemlight", "Keycard", "Intel", "Sample", "Battery", "Food",
 	"Water", "NVG", "Case", "Supply", "Pickup", "Weapon", "Tool", "Objective",
 }
-
 local function nameMatchesItem(n)
 	for _, p in ipairs(ITEM_PATTERNS) do
 		if n:find(p, 1, true) then return true end
 	end
 	return false
 end
-
 local function isAmmoName(n)
 	local l = string.lower(n)
 	return l == "ammobox" or l == "ammo box" or l == "ammoboxgiver"
 		or string.find(l, "ammobox", 1, true) ~= nil
 end
-
 local function scanItems()
 	local out, seen = {}, {}
 	local function consider(v)
@@ -729,19 +767,31 @@ local function scanItems()
 			if part then out[#out + 1] = { inst = v, part = part, label = nm } end
 		end
 	end
+	local BUDGET = 15000
 	for _, c in ipairs(workspace:GetChildren()) do
-		if c.Name ~= "Map" and c.Name ~= "Terrain" then
+		if c.Name ~= "Map" and c.Name ~= "Terrain" and c.Name ~= "Characters" then
 			consider(c)
-			for _, cc in ipairs(c:GetChildren()) do consider(cc) end
+			for _, cc in ipairs(c:GetDescendants()) do
+				if BUDGET <= 0 then break end
+				BUDGET = BUDGET - 1
+				consider(cc)
+			end
 		end
 	end
 	itemCache = out
 end
 
-local ammoCache, ammoSeen = {}, {}
-
+local ammoCache = {}
+local ammoSeen = setmetatable({}, { __mode = "k" })
+local function pruneAmmoCache()
+	for i = #ammoCache, 1, -1 do
+		local it = ammoCache[i]
+		if not it.inst or not it.inst.Parent then
+			table.remove(ammoCache, i)
+		end
+	end
+end
 local function isGiverName(n) return string.find(string.lower(n), "giver", 1, true) ~= nil end
-
 local function hasAmmoAncestor(m)
 	local cur = m.Parent
 	while cur and cur ~= workspace do
@@ -753,7 +803,6 @@ local function hasAmmoAncestor(m)
 	end
 	return false
 end
-
 local function inInteractions(m)
 	local cur = m.Parent
 	while cur and cur ~= workspace do
@@ -762,7 +811,6 @@ local function inInteractions(m)
 	end
 	return false
 end
-
 local function addAmmoHost(m)
 	if not m or not m:IsA("Model") then return end
 	if hasAmmoAncestor(m) then return end
@@ -802,7 +850,6 @@ local function addAmmoHost(m)
 	}
 	HUB.ammoCount = #ammoCache
 end
-
 local function ancestorAmmoHost(v)
 	local cur = v
 	while cur and cur ~= workspace do
@@ -813,9 +860,10 @@ local function ancestorAmmoHost(v)
 	end
 	return nil
 end
-
 local function scanAmmo()
-	ammoCache, ammoSeen = {}, {}
+	pruneAmmoCache()
+	ammoCache = {}
+	ammoSeen = setmetatable({}, { __mode = "k" })
 	local stack = {}
 	for _, c in ipairs(workspace:GetChildren()) do
 		if c ~= workspace.CurrentCamera and c.Name ~= "Characters" and c.Name ~= "Terrain" then
@@ -836,15 +884,15 @@ local function scanAmmo()
 	HUB.ammoCount = #ammoCache
 end
 
-workspace.DescendantAdded:Connect(function(v)
+table.insert(HUB.conns, workspace.DescendantAdded:Connect(function(v)
 	if not (v:IsA("BasePart") or v:IsA("ProximityPrompt") or v:IsA("Model")) then return end
 	task.defer(function()
 		local host = ancestorAmmoHost(v)
 		if host then addAmmoHost(host) end
 	end)
-end)
+end))
 
-workspace.DescendantAdded:Connect(function(v)
+table.insert(HUB.conns, workspace.DescendantAdded:Connect(function(v)
 	pcall(function()
 		if not (v:IsA("Tool") or v:IsA("Model")) then return end
 		if v:FindFirstChildOfClass("Humanoid") then return end
@@ -854,7 +902,7 @@ workspace.DescendantAdded:Connect(function(v)
 		local part = v:IsA("BasePart") and v or v:FindFirstChildWhichIsA("BasePart")
 		if part then table.insert(itemCache, { inst = v, part = part, label = nm }) end
 	end)
-end)
+end))
 
 local function installAimHook() end
 local function removeAimHook() end
@@ -878,7 +926,7 @@ local function nearestMonster(maxDist)
 	if not origin then return nil end
 	local best, bd
 	for _, t in ipairs(buildTargets()) do
-		if not t.isPlayer and (not bd or t.dist < bd) and t.dist <= (maxDist or 250) then
+		if not t.isPlayer and not t.isSelf and (not bd or t.dist < bd) and t.dist <= (maxDist or 250) then
 			bd = t.dist; best = t
 		end
 	end
@@ -908,7 +956,6 @@ getRealMuzzle = function()
 end
 
 local toastGui, toastLabel, toastUntil = nil, nil, 0
-
 local function toastParent()
 	local ok, p = pcall(function()
 		local gh = safeGet("gethui") or safeGet("get_hidden_gui")
@@ -920,7 +967,6 @@ local function toastParent()
 	end)
 	return (ok and p) or CoreGui
 end
-
 local function toast(msg, secs)
 	pcall(function()
 		if not toastGui or not toastGui.Parent then
@@ -958,38 +1004,21 @@ local function toast(msg, secs)
 		toastUntil = os.clock() + (secs or 2)
 	end)
 end
-
 local function toastTick()
 	if toastLabel and toastLabel.Visible and os.clock() >= toastUntil then
 		toastLabel.Visible = false
 	end
 end
 
---============================================================================
--- 相机解锁 / 强制第三人称
---
---   实测这个游戏在出生时做三件事：
---     ① Player.CameraMode = LockFirstPerson                     （锁死第一人称）
---     ② CameraMinZoomDistance / CameraMaxZoomDistance = 0.5 / 4 （几乎不能缩放）
---     ③ 于是第一人称下角色 64 个部件的 LocalTransparencyModifier 全被设成 1（人物隐形）
---
---   这里在「相机更新之后」的 RenderStep（Camera 优先级 +1）里把这三项改回来：
---     · 解锁：CameraMode = Classic + 放大 zoom 区间 → 滚轮自由缩放，第一/第三人称随便切
---     · 强制第三人称：把「最小缩放距离」抬到 6~30 格，相机物理上进不去第一人称
---     · 同时把角色所有部件的 LocalTransparencyModifier 清 0 → 第三人称能看到全部部件
---   （只改 LTM，不动 Transparency：本来就是透明的东西依然透明）
---============================================================================
 local Cam = {
 	bound = false, name = "__btrCameraApply",
 	origMode = nil, origMin = nil, origMax = nil, origTaken = false,
 	lastBodyAt = 0, wasOn = false, lastReason = "-",
 	snapUntil = 0, snapDist = 0.5,
-	-- 视角锁定
 	lockPitch = nil, lockYaw = nil, lockCharYaw = nil,
 	locked = false, lockDist = 0, lockAt = 0, lockModeUsed = "-",
 	mouseApplied = false, mouseOrigIcon = nil,
 }
-
 local function camTakeOriginals()
 	if Cam.origTaken then return end
 	Cam.origTaken = true
@@ -999,7 +1028,6 @@ local function camTakeOriginals()
 		Cam.origMax = LP.CameraMaxZoomDistance
 	end)
 end
-
 local function camRestoreOriginals()
 	if not Cam.origTaken then return end
 	pcall(function()
@@ -1008,7 +1036,6 @@ local function camRestoreOriginals()
 		if Cam.origMode then LP.CameraMode = Cam.origMode end
 	end)
 end
-
 local function camBodyReveal()
 	local ch = LP.Character
 	if not ch then return 0 end
@@ -1023,20 +1050,10 @@ local function camBodyReveal()
 	end
 	return n
 end
-
---============================================================================
--- 自动锁定视角（仅第三人称）
---   Roblox 内置的 CameraType 里没有「第三人称 + 锁住朝向」这种组合：
---     Attach 会把相机直接放到部件上（变成第一人称视角），Follow/Track 仍然吃鼠标输入。
---   所以这里自己做：保留默认相机算出来的位置（跟着人走、能撞墙拉近/滚轮缩放），
---   只把「朝向」按锁定时的 yaw/pitch 钉死 —— 鼠标怎么甩画面都不转。
---   camLockMode = "person" 时，钉的是「相对人物朝向」的角度：人转身，视角跟着转。
---============================================================================
 local function camYawOf(v)
 	if v.Magnitude < 1e-4 then return 0 end
 	return math.atan2(-v.X, -v.Z)
 end
-
 local function camCaptureLook()
 	local cam = workspace.CurrentCamera
 	if not cam then return false end
@@ -1050,7 +1067,6 @@ local function camCaptureLook()
 	Cam.lockAt = os.clock()
 	return true
 end
-
 local function camApplyLock(cam)
 	local ch = LP.Character
 	local head = ch and ch:FindFirstChild("Head")
@@ -1061,7 +1077,6 @@ local function camApplyLock(cam)
 	end
 	local dist = (cam.CFrame.Position - head.Position).Magnitude
 	Cam.lockDist = dist
-	-- 只在第三人称锁：第一人称（贴脸）保持游戏原本的手感
 	if dist <= 1.5 then
 		Cam.locked = false
 		Cam.lastReason = "第一人称不锁视角"
@@ -1073,13 +1088,11 @@ local function camApplyLock(cam)
 			return
 		end
 	end
-
 	local yaw
 	if CFG.camLockMode == "person" then
 		local charYaw = camYawOf(root.CFrame.LookVector)
 		local base = Cam.lockCharYaw or charYaw
 		local delta = charYaw - base
-		-- 角度归一到 [-pi, pi]，免得人物转圈后视角乱跳
 		while delta > math.pi do delta = delta - math.pi * 2 end
 		while delta < -math.pi do delta = delta + math.pi * 2 end
 		yaw = Cam.lockYaw + delta
@@ -1088,27 +1101,12 @@ local function camApplyLock(cam)
 		yaw = Cam.lockYaw
 		Cam.lockModeUsed = "固定朝向"
 	end
-
 	local dir = CFrame.fromEulerAnglesYXZ(Cam.lockPitch, yaw, 0).LookVector
 	local pos = cam.CFrame.Position
 	cam.CFrame = CFrame.lookAt(pos, pos + dir)
 	Cam.locked = true
 	Cam.lastReason = "锁定视角(" .. Cam.lockModeUsed .. ")"
 end
-
---============================================================================
--- 视角锁定 = 第三人称下把鼠标/准星钉在屏幕正中（第一人称那种手感）
---
---   实测：游戏默认第一人称时 MouseBehavior = LockCenter（鼠标锁中心、能动视角）；
---   一旦我们把 CameraMode 解锁成 Classic 进第三人称，Roblox 的 ControlModule 会把
---   MouseBehavior 改成 Default —— 鼠标变自由光标，移动鼠标不再转视角，只能右键拖。
---   所以这里每帧（相机更新之后）把它抢回 LockCenter：
---     · 准星永远是屏幕正中
---     · 老鼠一动就转视角，跟第一人称完全一样
---   两种情况会主动让开（不然点不到东西）：
---     · 我们自己的面板打开时
---     · 游戏把光标图标显示出来时（说明它在开菜单 / 需要指针）
---============================================================================
 local function camApplyMouseLock(third)
 	if not CFG.camLock then
 		if Cam.mouseApplied then
@@ -1119,14 +1117,14 @@ local function camApplyMouseLock(third)
 	end
 	local allow = third
 	if HUB.mainFrame and HUB.mainFrame.Visible then allow = false end
+	if allow and UIS.MouseIconEnabled then
+		pcall(function() UIS.MouseIconEnabled = false end)
+	end
 	if UIS.MouseIconEnabled then allow = false end
 	if allow then
 		Cam.mouseApplied = true
 		if UIS.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
 			pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.LockCenter end)
-		end
-		if UIS.MouseIconEnabled then
-			pcall(function() UIS.MouseIconEnabled = false end)
 		end
 		Cam.lastReason = "视角锁定(鼠标锁中心)"
 	elseif Cam.mouseApplied then
@@ -1134,7 +1132,6 @@ local function camApplyMouseLock(third)
 		pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
 	end
 end
-
 local function camApply()
 	local on = CFG.camUnlock or CFG.camForceThird or CFG.camLock
 	if not on then
@@ -1148,12 +1145,8 @@ local function camApply()
 	end
 	Cam.wasOn = true
 	camTakeOriginals()
-
 	local cam = workspace.CurrentCamera
 	if not cam then return end
-
-	-- 强制拉近/拉远窗口：默认相机每帧会把 zoom 夹到 [min,max]，
-	-- 所以把 min=max=目标距离保持 0.3 秒，相机就会弹到那个距离（不然只改 min 是「不生效」的）
 	if Cam.snapUntil and os.clock() < Cam.snapUntil then
 		pcall(function()
 			if LP.CameraMode ~= Enum.CameraMode.Classic then LP.CameraMode = Enum.CameraMode.Classic end
@@ -1162,17 +1155,17 @@ local function camApply()
 		end)
 		return
 	end
-
+	local userMin = math.clamp(tonumber(CFG.camMinZoom) or 0.5, 0.5, 60)
+	local userMax = math.max(tonumber(CFG.camMaxZoom) or 200, userMin + 1)
 	local minZ, maxZ
 	if CFG.camForceThird then
-		minZ = math.clamp(tonumber(CFG.camForceMin) or 8, 6, 60)
-		maxZ = math.max(tonumber(CFG.camMaxZoom) or 200, minZ + 10)
+		local forceMin = math.clamp(tonumber(CFG.camForceMin) or 8, 6, 60)
+		minZ = math.max(forceMin, userMin)
+		maxZ = math.max(userMax, minZ + 10)
 	else
-		minZ = math.clamp(tonumber(CFG.camMinZoom) or 0.5, 0.5, 60)
-		maxZ = math.max(tonumber(CFG.camMaxZoom) or 200, minZ + 1)
+		minZ = userMin
+		maxZ = userMax
 	end
-
-	-- CameraMode 必须最后改：先放开 zoom 区间再切 Classic，避免被 clamp 回第一人称
 	if math.abs((LP.CameraMaxZoomDistance or 0) - maxZ) > 0.05 then
 		pcall(function() LP.CameraMaxZoomDistance = maxZ end)
 	end
@@ -1183,13 +1176,9 @@ local function camApply()
 		pcall(function() LP.CameraMode = Enum.CameraMode.Classic end)
 		Cam.lastReason = CFG.camForceThird and "强制第三人称" or "解锁相机"
 	end
-
-	-- 相机类型被游戏改成 Fixed/Attach 时拉回 Custom（Scriptable 留给过场/自瞄，不动）
 	if cam.CameraType == Enum.CameraType.Fixed or cam.CameraType == Enum.CameraType.Attach then
 		pcall(function() cam.CameraType = Enum.CameraType.Custom end)
 	end
-
-	-- 第三人称才露身体：第一人称（解锁后滚轮拉近）保持游戏原本的「看不到自己」
 	if CFG.camForceThird and CFG.camBodyVisible ~= false then
 		local now = os.clock()
 		if now - Cam.lastBodyAt > 0.1 then
@@ -1197,8 +1186,6 @@ local function camApply()
 			camBodyReveal()
 		end
 	end
-
-	-- 第三人称判定（相机到头部的距离）
 	local dist = 9e9
 	do
 		local ch = LP.Character
@@ -1206,11 +1193,7 @@ local function camApply()
 		if head then dist = (cam.CFrame.Position - head.Position).Magnitude end
 	end
 	Cam.lockDist = dist
-
-	-- ① 视角锁定：第三人称把鼠标锁在屏幕正中（第一人称手感）
 	camApplyMouseLock(dist > 1.5)
-
-	-- ② 可选：冻结镜头朝向（画面完全不跟鼠标转）
 	if CFG.camFreeze then
 		if CFG.aimbot and not CFG.silent and Aim.point then
 			Cam.locked = false
@@ -1222,12 +1205,10 @@ local function camApply()
 		Cam.locked = false
 	end
 end
-
 local function camBind()
 	if Cam.bound then return end
 	Cam.bound = true
 	camTakeOriginals()
-	-- 上一次注入可能还绑着同名 RenderStep，先解绑再绑（不会有副作用）
 	pcall(function() Run:UnbindFromRenderStep(Cam.name) end)
 	local ok = pcall(function()
 		Run:BindToRenderStep(Cam.name, Enum.RenderPriority.Camera.Value + 1, function()
@@ -1237,14 +1218,13 @@ local function camBind()
 	if not ok then Cam.bound = false end
 	return ok
 end
-
 local function camUnbind()
 	if not Cam.bound then return end
 	Cam.bound = false
 	pcall(function() Run:UnbindFromRenderStep(Cam.name) end)
+	pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
+	Cam.mouseApplied = false
 end
-
--- 切第三人称 / 第一人称（给按钮和 API 用）
 local function camSnap(dist, hold)
 	dist = math.clamp(tonumber(dist) or 0.5, 0.5, 400)
 	Cam.snapDist = dist
@@ -1255,7 +1235,6 @@ local function camSnap(dist, hold)
 		LP.CameraMinZoomDistance = dist
 	end)
 end
-
 local function camSetThird(on)
 	if on then
 		CFG.camForceThird = true
@@ -1273,14 +1252,13 @@ local function camSetThird(on)
 			LP.CameraMinZoomDistance = 0.5
 			LP.CameraMode = Enum.CameraMode.Classic
 		end)
-		camSnap(0.5, 0.35)   -- 立刻把镜头拉回第一人称
+		camSnap(0.5, 0.35)
 		task.delay(0.4, function() pcall(camApply) end)
 	end
 	return true
 end
 
 local silentGui, silentLabel = nil, nil
-
 local function gunFireInterval(cfg)
 	local fd = nil
 	if cfg and type(cfg.fire) == "table" then fd = tonumber(cfg.fire.fireDelay) end
@@ -1292,7 +1270,6 @@ local function gunFireInterval(cfg)
 	if fd > 2 then fd = 2 end
 	return fd
 end
-
 local function ensureSilentAmmo(gun)
 	local sa = HUB.silentAmmo
 	if not sa then
@@ -1323,7 +1300,6 @@ local function ensureSilentAmmo(gun)
 	end
 	return sa
 end
-
 local function silentHudTick(on, gun)
 	if not on then
 		if silentLabel and silentLabel.Visible then silentLabel.Visible = false end
@@ -1377,6 +1353,7 @@ end
 
 local function packetShot(gun, cfg, t, partHint)
 	HUB.packetCall = (HUB.packetCall or 0) + 1
+	if not HUB.netReady then return false end
 	local N = getNetwork()
 	if not N or not gun then return false end
 	if not cfg then
@@ -1400,7 +1377,6 @@ local function packetShot(gun, cfg, t, partHint)
 	local hitPos = part.Position
 	local delta = hitPos - origin
 	if delta.Magnitude < 0.3 then return false end
-
 	local pellets = 1
 	if type(cfg.fire) == "table" then
 		local bp = tonumber(cfg.fire.bulletPerRound)
@@ -1408,7 +1384,6 @@ local function packetShot(gun, cfg, t, partHint)
 	end
 	if HUB.pelletOverride then pellets = HUB.pelletOverride end
 	HUB.lastPellets = pellets
-
 	local function makeCtx(hp)
 		local d = hp - origin
 		if d.Magnitude < 0.3 then return nil end
@@ -1423,7 +1398,6 @@ local function packetShot(gun, cfg, t, partHint)
 		return { hum = hum, part = part, hitPos = hp, normal = normal,
 			origin = origin, dir = dir, rel = rel }
 	end
-
 	HUB.packetTries = (HUB.packetTries or 0) + 1
 	local baseCtx = makeCtx(hitPos)
 	if not baseCtx then return false end
@@ -1440,7 +1414,6 @@ local function packetShot(gun, cfg, t, partHint)
 		end
 	end)
 	pcall(function() N:FireServer("fire", gun, cfg, baseCtx.dir) end)
-
 	local idx = HUB.packetStrat or 1
 	local ctxList = { baseCtx }
 	for i = 2, pellets do
@@ -1451,10 +1424,8 @@ local function packetShot(gun, cfg, t, partHint)
 		local ctx2 = makeCtx(hitPos + jitter)
 		if ctx2 then ctxList[#ctxList + 1] = ctx2 end
 	end
-
 	local okS, payload = pcall(PACKET_STRATS[idx], baseCtx)
 	if not okS then return false end
-
 	for i, ctx in ipairs(ctxList) do
 		local pl = payload
 		if i > 1 then
@@ -1503,6 +1474,29 @@ local function packetShot(gun, cfg, t, partHint)
 	return true
 end
 
+local function startReloadCycle(gun, cfg)
+	if HUB.reloadBusy then return end
+	HUB.reloadBusy = true
+	HUB.reloadAt = os.clock()
+	HUB.reloadNotified = true
+	local N = getNetwork()
+	if not N then
+		HUB.reloadBusy = false
+		return
+	end
+	pcall(function() N:FireServer("reload", gun, cfg, "register") end)
+	task.spawn(function()
+		for _ = 1, 10 do
+			task.wait(0.45)
+			if not gun.Parent then break end
+			local clip = gun:GetAttribute("ClipCurrent")
+			if type(clip) == "number" and clip > 0 then break end
+			pcall(function() N:FireServer("reload", gun, cfg, "reloaded") end)
+		end
+		HUB.reloadBusy = false
+	end)
+end
+
 local function sendMouse(isDown)
 	if VIM then
 		local x, y = vpCenter()
@@ -1515,28 +1509,24 @@ local function sendMouse(isDown)
 	end
 	if isDown and type(COMPAT.m1click) == "function" then pcall(COMPAT.m1click) end
 end
-
 local function mouseDown()
 	if Fire.down then return end
 	Fire.down = true
 	sendMouse(true)
 end
-
 local function mouseUp()
 	if not Fire.down then return end
 	Fire.down = false
 	sendMouse(false)
 end
-
 local function forceRelease()
 	Fire.down = false
 	sendMouse(false)
 end
 
 local SpeedHook = { installed = false, orig = nil }
-
 local function installSpeedHook()
-	if SpeedHook.installed then return end
+	if SpeedHook.installed then return true end
 	if type(COMPAT.hook) ~= "function" then return false end
 	local ok = pcall(function()
 		local orig
@@ -1556,7 +1546,6 @@ local function installSpeedHook()
 	end)
 	return ok
 end
-
 local function removeSpeedHook()
 	if not SpeedHook.installed then return end
 	pcall(function() (COMPAT.restore or restorefunction)(SpeedHook.orig) end)
@@ -1591,7 +1580,6 @@ local function ensureBackup()
 	lightBackup.Atmosphere = atmo
 	genv.__BTRHUB_LIGHT = lightBackup
 end
-
 local function applyWorld()
 	ensureBackup()
 	local fogOn = CFG.noFog or CFG.mapGlow
@@ -1625,7 +1613,6 @@ local function applyWorld()
 		Lighting.GlobalShadows = lightBackup.GlobalShadows
 	end
 end
-
 local DRAW
 for _, nm in ipairs({ "Drawing", "drawing", "Draw", "Render" }) do
 	local d = safeGet(nm)
@@ -1641,10 +1628,8 @@ for _, nm in ipairs({ "Drawing", "drawing", "Draw", "Render" }) do
 		end
 	end
 end
-
 local hasDrawing = DRAW ~= nil
 HUB.renderMode = hasDrawing and "Drawing" or "Highlight"
-
 local PROP_ALIAS = {
 	TextSize = { "TextSize", "Size", "FontSize", "TextFontSize" },
 	Center = { "Center", "Centered" },
@@ -1656,9 +1641,7 @@ local PROP_ALIAS = {
 	Transparency = { "Transparency", "Alpha" },
 	Font = { "Font", "FontFace" },
 }
-
 local propCache = setmetatable({}, { __mode = "k" })
-
 local function setP(obj, prop, value)
 	if obj == nil then return false end
 	local cache = propCache[obj]
@@ -1681,7 +1664,6 @@ local function setP(obj, prop, value)
 end
 
 local pool, used = {}, {}
-
 local function getPool(id)
 	local e = pool[id]
 	if e then return e end
@@ -1718,7 +1700,6 @@ local function getPool(id)
 end
 
 local lastDraw = {}
-
 local function hideStale(now)
 	for id, e in pairs(pool) do
 		if now - (lastDraw[id] or 0) > 0.15 then
@@ -1732,8 +1713,7 @@ local function hideStale(now)
 	end
 end
 
-local hlCache = {}
-
+local hlCache = setmetatable({}, { __mode = "k" })
 local function espHighlight(targets)
 	local seen = {}
 	for _, t in ipairs(targets) do
@@ -1863,14 +1843,12 @@ end
 
 local PART_ORDER = { "Head", "UpperTorso", "Torso", "HumanoidRootPart", "Right Arm", "Left Arm", "Right Leg", "Left Leg" }
 local PART_ROT = { "Head", "UpperTorso", "Torso", "HumanoidRootPart" }
-
 local function muzzleSees(part, inst)
 	if not part then return false end
 	local m = getRealMuzzle()
 	if not m then return false end
 	return losClearFrom(m, part.Position, inst)
 end
-
 local function pickVisiblePart(t, rot)
 	local cands, seen = {}, {}
 	local function add(p)
@@ -1930,7 +1908,6 @@ local WALL_HINTS = {
 }
 local OFFSET_MAX_WALL = 4
 local OFFSET_MAX_OBSTACLE = 6
-
 local function isWallPart(p)
 	if not p or not p.Parent then return false end
 	if p:IsA("Terrain") then return true end
@@ -1948,7 +1925,6 @@ local function isWallPart(p)
 	end
 	return false
 end
-
 local function firstBlocker(from, to, targetInst)
 	local d = to - from
 	local dist = d.Magnitude
@@ -1970,9 +1946,7 @@ local function firstBlocker(from, to, targetInst)
 	end
 	return nil, nil, false
 end
-
 local OFFSET_EMBED_SKIP = 1.2
-
 local function offsetPathClear(from, to)
 	local d = to - from
 	local dist = d.Magnitude
@@ -2001,14 +1975,12 @@ local function findSilentOffset(fromPos, targetPos, targetInst)
 	if (targetPos - fromPos).Magnitude < 1.0 then return nil end
 	local blocker, bPos, clear, bNormal = firstBlocker(fromPos, targetPos, targetInst)
 	if clear or not blocker then return nil end
-
 	local wall = isWallPart(blocker)
 	local cap
-	if wall then cap = math.min(CFG.silentWallOffset or 4, HUB.silentWallCap or 4, OFFSET_MAX_WALL)
-	else cap = math.min(CFG.silentObsOffset or 6, HUB.silentObsCap or 6, OFFSET_MAX_OBSTACLE) end
+	if wall then cap = math.min(CFG.silentWallOffset or 2.5, HUB.silentWallCap or 2.5, OFFSET_MAX_WALL)
+	else cap = math.min(CFG.silentObsOffset or 4, HUB.silentObsCap or 4, OFFSET_MAX_OBSTACLE) end
 	cap = math.max(0.8, cap)
 	local kind = wall and "wall" or "obstacle"
-
 	local function sameSide(cand)
 		if not (bPos and bNormal) then return true end
 		local n = bNormal
@@ -2019,7 +1991,6 @@ local function findSilentOffset(fromPos, targetPos, targetInst)
 		if math.abs(dc) < 0.35 then return true end
 		return dm * dc > 0
 	end
-
 	local dirs = {}
 	local toT = (targetPos - fromPos).Unit
 	local right = toT:Cross(Vector3.new(0, 1, 0))
@@ -2049,7 +2020,6 @@ local function findSilentOffset(fromPos, targetPos, targetInst)
 		desc[#desc + 1] = rMin
 	end
 	local budget = 150
-
 	local function attempt(radiiList, heightList)
 		for _, r in ipairs(radiiList) do
 			for _, hy in ipairs(heightList) do
@@ -2067,7 +2037,6 @@ local function findSilentOffset(fromPos, targetPos, targetInst)
 		end
 		return nil
 	end
-
 	local p, r = attempt(asc, { 0 })
 	if p then return p, r, kind end
 	p, r = attempt(desc, heights)
@@ -2076,7 +2045,6 @@ local function findSilentOffset(fromPos, targetPos, targetInst)
 end
 
 local shotCache = { inst = nil, part = nil, at = 0, origin = nil, dist = 0, kind = "none", ok = false }
-
 resolveMuzzleShot = function(t, targetPos, part, silentRules, force)
 	if not (t and targetPos) then return nil, 0, "none", false end
 	local now = os.clock()
@@ -2111,14 +2079,12 @@ findFiringOrigin = function(targetPos)
 	local base = root.Position
 	local muzzle = getRealMuzzle()
 	local targetInst = Aim.target and Aim.target.inst
-
 	if muzzle and losClearFrom(muzzle, targetPos, targetInst) then
 		Aim.muzzle = muzzle
 		Aim.offsetUsed = 0
 		Aim.lastOffset = nil
 		return nil
 	end
-
 	local escape = nil
 	if muzzle then
 		local rp = rayParams({ workspace.Terrain:FindFirstChild("Ignore"), ch })
@@ -2129,7 +2095,6 @@ findFiringOrigin = function(targetPos)
 			if n.Magnitude > 0.01 then escape = n.Unit end
 		end
 	end
-
 	local dirs = {}
 	if escape then dirs[#dirs + 1] = escape end
 	for i = 0, 7 do
@@ -2137,7 +2102,6 @@ findFiringOrigin = function(targetPos)
 		dirs[#dirs + 1] = Vector3.new(math.cos(a), 0, math.sin(a))
 	end
 	local heights = { 0.4, 1.2, -0.6 }
-
 	local lo = Aim.lastOffset
 	if lo then
 		local cand = base + lo.d * lo.r + Vector3.new(0, lo.hy or 0, 0)
@@ -2148,7 +2112,6 @@ findFiringOrigin = function(targetPos)
 			return cand
 		end
 	end
-
 	local step = math.max(CFG.muzzleStep or 0.5, 0.3)
 	local maxR = math.min(CFG.muzzleRadius, HUB.maxOffsetOK or CFG.muzzleRadius)
 	local budget = 130
@@ -2176,8 +2139,7 @@ findFiringOrigin = function(targetPos)
 end
 
 local silentScan = { at = 0, t = nil, part = nil, origin = nil, dist = 0, kind = "none" }
-local silentFailAt = {}
-
+local silentFailAt = setmetatable({}, { __mode = "k" })
 local function silentTarget(maxDist)
 	local now = os.clock()
 	if now - silentScan.at < 0.1 then
@@ -2186,17 +2148,15 @@ local function silentTarget(maxDist)
 	silentScan.at = now
 	silentScan.t, silentScan.part, silentScan.origin = nil, nil, nil
 	silentScan.dist, silentScan.kind = 0, "none"
-
 	local list = buildTargets()
 	local cand = {}
 	for _, t in ipairs(list) do
-		if not t.isPlayer and t.dist <= (maxDist or 320) and t.hum and t.hum.Health > 0 then
+		if not t.isPlayer and not t.isSelf and t.dist <= (maxDist or 320) and t.hum and t.hum.Health > 0 then
 			cand[#cand + 1] = t
 		end
 	end
 	if #cand == 0 then return nil end
 	table.sort(cand, function(a, b) return a.dist < b.dist end)
-
 	local m = getRealMuzzle()
 	local rot = HUB.aimPartCycle or 0
 	for i = 1, math.min(#cand, 8) do
@@ -2235,37 +2195,35 @@ local function pickTarget(targets)
 	local camPos = cam.CFrame.Position
 	local look = cam.CFrame.LookVector
 	local cands = {}
-
 	local camHalf = math.rad(math.clamp(cam.FieldOfView, 1, 179)) * 0.5
 	local halfH = math.max(cam.ViewportSize.Y * 0.5, 1)
 	local angleFromPx = math.deg(math.atan(math.tan(camHalf) * (halfFov / halfH)))
 	local angleLimit = math.min(CFG.fovAngle, math.max(angleFromPx, 1))
-
 	for _, t in ipairs(targets) do
-		local allowed = t.isPlayer and CFG.aimPlayers or CFG.aimMonsters
-		if allowed then
-			local pos = (t.head or t.root).Position
-			local score
-			if CFG.aim360 then
-				local d = pos - camPos
-				if d.Magnitude > 0.1 then
-					local ang = math.deg(math.acos(math.clamp(look:Dot(d.Unit), -1, 1)))
-					if ang <= angleLimit then score = (ang / math.max(angleLimit, 1)) * 120 + t.dist end
+		if not t.isSelf then
+			local allowed = t.isPlayer and CFG.aimPlayers or CFG.aimMonsters
+			if allowed then
+				local pos = (t.head or t.root).Position
+				local score
+				if CFG.aim360 then
+					local d = pos - camPos
+					if d.Magnitude > 0.1 then
+						local ang = math.deg(math.acos(math.clamp(look:Dot(d.Unit), -1, 1)))
+						if ang <= angleLimit then score = (ang / math.max(angleLimit, 1)) * 120 + t.dist end
+					end
+				else
+					local sp, on = w2s(pos)
+					if on then
+						local sd = (sp - center).Magnitude
+						if sd <= halfFov then score = (sd / math.max(halfFov, 1)) * 120 + t.dist end
+					end
 				end
-			else
-				local sp, on = w2s(pos)
-				if on then
-					local sd = (sp - center).Magnitude
-					if sd <= halfFov then score = (sd / math.max(halfFov, 1)) * 120 + t.dist end
-				end
+				if score then cands[#cands + 1] = { t = t, s = score } end
 			end
-			if score then cands[#cands + 1] = { t = t, s = score } end
 		end
 	end
-
 	if #cands == 0 then return nil end
 	table.sort(cands, function(a, b) return a.s < b.s end)
-
 	local rot = HUB.aimPartCycle or 0
 	local fallback
 	local limit = math.min(#cands, 5)
@@ -2277,7 +2235,6 @@ local function pickTarget(targets)
 		if visible then return t end
 		if not fallback then fallback = t end
 	end
-
 	if CFG.visibleOnly and not CFG.silentPacket then return nil end
 	return fallback or cands[1].t
 end
@@ -2298,21 +2255,32 @@ local function computeAimPoint(t, gun, part)
 	return p
 end
 
-local dmgWatch = { t = 0, inst = nil, hp = nil }
-
+local dmgWatch = { t = 0, inst = nil, hp = nil, hitAt = 0, ammoBefore = nil }
 local function dmgWatchTick(now)
 	if not dmgWatch.inst then return end
 	if now - dmgWatch.t < 0.45 then return end
 	local inst, hp = dmgWatch.inst, dmgWatch.hp
+	local hitAt = dmgWatch.hitAt or 0
+	local ammoBefore = dmgWatch.ammoBefore
 	dmgWatch.inst, dmgWatch.hp, dmgWatch.t = nil, nil, 0
+	dmgWatch.hitAt, dmgWatch.ammoBefore = 0, nil
 	local hum = inst and inst.Parent and inst:FindFirstChildOfClass("Humanoid")
 	if not (hum and hp) then return end
-	if hum.Health >= hp and hum.Health > 0 then
-		HUB.noDamage = (HUB.noDamage or 0) + 1
-		HUB.aimPartCycle = ((HUB.aimPartCycle or 0) + 1) % #PART_ROT
-		shotCache.at, shotCache.ok = 0, false
-		Aim.lastOffset = nil
-		if (HUB.noDamage % 4) == 0 then toast("连续未命中 · 自动切换瞄准部位", 2) end
+	local gotHitReceipt = (HUB.lastHitAt or 0) > hitAt
+	local ammoChanged = false
+	local gun = getEquippedGun()
+	if gun and ammoBefore ~= nil then
+		local after = gun:GetAttribute("ClipCurrent")
+		if type(after) == "number" and after < ammoBefore then ammoChanged = true end
+	end
+	if not gotHitReceipt and not ammoChanged then
+		if hum.Health >= hp and hum.Health > 0 then
+			HUB.noDamage = (HUB.noDamage or 0) + 1
+			HUB.aimPartCycle = ((HUB.aimPartCycle or 0) + 1) % #PART_ROT
+			shotCache.at, shotCache.ok = 0, false
+			Aim.lastOffset = nil
+			if (HUB.noDamage % 4) == 0 then toast("连续未命中 · 自动切换瞄准部位", 2) end
+		end
 	end
 end
 
@@ -2570,7 +2538,8 @@ local function onRender(dt)
 			if gun:GetAttribute("Reloading") == true then wantFire = false end
 		end
 
-		if CFG.silentPacket and alive and gun then
+		-- Ragebot 分支：命中后强制 wantFire=false 避免再走鼠标模拟
+		if CFG.silentPacket and alive and gun and HUB.netReady then
 			local cfgP = getGunConfig(gun)
 			local sa = ensureSilentAmmo(gun)
 			local pT, pPart, pOrigin, pDist, pKind = nil, nil, nil, 0, "none"
@@ -2581,26 +2550,9 @@ local function onRender(dt)
 				pT, pPart, pOrigin, pDist, pKind = silentTarget(320)
 			end
 			local fired = 0
-			if sa.clip <= 0 and not HUB.reloadBusy then
-				HUB.reloadBusy = true
-				HUB.reloadAt = now
-				HUB.reloadNotified = true
-				local N = getNetwork()
-				if N then
-					pcall(function() N:FireServer("reload", gun, cfgP, "register") end)
-					task.spawn(function()
-						for _ = 1, 10 do
-							task.wait(0.45)
-							if not gun.Parent then break end
-							local clip = gun:GetAttribute("ClipCurrent")
-							if type(clip) == "number" and clip > 0 then break end
-							pcall(function() N:FireServer("reload", gun, cfgP, "reloaded") end)
-						end
-						HUB.reloadBusy = false
-					end)
-				else
-					HUB.reloadBusy = false
-				end
+			-- v2.4：自动换弹受 CFG.autoReload 开关控制
+			if CFG.autoReload and sa.clip <= 0 and not HUB.reloadBusy then
+				startReloadCycle(gun, cfgP)
 				toast("Ragebot · 弹夹空了，自动换弹", 1.6)
 			end
 			if pT and pPart and cfgP and sa.clip > 0 and (not pT.hum or pT.hum.Health > 0) then
@@ -2669,6 +2621,8 @@ local function onRender(dt)
 						dmgWatch.inst = pT.inst
 						dmgWatch.hp = pT.hum and pT.hum.Health or nil
 						dmgWatch.t = now
+						dmgWatch.hitAt = HUB.lastHitAt or 0
+						dmgWatch.ammoBefore = gun:GetAttribute("ClipCurrent")
 					end
 					local capAcc = intervalP * 4
 					if HUB.silentAcc > capAcc then HUB.silentAcc = capAcc end
@@ -2677,9 +2631,11 @@ local function onRender(dt)
 				HUB.silentAcc = 0
 			end
 			if not CFG.silentReal and not HUB.packetWarned
-				and (HUB.packetTries or 0) >= 15 and (HUB.packetOK or 0) == 0 then
+				and (HUB.packetTries or 0) >= 15 and (HUB.packetOK or 0) == 0
+				and now - (HUB.packetWarnedAt or 0) > 30 then
 				HUB.packetWarned = true
-				toast("发包一直被服务器拒绝 · 需要的话自己开「真实Ragebot」", 4)
+				HUB.packetWarnedAt = now
+				toast("发包一直被服务器拒绝 · 检查 Ragebot 配置", 4)
 			end
 			if (HUB.packetOK or 0) > 0 then
 				HUB.packetWarned = false
@@ -2692,7 +2648,7 @@ local function onRender(dt)
 			HUB.silentFallbackReal = false
 		end
 
-		if CFG.packetMode and alive and gun then
+		if CFG.packetMode and alive and gun and HUB.netReady then
 			local pTarget, pPart, pOrigin, pDist, pKind = nil, nil, nil, 0, "none"
 			if aimTarget and Aim.shotOK then
 				pTarget, pPart = aimTarget, Aim.part
@@ -2720,13 +2676,10 @@ local function onRender(dt)
 				Aim.packetTarget = pTarget.inst
 				Aim.shotOK = true
 				Aim.shotDist = pDist or 0
-				HUB.packetShots = (HUB.packetShots or 0)
 				if clip ~= nil and clip <= 0 then
-					if not reloading and now - (HUB.reloadAt or 0) > 1.0 then
-						HUB.reloadAt = now
-						HUB.reloadNotified = true
-						local N = getNetwork()
-						if N then pcall(function() N:FireServer("reload", gun, cfg, "register") end) end
+					-- v2.4：packetMode 换弹也受 CFG.autoReload 开关控制
+					if CFG.autoReload and not reloading and not HUB.reloadBusy and now - (HUB.reloadAt or 0) > 1.0 then
+						startReloadCycle(gun, cfg)
 						toast("弹匣打空 · 正在自动换弹", 2.2)
 					end
 				elseif not reloading then
@@ -2754,9 +2707,7 @@ local function onRender(dt)
 				lastFire = now
 				if not Fire.down then
 					mouseDown()
-					task.delay(0.06, function()
-						if CFG.autoFire then mouseUp() end
-					end)
+					task.delay(0.06, function() forceRelease() end)
 				end
 			end
 		else
@@ -2794,22 +2745,11 @@ local function onRender(dt)
 end
 
 table.insert(HUB.conns, Run.RenderStepped:Connect(onRender))
-
 local DynamicContext = {
-	ActiveToggles = {},
-	ActiveSliders = {},
-	TextElements = {},
-	BorderElements = {},
-	CurrentTab = "",
-	TabSwitchThread = nil,
-	TabButtons = {},
-	IsSubCardActive = true,
-	GlobalAudio = nil,
-	CurrentVolume = 2,
-	BgPhase = math.random() * 100,
-	StrokeRotation = 0,
-	StatusLabel = nil,
-	ScreenGui = nil,
+	ActiveToggles = {}, ActiveSliders = {}, TextElements = {}, BorderElements = {},
+	CurrentTab = "", TabSwitchThread = nil, TabButtons = {},
+	IsSubCardActive = true, GlobalAudio = nil, CurrentVolume = 2,
+	BgPhase = math.random() * 100, StrokeRotation = 0, StatusLabel = nil, ScreenGui = nil,
 }
 
 pcall(function()
@@ -2831,6 +2771,60 @@ local function safeTween(obj, info, prop)
 		return t
 	end
 	return nil
+end
+
+Internal.mouseDown = function() mouseDown() end
+Internal.mouseUp = function() mouseUp() end
+Internal.forceRelease = function() forceRelease() end
+Internal.getGun = getEquippedGun
+Internal.getGunConfig = getGunConfig
+Internal.spawnTrail = function(a, b, d) return spawnTrail(a, b, d) end
+Internal.reinstallRay = function() installRayHooks() end
+Internal.silentProbe = function()
+	local gun = getEquippedGun()
+	local cfg = gun and getGunConfig(gun)
+	local sa = gun and ensureSilentAmmo(gun)
+	local pT, pPart, pOrigin, pDist, pKind = silentTarget(320)
+	local m = getRealMuzzle()
+	return tostring(pT and pT.label or "nil"), tostring(pPart and pPart.Name or "nil"),
+		tostring(pKind), pDist or 0, tostring(cfg ~= nil),
+		sa and (sa.clip or -1) or -1,
+		typeof(m) == "Vector3" and "muzzleOK" or "noMuzzle",
+		typeof(pOrigin) == "Vector3" and string.format("%.2f", m and (pOrigin - m).Magnitude or -1) or "-"
+end
+Internal.offsetProbe = function(fromPos, targetPos, targetInst)
+	return findSilentOffset(fromPos, targetPos, targetInst)
+end
+Internal.classifyPart = function(p)
+	if not p then return "nil" end
+	return isWallPart(p) and "wall" or "obstacle"
+end
+Internal.setOrigin = function(p) Aim.forceOrigin = p end
+Internal.clearOrigin = function() Aim.forceOrigin = nil; Aim.origin = nil end
+Internal.camApply = function() pcall(camApply); return true end
+Internal.camThird = function(on) return camSetThird(on == true) end
+Internal.camLock = function(on)
+	CFG.camLock = (on ~= false)
+	if CFG.camLock then CFG.camUnlock = true
+	else Cam.mouseApplied = false; pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end) end
+	pcall(camApply); return CFG.camLock
+end
+Internal.camFreeze = function(on)
+	CFG.camFreeze = (on ~= false)
+	if CFG.camFreeze then
+		CFG.camUnlock = true
+		if not Cam.lockPitch then camCaptureLook() end
+	else
+		Cam.locked = false
+		Cam.lockPitch, Cam.lockYaw, Cam.lockCharYaw = nil, nil, nil
+	end
+	pcall(camApply); return CFG.camFreeze
+end
+Internal.camLockRecapture = function()
+	Cam.lockPitch, Cam.lockYaw, Cam.lockCharYaw = nil, nil, nil
+	local ok = camCaptureLook()
+	pcall(camApply)
+	return ok == true
 end
 
 local UISuccess, UIErr = pcall(function()
@@ -2884,15 +2878,10 @@ local UISuccess, UIErr = pcall(function()
 		"Bubblegum", "Dark Pastel", "Ocean Mist", "Sunset Glow", "Mint Fresh",
 		"Lavender Dream", "Cherry Red", "Cyber Blue", "Golden Cream", "Forest Calm", "Rose Gold",
 	}
-
 	local function GeneratePalette(preset)
 		local p, s, a, white = preset.Primary, preset.Secondary, preset.Accent, Color3.fromRGB(255, 255, 255)
-		return {
-			p:Lerp(white, 0.2), p:Lerp(s, 0.15),
-			s:Lerp(white, 0.25), s:Lerp(a, 0.2), a:Lerp(white, 0.2),
-		}
+		return { p:Lerp(white, 0.2), p:Lerp(s, 0.15), s:Lerp(white, 0.25), s:Lerp(a, 0.2), a:Lerp(white, 0.2) }
 	end
-
 	local function ApplyPalette(selected)
 		local p = PalettePresets[selected]
 		if not p then return end
@@ -2904,7 +2893,6 @@ local UISuccess, UIErr = pcall(function()
 		DynamicContext.TargetSubTextColor = p.SubTextColor
 		DynamicContext.TargetBorderColor = p.BorderColor
 	end
-
 	local defaultPreset = PalettePresets["Bubblegum"]
 	DynamicContext.CurrentPreset = defaultPreset
 	DynamicContext.CurrentPalette = GeneratePalette(defaultPreset)
@@ -2954,7 +2942,7 @@ local UISuccess, UIErr = pcall(function()
 
 	local MainFrame = Instance.new("CanvasGroup")
 	MainFrame.Name = "MainFrame"
-	HUB.mainFrame = MainFrame   -- 相机锁定要读它：面板开着时先把鼠标放开，不然点不到开关
+	HUB.mainFrame = MainFrame
 	MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 	MainFrame.Size = UDim2.new(0, 530, 0, 320)
 	MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
@@ -2967,15 +2955,11 @@ local UISuccess, UIErr = pcall(function()
 
 	local MainUIScale = Instance.new("UIScale", MainFrame)
 	MainUIScale.Scale = 1
-
-	local MainCorner = Instance.new("UICorner", MainFrame)
-	MainCorner.CornerRadius = UDim.new(0, 16)
-
+	Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 16)
 	local MainStroke = Instance.new("UIStroke", MainFrame)
 	MainStroke.Thickness = 2
 	MainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	MainStroke.Color = Color3.fromRGB(255, 255, 255)
-
 	local StrokeGradient = Instance.new("UIGradient", MainStroke)
 	StrokeGradient.Color = ColorSequence.new({
 		ColorSequenceKeypoint.new(0.0, Color3.fromRGB(255, 255, 255)),
@@ -2984,7 +2968,6 @@ local UISuccess, UIErr = pcall(function()
 		ColorSequenceKeypoint.new(0.75, Color3.fromRGB(210, 210, 210)),
 		ColorSequenceKeypoint.new(1.0, Color3.fromRGB(255, 255, 255)),
 	})
-
 	local MainGradient = Instance.new("UIGradient", MainFrame)
 
 	local TopBar = Instance.new("Frame")
@@ -3014,8 +2997,7 @@ local UISuccess, UIErr = pcall(function()
 	StatusDot.BackgroundColor3 = Color3.fromRGB(60, 210, 100)
 	StatusDot.ZIndex = 12
 	StatusDot.Parent = TopBar
-	local DotCorner = Instance.new("UICorner", StatusDot)
-	DotCorner.CornerRadius = UDim.new(1, 0)
+	Instance.new("UICorner", StatusDot).CornerRadius = UDim.new(1, 0)
 
 	local StatusText = Instance.new("TextLabel")
 	StatusText.Size = UDim2.new(0, 80, 1, 0)
@@ -3106,7 +3088,6 @@ local UISuccess, UIErr = pcall(function()
 
 	local SIZE_MAIN_NORMAL = UDim2.new(0, 232, 1, 0)
 	local SIZE_MAIN_EXPAND = UDim2.new(0, 374, 1, 0)
-
 	local function AdjustLayoutMode(showSubCard)
 		if DynamicContext.IsSubCardActive == showSubCard then return end
 		DynamicContext.IsSubCardActive = showSubCard
@@ -3146,16 +3127,13 @@ local UISuccess, UIErr = pcall(function()
 		Scroll.ScrollBarImageTransparency = 0.5
 		Scroll.ZIndex = 13
 		Scroll.Parent = parent
-
 		local List = Instance.new("UIListLayout", Scroll)
 		List.Padding = UDim.new(0, 8)
 		List.HorizontalAlignment = Enum.HorizontalAlignment.Center
 		List.SortOrder = Enum.SortOrder.LayoutOrder
-
 		local UIPadding = Instance.new("UIPadding", Scroll)
 		UIPadding.PaddingTop = UDim.new(0, 4)
 		UIPadding.PaddingBottom = UDim.new(0, 12)
-
 		return Scroll
 	end
 
@@ -3189,7 +3167,6 @@ local UISuccess, UIErr = pcall(function()
 		Frame.BackgroundTransparency = 1
 		Frame.ZIndex = 14
 		Frame.Parent = parent
-
 		local Btn = Instance.new("TextButton", Frame)
 		Btn.Size = UDim2.new(1, 0, 1, 0)
 		Btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
@@ -3204,7 +3181,6 @@ local UISuccess, UIErr = pcall(function()
 		BtnStroke.Transparency = 0.5
 		BtnStroke.Color = DynamicContext.CurrentBorderColor
 		table.insert(DynamicContext.BorderElements, BtnStroke)
-
 		local Label = Instance.new("TextLabel", Btn)
 		Label.Size = UDim2.new(1, -16, 0, subText and 16 or 30)
 		Label.Position = UDim2.new(0, 10, 0, subText and 2 or 0)
@@ -3216,7 +3192,6 @@ local UISuccess, UIErr = pcall(function()
 		Label.BackgroundTransparency = 1
 		Label.ZIndex = 15
 		table.insert(DynamicContext.TextElements, { Obj = Label, Type = "Main" })
-
 		if subText then
 			local SubLabel = Instance.new("TextLabel", Btn)
 			SubLabel.Size = UDim2.new(1, -16, 0, 12)
@@ -3230,7 +3205,6 @@ local UISuccess, UIErr = pcall(function()
 			SubLabel.ZIndex = 15
 			table.insert(DynamicContext.TextElements, { Obj = SubLabel, Type = "Sub" })
 		end
-
 		Btn.MouseButton1Click:Connect(function()
 			if callback then callback() end
 		end)
@@ -3243,7 +3217,6 @@ local UISuccess, UIErr = pcall(function()
 		Frame.BackgroundTransparency = 1
 		Frame.ZIndex = 14
 		Frame.Parent = parent
-
 		local Label = Instance.new("TextLabel", Frame)
 		Label.Size = UDim2.new(0.62, 0, 0, 16)
 		Label.Position = UDim2.new(0, 0, 0, 2)
@@ -3256,7 +3229,6 @@ local UISuccess, UIErr = pcall(function()
 		Label.BackgroundTransparency = 1
 		Label.ZIndex = 14
 		table.insert(DynamicContext.TextElements, { Obj = Label, Type = "Main" })
-
 		if subText then
 			local SubLabel = Instance.new("TextLabel", Frame)
 			SubLabel.Size = UDim2.new(1, -45, 0, 12)
@@ -3271,7 +3243,6 @@ local UISuccess, UIErr = pcall(function()
 			SubLabel.ZIndex = 14
 			table.insert(DynamicContext.TextElements, { Obj = SubLabel, Type = "Sub" })
 		end
-
 		local Track = Instance.new("TextButton", Frame)
 		Track.Size = UDim2.new(0, 36, 0, 18)
 		Track.Position = UDim2.new(1, -38, 0.5, -9)
@@ -3281,7 +3252,6 @@ local UISuccess, UIErr = pcall(function()
 		Track.Selectable = false
 		Track.ZIndex = 15
 		Instance.new("UICorner", Track).CornerRadius = UDim.new(1, 0)
-
 		local Knob = Instance.new("Frame", Track)
 		Knob.Size = UDim2.new(0, 14, 0, 14)
 		Knob.AnchorPoint = Vector2.new(0, 0.5)
@@ -3289,10 +3259,8 @@ local UISuccess, UIErr = pcall(function()
 		Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 		Knob.ZIndex = 16
 		Instance.new("UICorner", Knob).CornerRadius = UDim.new(1, 0)
-
 		local toggled = default or false
 		local lastColor = Track.BackgroundColor3
-		
 		local function setToggleState(state, animate)
 			toggled = state
 			local targetColor = toggled and DynamicContext.CurrentActiveColor or Color3.fromRGB(205, 210, 220)
@@ -3307,10 +3275,8 @@ local UISuccess, UIErr = pcall(function()
 			lastColor = targetColor
 			if callback then callback(toggled) end
 		end
-		
 		Track.MouseButton1Click:Connect(function() setToggleState(not toggled, true) end)
 		setToggleState(toggled, false)
-		
 		table.insert(DynamicContext.ActiveToggles, {
 			Update = function()
 				local targetColor = toggled and DynamicContext.CurrentActiveColor or Color3.fromRGB(205, 210, 220)
@@ -3329,7 +3295,6 @@ local UISuccess, UIErr = pcall(function()
 		Frame.BackgroundTransparency = 1
 		Frame.ZIndex = 14
 		Frame.Parent = parent
-
 		local Label = Instance.new("TextLabel", Frame)
 		Label.Size = UDim2.new(0.5, 0, 0, 16)
 		Label.Position = UDim2.new(0, 0, 0, 0)
@@ -3342,7 +3307,6 @@ local UISuccess, UIErr = pcall(function()
 		Label.BackgroundTransparency = 1
 		Label.ZIndex = 14
 		table.insert(DynamicContext.TextElements, { Obj = Label, Type = "Main" })
-
 		local ValLabel = Instance.new("TextLabel", Frame)
 		ValLabel.Size = UDim2.new(0.5, 0, 0, 16)
 		ValLabel.Position = UDim2.new(0.5, 0, 0, 0)
@@ -3354,7 +3318,6 @@ local UISuccess, UIErr = pcall(function()
 		ValLabel.BackgroundTransparency = 1
 		ValLabel.ZIndex = 14
 		table.insert(DynamicContext.TextElements, { Obj = ValLabel, Type = "Sub" })
-
 		local TrackBtn = Instance.new("TextButton", Frame)
 		TrackBtn.Size = UDim2.new(1, 0, 0, 14)
 		TrackBtn.Position = UDim2.new(0, 0, 0, 18)
@@ -3363,46 +3326,37 @@ local UISuccess, UIErr = pcall(function()
 		TrackBtn.AutoButtonColor = false
 		TrackBtn.Selectable = false
 		TrackBtn.ZIndex = 15
-
 		local SliderBg = Instance.new("Frame", TrackBtn)
 		SliderBg.Size = UDim2.new(1, 0, 0, 5)
 		SliderBg.Position = UDim2.new(0, 0, 0.5, -2)
 		SliderBg.BackgroundColor3 = Color3.fromRGB(215, 220, 230)
 		SliderBg.ZIndex = 15
 		Instance.new("UICorner", SliderBg).CornerRadius = UDim.new(1, 0)
-
 		local startRatio = math.clamp((default - min) / (max - min), 0, 1)
 		local SliderFill = Instance.new("Frame", SliderBg)
 		SliderFill.Size = UDim2.new(startRatio, 0, 1, 0)
 		SliderFill.BackgroundColor3 = DynamicContext.CurrentActiveColor
 		SliderFill.ZIndex = 15
 		Instance.new("UICorner", SliderFill).CornerRadius = UDim.new(1, 0)
-
 		local Knob = Instance.new("Frame", SliderFill)
 		Knob.Size = UDim2.new(0, 10, 0, 10)
 		Knob.Position = UDim2.new(1, -5, 0.5, -5)
 		Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 		Knob.ZIndex = 16
 		Instance.new("UICorner", Knob).CornerRadius = UDim.new(1, 0)
-
 		local lastFillColor = SliderFill.BackgroundColor3
 		local slidingConn, endConn
-		
 		local function update(input)
 			local posX = input.Position.X - SliderBg.AbsolutePosition.X
 			local ratio = math.clamp(posX / SliderBg.AbsoluteSize.X, 0, 1)
 			local raw = min + (max - min) * ratio
 			local val = raw
-			if max - min > 5 then
-				val = math.floor(raw)
-			else
-				val = math.floor(raw * 10 + 0.5) / 10
-			end
+			if max - min > 5 then val = math.floor(raw)
+			else val = math.floor(raw * 10 + 0.5) / 10 end
 			SliderFill.Size = UDim2.new(ratio, 0, 1, 0)
 			ValLabel.Text = tostring(val) .. (unit or "")
 			if callback then callback(val) end
 		end
-
 		TrackBtn.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 				update(input)
@@ -3421,7 +3375,6 @@ local UISuccess, UIErr = pcall(function()
 				end)
 			end
 		end)
-		
 		table.insert(DynamicContext.ActiveSliders, {
 			Update = function()
 				if DynamicContext.CurrentActiveColor ~= lastFillColor then
@@ -3436,25 +3389,20 @@ local UISuccess, UIErr = pcall(function()
 	local function AddDropdown(parent, title, options, defaultIndex, callback)
 		local DropFrame = Instance.new("CanvasGroup")
 		DropFrame.Size = UDim2.new(1, -12, 0, 32)
-		-- 【修复1】将 DropFrame 自身背景完全透明，解决其作为 CanvasGroup 渲染时产生的边缘绿光 Bug
 		DropFrame.BackgroundTransparency = 1
 		DropFrame.ClipsDescendants = true
 		DropFrame.ZIndex = 20
 		DropFrame.Parent = parent
-		
 		local DropBg = Instance.new("Frame", DropFrame)
 		DropBg.Size = UDim2.new(1, 0, 1, 0)
 		DropBg.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 		DropBg.BackgroundTransparency = 0
 		DropBg.ZIndex = 20
 		Instance.new("UICorner", DropBg).CornerRadius = UDim.new(0, 6)
-		
-		-- 【修复2】添加固定中性色描边，恢复默认控件配色
 		local DropStroke = Instance.new("UIStroke", DropBg)
 		DropStroke.Thickness = 1
 		DropStroke.Transparency = 0.4
 		DropStroke.Color = Color3.fromRGB(200, 200, 200)
-		
 		local HeaderBtn = Instance.new("TextButton", DropBg)
 		HeaderBtn.Size = UDim2.new(1, 0, 0, 32)
 		HeaderBtn.BackgroundTransparency = 1
@@ -3462,7 +3410,6 @@ local UISuccess, UIErr = pcall(function()
 		HeaderBtn.AutoButtonColor = false
 		HeaderBtn.Selectable = false
 		HeaderBtn.ZIndex = 21
-
 		local TitleLabel = Instance.new("TextLabel", HeaderBtn)
 		TitleLabel.Size = UDim2.new(0.48, 0, 1, 0)
 		TitleLabel.Position = UDim2.new(0, 8, 0, 0)
@@ -3475,7 +3422,6 @@ local UISuccess, UIErr = pcall(function()
 		TitleLabel.BackgroundTransparency = 1
 		TitleLabel.ZIndex = 21
 		table.insert(DynamicContext.TextElements, { Obj = TitleLabel, Type = "Main" })
-
 		local SelectedLabel = Instance.new("TextLabel", HeaderBtn)
 		SelectedLabel.Size = UDim2.new(0.42, -10, 1, 0)
 		SelectedLabel.Position = UDim2.new(0.48, 0, 0, 0)
@@ -3488,7 +3434,6 @@ local UISuccess, UIErr = pcall(function()
 		SelectedLabel.BackgroundTransparency = 1
 		SelectedLabel.ZIndex = 21
 		table.insert(DynamicContext.TextElements, { Obj = SelectedLabel, Type = "Sub" })
-
 		local ArrowLabel = Instance.new("TextLabel", HeaderBtn)
 		ArrowLabel.Size = UDim2.new(0, 14, 1, 0)
 		ArrowLabel.Position = UDim2.new(1, -16, 0, 0)
@@ -3499,7 +3444,6 @@ local UISuccess, UIErr = pcall(function()
 		ArrowLabel.BackgroundTransparency = 1
 		ArrowLabel.ZIndex = 21
 		table.insert(DynamicContext.TextElements, { Obj = ArrowLabel, Type = "Sub" })
-
 		local OptionContainer = Instance.new("Frame", DropBg)
 		OptionContainer.Size = UDim2.new(1, -10, 0, 0)
 		OptionContainer.Position = UDim2.new(0, 5, 0, 30)
@@ -3509,18 +3453,15 @@ local UISuccess, UIErr = pcall(function()
 		local OptionList = Instance.new("UIListLayout", OptionContainer)
 		OptionList.Padding = UDim.new(0, 3)
 		OptionList.SortOrder = Enum.SortOrder.LayoutOrder
-
 		local isExpanded = false
 		local optionHeight, expandedHeight = 22, 34 + (#options * 25)
 		for i, optionText in ipairs(options) do
 			local OptBtn = Instance.new("TextButton", OptionContainer)
 			OptBtn.Size = UDim2.new(1, 0, 0, optionHeight)
-			-- 【修复3】使用默认纯净的浅灰背景色，不受主题色影响
 			OptBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
 			OptBtn.BackgroundTransparency = (i == (defaultIndex or 1)) and 0.1 or 0.4
 			OptBtn.Text = optionText
 			OptBtn.Font = Enum.Font.Gotham
-			-- 【修复4】使用固定深灰色字体，恢复默认控件配色
 			OptBtn.TextColor3 = Color3.fromRGB(60, 60, 60)
 			OptBtn.TextSize = 9
 			OptBtn.TextTruncate = Enum.TextTruncate.AtEnd
@@ -3528,7 +3469,6 @@ local UISuccess, UIErr = pcall(function()
 			OptBtn.Selectable = false
 			OptBtn.ZIndex = 22
 			Instance.new("UICorner", OptBtn).CornerRadius = UDim.new(0, 4)
-
 			OptBtn.MouseButton1Click:Connect(function()
 				SelectedLabel.Text = optionText
 				for _, child in ipairs(OptionContainer:GetChildren()) do
@@ -3544,7 +3484,6 @@ local UISuccess, UIErr = pcall(function()
 				if callback then callback(optionText, i) end
 			end)
 		end
-		
 		HeaderBtn.MouseButton1Click:Connect(function()
 			isExpanded = not isExpanded
 			local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
@@ -3572,7 +3511,6 @@ local UISuccess, UIErr = pcall(function()
 		Frame.BackgroundTransparency = 1
 		Frame.ZIndex = 14
 		Frame.Parent = parent
-
 		local Label = Instance.new("TextLabel", Frame)
 		Label.Size = UDim2.new(1, -60, 1, 0)
 		Label.Position = UDim2.new(0, 0, 0, 0)
@@ -3584,7 +3522,6 @@ local UISuccess, UIErr = pcall(function()
 		Label.BackgroundTransparency = 1
 		Label.ZIndex = 14
 		table.insert(DynamicContext.TextElements, { Obj = Label, Type = "Main" })
-
 		local Swatch = Instance.new("TextButton", Frame)
 		Swatch.Size = UDim2.new(0, 36, 0, 18)
 		Swatch.Position = UDim2.new(1, -38, 0.5, -9)
@@ -3594,7 +3531,6 @@ local UISuccess, UIErr = pcall(function()
 		Swatch.Selectable = false
 		Swatch.ZIndex = 15
 		Instance.new("UICorner", Swatch).CornerRadius = UDim.new(0, 4)
-
 		Swatch.MouseButton1Click:Connect(function()
 			local cur = get()
 			local idx = 1
@@ -3623,7 +3559,6 @@ local UISuccess, UIErr = pcall(function()
 		SegStroke.Transparency = 0.5
 		SegStroke.Color = DynamicContext.CurrentBorderColor
 		table.insert(DynamicContext.BorderElements, SegStroke)
-
 		local Indicator = Instance.new("Frame", SegmentFrame)
 		Indicator.Size = UDim2.new(1 / #segments, -4, 1, -4)
 		Indicator.Position = UDim2.new(0, 2, 0, 2)
@@ -3631,10 +3566,8 @@ local UISuccess, UIErr = pcall(function()
 		Indicator.BackgroundTransparency = 0.1
 		Indicator.ZIndex = 16
 		Instance.new("UICorner", Indicator).CornerRadius = UDim.new(0, 11)
-
 		local currentIdx = 0
 		local Buttons = {}
-
 		local function selectSegment(index, animate)
 			if currentIdx == index then return end
 			currentIdx = index
@@ -3650,7 +3583,6 @@ local UISuccess, UIErr = pcall(function()
 			end
 			if onSegmentChanged then onSegmentChanged(segments[index], index) end
 		end
-
 		for i, segName in ipairs(segments) do
 			local Btn = Instance.new("TextButton", SegmentFrame)
 			Btn.Size = UDim2.new(1 / #segments, 0, 1, 0)
@@ -3663,9 +3595,7 @@ local UISuccess, UIErr = pcall(function()
 			Btn.AutoButtonColor = false
 			Btn.Selectable = false
 			Btn.ZIndex = 17
-			Btn.MouseButton1Click:Connect(function()
-				selectSegment(i, true)
-			end)
+			Btn.MouseButton1Click:Connect(function() selectSegment(i, true) end)
 			table.insert(Buttons, Btn)
 		end
 		selectSegment(1, false)
@@ -3679,7 +3609,6 @@ local UISuccess, UIErr = pcall(function()
 				child:Destroy()
 			end
 		end
-
 		local newPage = Instance.new("CanvasGroup")
 		newPage.Name = "SubContentPage"
 		newPage.Size = UDim2.new(1, 0, 1, -68)
@@ -3688,17 +3617,12 @@ local UISuccess, UIErr = pcall(function()
 		newPage.GroupTransparency = 1
 		newPage.ZIndex = 14
 		newPage.Parent = container
-
 		local Scroll = CreateScrollList(newPage, 0)
 		buildContentFunc(Scroll)
-
 		local children = {}
 		for _, c in ipairs(Scroll:GetChildren()) do
-			if c:IsA("GuiObject") then
-				table.insert(children, c)
-			end
+			if c:IsA("GuiObject") then table.insert(children, c) end
 		end
-
 		for i, c in ipairs(children) do
 			local origPos = c.Position
 			c.Position = UDim2.new(origPos.X.Scale, origPos.X.Offset, origPos.Y.Scale, origPos.Y.Offset + 15)
@@ -3712,7 +3636,6 @@ local UISuccess, UIErr = pcall(function()
 				end
 			end)
 		end
-
 		safeTween(newPage, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
 			Position = UDim2.new(0, 0, 0, 68),
 			GroupTransparency = 0,
@@ -3736,24 +3659,21 @@ local UISuccess, UIErr = pcall(function()
 		StatusLabel.ZIndex = 13
 		table.insert(DynamicContext.TextElements, { Obj = StatusLabel, Type = "Sub" })
 		DynamicContext.StatusLabel = StatusLabel
-
 		local SubScroll = CreateScrollList(parent, 104)
-		AddToggle(SubScroll, "启用自瞄", "视角完全不动", CFG.aimbot, function(v)
+		AddToggle(SubScroll, "自瞄", nil, CFG.aimbot, function(v)
 			CFG.aimbot = v
 			if not v then removeAimHook(); Aim.point = nil end
 		end)
-		AddToggle(SubScroll, "自动开火", "瞄准到目标自动射击", CFG.autoFire, function(v)
+		AddToggle(SubScroll, "开火", nil, CFG.autoFire, function(v)
 			CFG.autoFire = v
 			if not v then forceRelease() end
 		end)
-		AddToggle(SubScroll, "Ragebot", "直接发包·无特效", CFG.silentPacket, function(v)
+		AddToggle(SubScroll, "Ragebot", nil, CFG.silentPacket, function(v)
 			CFG.silentPacket = v
 		end)
 	end
 
-	local function createColorRow(parent, title, get, set)
-		return AddColor(parent, title, get, set)
-	end
+	local function createColorRow(parent, title, get, set) return AddColor(parent, title, get, set) end
 
 	local Island = Instance.new("CanvasGroup")
 	Island.Name = "DynamicIsland"
@@ -3772,18 +3692,15 @@ local UISuccess, UIErr = pcall(function()
 	local IslandGradient = Instance.new("UIGradient", Island)
 	local IslandStrokeGradient = Instance.new("UIGradient", IslandStroke)
 	IslandStrokeGradient.Color = StrokeGradient.Color
-
 	local IslandLightOverlay = Instance.new("Frame", Island)
 	IslandLightOverlay.Size = UDim2.new(1, 0, 1, 0)
 	IslandLightOverlay.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 	IslandLightOverlay.BackgroundTransparency = 0.35
 	IslandLightOverlay.ZIndex = 200
-
 	local IslandContent = Instance.new("Frame", Island)
 	IslandContent.Size = UDim2.new(1, 0, 1, 0)
 	IslandContent.BackgroundTransparency = 1
 	IslandContent.ZIndex = 201
-
 	local IslandLogo = Instance.new("TextLabel", IslandContent)
 	IslandLogo.Size = UDim2.new(1, -80, 1, 0)
 	IslandLogo.Position = UDim2.new(0, 20, 0, 0)
@@ -3795,7 +3712,6 @@ local UISuccess, UIErr = pcall(function()
 	IslandLogo.TextYAlignment = Enum.TextYAlignment.Center
 	IslandLogo.BackgroundTransparency = 1
 	IslandLogo.ZIndex = 202
-
 	local IslandBall = Instance.new("TextLabel", IslandContent)
 	IslandBall.Size = UDim2.new(1, 0, 1, 0)
 	IslandBall.Font = Enum.Font.FredokaOne
@@ -3805,7 +3721,6 @@ local UISuccess, UIErr = pcall(function()
 	IslandBall.BackgroundTransparency = 1
 	IslandBall.Visible = false
 	IslandBall.ZIndex = 204
-
 	local ExpandBtn = Instance.new("TextButton", IslandContent)
 	ExpandBtn.Size = UDim2.new(0, 50, 0, 22)
 	ExpandBtn.Position = UDim2.new(1, -58, 0.5, -11)
@@ -3820,14 +3735,12 @@ local UISuccess, UIErr = pcall(function()
 	ExpandBtn.ZIndex = 203
 	Instance.new("UICorner", ExpandBtn).CornerRadius = UDim.new(0, 11)
 	table.insert(DynamicContext.TextElements, { Obj = ExpandBtn, Type = "Main" })
-
 	local WaveBarsContainer = Instance.new("Frame", IslandContent)
 	WaveBarsContainer.Size = UDim2.new(0, 120, 1, 0)
 	WaveBarsContainer.Position = UDim2.new(0, 18, 0, 0)
 	WaveBarsContainer.BackgroundTransparency = 1
 	WaveBarsContainer.Visible = false
 	WaveBarsContainer.ZIndex = 202
-
 	local waveBars = {}
 	for i = 1, 7 do
 		local bar = Instance.new("Frame", WaveBarsContainer)
@@ -3863,7 +3776,6 @@ local UISuccess, UIErr = pcall(function()
 	AudioModalLightOverlay.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 	AudioModalLightOverlay.BackgroundTransparency = 0.35
 	AudioModalLightOverlay.ZIndex = 300
-
 	local InputContainer = Instance.new("Frame", AudioIslandModal)
 	InputContainer.Size = UDim2.new(1, -24, 0, 32)
 	InputContainer.Position = UDim2.new(0, 12, 0, 12)
@@ -3876,13 +3788,12 @@ local UISuccess, UIErr = pcall(function()
 	InputStroke.Color = Color3.fromRGB(255, 255, 255)
 	local InputStrokeGradient = Instance.new("UIGradient", InputStroke)
 	InputStrokeGradient.Color = StrokeGradient.Color
-
 	local AudioTextBox = Instance.new("TextBox", InputContainer)
 	AudioTextBox.Size = UDim2.new(1, -16, 1, 0)
 	AudioTextBox.Position = UDim2.new(0, 8, 0, 0)
 	AudioTextBox.BackgroundTransparency = 1
 	AudioTextBox.Font = Enum.Font.GothamMedium
-	AudioTextBox.PlaceholderText = "输入 Roblox 音频 ID..."
+	AudioTextBox.PlaceholderText = "输入音频 ID..."
 	AudioTextBox.PlaceholderColor3 = DynamicContext.CurrentSubTextColor
 	AudioTextBox.Text = ""
 	AudioTextBox.TextColor3 = DynamicContext.CurrentTextColor
@@ -3894,7 +3805,6 @@ local UISuccess, UIErr = pcall(function()
 	AudioTextBox:GetPropertyChangedSignal("Text"):Connect(function()
 		AudioTextBox.Text = AudioTextBox.Text:gsub("%D+", "")
 	end)
-
 	local ModalVolumeFrame = Instance.new("Frame", AudioIslandModal)
 	ModalVolumeFrame.Size = UDim2.new(1, -24, 0, 32)
 	ModalVolumeFrame.Position = UDim2.new(0, 12, 0, 50)
@@ -3904,7 +3814,6 @@ local UISuccess, UIErr = pcall(function()
 		DynamicContext.CurrentVolume = val
 		if DynamicContext.GlobalAudio then DynamicContext.GlobalAudio.Volume = val end
 	end)
-
 	local ControlIsland = Instance.new("Frame", AudioIslandModal)
 	ControlIsland.Size = UDim2.new(1, -24, 0, 32)
 	ControlIsland.Position = UDim2.new(0, 12, 0, 94)
@@ -3916,7 +3825,6 @@ local UISuccess, UIErr = pcall(function()
 	ControlStroke.Thickness = 1
 	ControlStroke.Color = DynamicContext.CurrentBorderColor
 	table.insert(DynamicContext.BorderElements, ControlStroke)
-
 	local ConfirmBtn = Instance.new("TextButton", ControlIsland)
 	ConfirmBtn.Size = UDim2.new(0.6, -2, 1, -4)
 	ConfirmBtn.Position = UDim2.new(0, 2, 0, 2)
@@ -3929,7 +3837,6 @@ local UISuccess, UIErr = pcall(function()
 	ConfirmBtn.Selectable = false
 	ConfirmBtn.ZIndex = 302
 	Instance.new("UICorner", ConfirmBtn).CornerRadius = UDim.new(0, 14)
-
 	local CancelBtn = Instance.new("TextButton", ControlIsland)
 	CancelBtn.Size = UDim2.new(0.4, -4, 1, -4)
 	CancelBtn.Position = UDim2.new(0.6, 2, 0, 2)
@@ -3965,20 +3872,16 @@ local UISuccess, UIErr = pcall(function()
 		sound:Play()
 		DynamicContext.GlobalAudio = sound
 	end
-
 	local function ShowAudioModal()
 		AudioIslandModal.Visible = true
 		AudioIslandModal.GroupTransparency = 1
 		AudioIslandModal.Size = UDim2.new(0, 220, 0, 110)
 		AudioIslandModal.Position = UDim2.new(0.5, -110, 0.5, -55)
 		safeTween(AudioIslandModal, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-			GroupTransparency = 0,
-			Size = UDim2.new(0, 280, 0, 140),
-			Position = UDim2.new(0.5, -140, 0.5, -70),
+			GroupTransparency = 0, Size = UDim2.new(0, 280, 0, 140), Position = UDim2.new(0.5, -140, 0.5, -70),
 		})
 		AudioTextBox:CaptureFocus()
 	end
-
 	local function HideAudioModal(isConfirm)
 		local closeTween = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
 		local tSize = isConfirm and UDim2.new(0, 300, 0, 150) or UDim2.new(0, 240, 0, 120)
@@ -3989,62 +3892,78 @@ local UISuccess, UIErr = pcall(function()
 			if isConfirm then PlayAntiOverrideAudio(AudioTextBox.Text) end
 		end)
 	end
-
 	ConfirmBtn.MouseButton1Click:Connect(function() HideAudioModal(true) end)
 	CancelBtn.MouseButton1Click:Connect(function() HideAudioModal(false) end)
 	AudioTextBox.FocusLost:Connect(function(enterPressed)
 		if enterPressed then HideAudioModal(true) end
 	end)
 
+	-- ===========================
+	-- TabData：全中文 + 副标题精简
+	-- Ragebot tab 结构保留（删真实Ragebot，加自动换弹）
+	-- ===========================
 	local TabData = {
 		["General"] = {
 			hasSub = true,
 			render = function()
-				CreateTitle(MainConfigCard, "通用功能")
+				CreateTitle(MainConfigCard, "常规")
 				CreateSubSegmentNav(MainConfigCard, { "世界", "移动", "相机", "其它" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "世界" then
-							AddToggle(scroll, "除雾", "清除场景雾效", CFG.noFog, function(v) CFG.noFog = v; applyWorld() end)
-							AddToggle(scroll, "地图高亮", "增强场景亮度", CFG.mapGlow, function(v) CFG.mapGlow = v; applyWorld() end)
+							AddToggle(scroll, "除雾", nil, CFG.noFog, function(v) CFG.noFog = v; applyWorld() end)
+							AddToggle(scroll, "增亮", nil, CFG.mapGlow, function(v) CFG.mapGlow = v; applyWorld() end)
 						elseif seg == "移动" then
-							AddToggle(scroll, "无限体力", "体力条满/不消耗", CFG.infStamina, function(v) CFG.infStamina = v end)
-							AddToggle(scroll, "自定义移动速度", "强制覆盖游戏设定", CFG.customWalkSpeed, function(v) CFG.customWalkSpeed = v end)
-							AddSlider(scroll, "移动速度", 16, 120, CFG.walkSpeed, "", function(v) CFG.walkSpeed = v end)
-							AddToggle(scroll, "自定义跳跃力", "强制覆盖游戏设定", CFG.customJumpPower, function(v) CFG.customJumpPower = v end)
-							AddSlider(scroll, "跳跃力", 50, 200, CFG.jumpPower, "", function(v) CFG.jumpPower = v end)
-							AddToggle(scroll, "无落地伤害", "限速缓降", CFG.noFall, function(v) CFG.noFall = v end)
-							AddSlider(scroll, "安全下落速度", 20, 200, CFG.fallSpeed, "", function(v) CFG.fallSpeed = v end)
+							AddToggle(scroll, "体力", "无限", CFG.infStamina, function(v) CFG.infStamina = v end)
+							AddToggle(scroll, "加速", "覆盖", CFG.customWalkSpeed, function(v)
+								CFG.customWalkSpeed = v
+								if v then
+									local ok = installSpeedHook()
+									if not ok then toast("执行器不支持移速覆盖", 3) end
+								end
+							end)
+							AddSlider(scroll, "速度", 16, 120, CFG.walkSpeed, "", function(v) CFG.walkSpeed = v end)
+							AddToggle(scroll, "跳力", "覆盖", CFG.customJumpPower, function(v)
+								CFG.customJumpPower = v
+								if v then
+									local ok = installSpeedHook()
+									if not ok then toast("执行器不支持跳跃力覆盖", 3) end
+								end
+							end)
+							AddSlider(scroll, "跳跃", 50, 200, CFG.jumpPower, "", function(v) CFG.jumpPower = v end)
+							AddToggle(scroll, "防摔", "限速", CFG.noFall, function(v) CFG.noFall = v end)
+							AddSlider(scroll, "落速", 20, 200, CFG.fallSpeed, "", function(v) CFG.fallSpeed = v end)
 						elseif seg == "相机" then
-							AddToggle(scroll, "解锁相机限制", "第一/第三人称 + 滚轮自由缩放", CFG.camUnlock, function(v)
+							AddToggle(scroll, "解锁", "自由缩放", CFG.camUnlock, function(v)
 								CFG.camUnlock = v
 								pcall(camApply)
-								toast(v and "相机已解锁 · 滚轮可自由缩放" or "相机已恢复游戏默认", 1.8)
+								toast(v and "相机已解锁" or "已恢复", 1.8)
 							end)
-							AddToggle(scroll, "强制第三人称", "从第一人称切成第三人称", CFG.camForceThird, function(v)
+							AddToggle(scroll, "三人称", "强制", CFG.camForceThird, function(v)
 								CFG.camForceThird = v
 								if v and not CFG.camUnlock then CFG.camUnlock = true end
 								pcall(camApply)
-								toast(v and "已强制第三人称" or "已退出强制第三人称", 1.8)
+								toast(v and "强制三人称" or "已退出", 1.8)
 							end)
-							AddToggle(scroll, "第三人称显示全部部件", "人物身体/装备全部可见", CFG.camBodyVisible, function(v)
+							AddToggle(scroll, "显身", "全显示", CFG.camBodyVisible, function(v)
 								CFG.camBodyVisible = v
 								pcall(camApply)
 							end)
-							AddSlider(scroll, "最大缩放距离", 10, 400, CFG.camMaxZoom, "格", function(v) CFG.camMaxZoom = v; pcall(camApply) end)
-							AddSlider(scroll, "强制第三人称距离", 6, 40, CFG.camForceMin, "格", function(v) CFG.camForceMin = v; pcall(camApply) end)
-							AddToggle(scroll, "视角锁定", "第三人称·准星锁屏幕正中（收起面板后生效）", CFG.camLock, function(v)
+							AddSlider(scroll, "近距", 0.5, 20, CFG.camMinZoom, "", function(v) CFG.camMinZoom = v; pcall(camApply) end)
+							AddSlider(scroll, "远距", 10, 400, CFG.camMaxZoom, "", function(v) CFG.camMaxZoom = v; pcall(camApply) end)
+							AddSlider(scroll, "三人距", 6, 40, CFG.camForceMin, "", function(v) CFG.camForceMin = v; pcall(camApply) end)
+							AddToggle(scroll, "视角锁", "锁中心", CFG.camLock, function(v)
 								CFG.camLock = v
 								if v then
 									if not CFG.camUnlock then CFG.camUnlock = true end
-									toast("视角锁定已开启 · 准星锁屏幕正中（按 RightShift 收起面板后生效）", 2.6)
+									toast("视角锁已开", 2)
 								else
 									UIS.MouseBehavior = Enum.MouseBehavior.Default
 									Cam.mouseApplied = false
-									toast("视角锁定已关闭 · 鼠标恢复自由", 1.6)
+									toast("视角锁已关", 1.6)
 								end
 								pcall(camApply)
 							end)
-							AddToggle(scroll, "冻结镜头朝向", "进阶：画面完全不跟鼠标转", CFG.camFreeze, function(v)
+							AddToggle(scroll, "冻结", "锁朝向", CFG.camFreeze, function(v)
 								CFG.camFreeze = v
 								if v then
 									if not CFG.camUnlock then CFG.camUnlock = true end
@@ -4055,41 +3974,29 @@ local UISuccess, UIErr = pcall(function()
 								end
 								pcall(camApply)
 							end)
-							local lockModes = { "固定朝向", "跟随人物" }
-							AddDropdown(scroll, "冻结方式", lockModes, CFG.camLockMode == "person" and 2 or 1, function(selected, idx)
+							local lockModes = { "固定", "跟随" }
+							AddDropdown(scroll, "冻结式", lockModes, CFG.camLockMode == "person" and 2 or 1, function(selected, idx)
 								CFG.camLockMode = (idx == 2) and "person" or "fixed"
-								-- 换方式时重新取一次基准角度
-								Cam.lockPitch = nil
-								Cam.lockYaw = nil
-								Cam.lockCharYaw = nil
-								pcall(camCaptureLook)
-								pcall(camApply)
+								Cam.lockPitch = nil; Cam.lockYaw = nil; Cam.lockCharYaw = nil
+								pcall(camCaptureLook); pcall(camApply)
 							end)
-							AddButton(scroll, "重新捕获当前朝向", "冻结镜头用", function()
-								Cam.lockPitch = nil
-								Cam.lockYaw = nil
-								Cam.lockCharYaw = nil
+							AddButton(scroll, "重捕获", "镜头朝向", function()
+								Cam.lockPitch = nil; Cam.lockYaw = nil; Cam.lockCharYaw = nil
 								local okc = camCaptureLook()
 								pcall(camApply)
-								toast(okc and "已捕获当前朝向" or "捕获失败", 1.6)
+								toast(okc and "已捕获" or "失败", 1.6)
 							end)
-							AddButton(scroll, "切到第三人称", "立刻生效", function()
-								pcall(camSetThird, true)
-								toast("已切到第三人称", 1.6)
-							end)
-							AddButton(scroll, "切回第一人称", "解除强制并拉近", function()
-								pcall(camSetThird, false)
-								toast("已切回第一人称", 1.6)
-							end)
+							AddButton(scroll, "切三人", nil, function() pcall(camSetThird, true); toast("已切三人", 1.6) end)
+							AddButton(scroll, "切一人", nil, function() pcall(camSetThird, false); toast("已切一人", 1.6) end)
 						else
-							AddButton(scroll, "清除所有轨迹", "移除场景中的弹道线", function()
+							AddButton(scroll, "清轨迹", "移除弹道线", function()
 								for _, v in ipairs(workspace.Terrain:GetChildren()) do
 									if v.Name == "__btrTrail" or v.Name == "__btrMuzzle" or v.Name == "__btrImpact" then
 										v:Destroy()
 									end
 								end
 							end)
-							AddButton(scroll, "重新连接网络层", "修复发包问题", function()
+							AddButton(scroll, "重连接", "修复发包", function()
 								Network = nil
 								installNetHooks()
 								installRayHooks()
@@ -4104,58 +4011,61 @@ local UISuccess, UIErr = pcall(function()
 		["Combat"] = {
 			hasSub = true,
 			render = function()
-				CreateTitle(MainConfigCard, "战斗功能")
+				CreateTitle(MainConfigCard, "战斗")
 				CreateSubSegmentNav(MainConfigCard, { "自瞄", "偏移" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "自瞄" then
-							AddToggle(scroll, "启用自瞄", "视角完全不动", CFG.aimbot, function(v) CFG.aimbot = v; if not v then removeAimHook() end end)
-							AddToggle(scroll, "静默模式", "不转视角", CFG.silent, function(v) CFG.silent = v end)
-							AddToggle(scroll, "伪装摄像机", "上报朝向对齐目标", CFG.spoofCam, function(v) CFG.spoofCam = v end)
-							AddToggle(scroll, "自动开火", "瞄准到目标自动射击", CFG.autoFire, function(v) CFG.autoFire = v; if not v then forceRelease() end end)
-							AddToggle(scroll, "只打可见目标", "仅普通自瞄", CFG.visibleOnly, function(v) CFG.visibleOnly = v end)
-							AddToggle(scroll, "360° 锁敌", "不看屏幕", CFG.aim360, function(v) CFG.aim360 = v end)
-							AddSlider(scroll, "角度上限", 5, 180, CFG.fovAngle, "°", function(v) CFG.fovAngle = v end)
-							AddToggle(scroll, "瞄准怪物", nil, CFG.aimMonsters, function(v) CFG.aimMonsters = v end)
-							AddToggle(scroll, "瞄准玩家", nil, CFG.aimPlayers, function(v) CFG.aimPlayers = v end)
-							AddToggle(scroll, "智能部位", "打露出的部位", CFG.aimSmartPart, function(v) CFG.aimSmartPart = v end)
-							AddToggle(scroll, "弹道下坠/预判", "补偿落点", CFG.dropComp, function(v) CFG.dropComp = v end)
+							AddToggle(scroll, "自瞄", nil, CFG.aimbot, function(v) CFG.aimbot = v; if not v then removeAimHook() end end)
+							AddToggle(scroll, "静默", nil, CFG.silent, function(v) CFG.silent = v end)
+							AddToggle(scroll, "伪装", "上报对齐", CFG.spoofCam, function(v) CFG.spoofCam = v end)
+							AddToggle(scroll, "开火", "自动", CFG.autoFire, function(v) CFG.autoFire = v; if not v then forceRelease() end end)
+							AddToggle(scroll, "只可见", nil, CFG.visibleOnly, function(v) CFG.visibleOnly = v end)
+							AddToggle(scroll, "360°", nil, CFG.aim360, function(v) CFG.aim360 = v end)
+							AddSlider(scroll, "角度", 5, 180, CFG.fovAngle, "°", function(v) CFG.fovAngle = v end)
+							AddToggle(scroll, "打怪", nil, CFG.aimMonsters, function(v) CFG.aimMonsters = v end)
+							AddToggle(scroll, "打人", nil, CFG.aimPlayers, function(v) CFG.aimPlayers = v end)
+							AddToggle(scroll, "智能部位", nil, CFG.aimSmartPart, function(v) CFG.aimSmartPart = v end)
+							AddToggle(scroll, "补偿", "落点", CFG.dropComp, function(v) CFG.dropComp = v end)
 							AddToggle(scroll, "枪口偏移", "绕掩体", CFG.muzzleOffset, function(v) CFG.muzzleOffset = v end)
-							AddToggle(scroll, "无视盾牌", nil, CFG.noShield, function(v) CFG.noShield = v end)
-							AddSlider(scroll, "FOV 半径", 40, 1600, CFG.fov, "", function(v) CFG.fov = v end)
-							local aimParts = {"头部", "躯干", "根部"}
+							AddToggle(scroll, "破盾", nil, CFG.noShield, function(v) CFG.noShield = v end)
+							AddSlider(scroll, "FOV", 40, 1600, CFG.fov, "", function(v) CFG.fov = v end)
+							local aimParts = {"头", "躯干", "根"}
 							local curIdx = 1
 							if CFG.aimPart == "Torso" then curIdx = 2
 							elseif CFG.aimPart == "HumanoidRootPart" then curIdx = 3 end
-							AddDropdown(scroll, "瞄准部位", aimParts, curIdx, function(selected, idx)
+							AddDropdown(scroll, "部位", aimParts, curIdx, function(selected, idx)
 								if idx == 1 then CFG.aimPart = "Head"
 								elseif idx == 2 then CFG.aimPart = "Torso"
 								elseif idx == 3 then CFG.aimPart = "HumanoidRootPart" end
 							end)
 						else
-							AddSlider(scroll, "普通自瞄搜索半径", 0.5, 4, CFG.muzzleRadius, "", function(v) CFG.muzzleRadius = v end)
-							AddSlider(scroll, "静默·隔墙最大偏移", 1, 4, CFG.silentWallOffset, "", function(v)
+							AddSlider(scroll, "搜索半径", 0.5, 4, CFG.muzzleRadius, "", function(v) CFG.muzzleRadius = v end)
+							AddSlider(scroll, "隔墙", 1, 4, CFG.silentWallOffset, "", function(v)
 								CFG.silentWallOffset = v; HUB.silentWallCap = v
 							end)
-							AddSlider(scroll, "静默·绕障碍最大偏移", 1, 6, CFG.silentObsOffset, "", function(v)
+							AddSlider(scroll, "绕障", 1, 6, CFG.silentObsOffset, "", function(v)
 								CFG.silentObsOffset = v; HUB.silentObsCap = v
 							end)
-							AddSlider(scroll, "偏移步长", 0.3, 2, CFG.muzzleStep, "", function(v) CFG.muzzleStep = v end)
+							AddSlider(scroll, "步长", 0.3, 2, CFG.muzzleStep, "", function(v) CFG.muzzleStep = v end)
 						end
 					end)
 				end)
 				renderStatusPanel(SubConfigCard)
 			end,
 		},
+		-- Ragebot tab 结构保留，仅做两处改动：
+		--   1. 删除「真实Ragebot」开关（silentReal 字段保留默认 false）
+		--   2. 新增「自动换弹」开关（CFG.autoReload）
 		["Ragebot"] = {
 			hasSub = true,
 			render = function()
-				CreateTitle(MainConfigCard, "Ragebot 设置")
+				CreateTitle(MainConfigCard, "Ragebot")
 				CreateSubSegmentNav(MainConfigCard, { "核心", "辅助" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "核心" then
 							AddToggle(scroll, "Ragebot", "直接发包·无特效", CFG.silentPacket, function(v) CFG.silentPacket = v end)
-							AddToggle(scroll, "真实Ragebot", "会扣子弹·默认发包", CFG.silentReal, function(v) CFG.silentReal = v end)
-							-- 已删除静默自动射击
+							-- v2.4：自动换弹独立开关
+							AddToggle(scroll, "自动换弹", "弹夹空时自动 reload", CFG.autoReload, function(v) CFG.autoReload = v end)
 						else
 							AddSlider(scroll, "静默·隔墙最大偏移", 1, 4, CFG.silentWallOffset, "", function(v)
 								CFG.silentWallOffset = v; HUB.silentWallCap = v
@@ -4173,37 +4083,37 @@ local UISuccess, UIErr = pcall(function()
 		["Visuals"] = {
 			hasSub = true,
 			render = function()
-				CreateTitle(MainConfigCard, "视觉增强")
+				CreateTitle(MainConfigCard, "透视")
 				CreateSubSegmentNav(MainConfigCard, { "ESP", "颜色", "轨迹" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "ESP" then
-							AddToggle(scroll, "玩家 ESP", nil, CFG.espPlayers, function(v) CFG.espPlayers = v end)
-							AddToggle(scroll, "怪物 ESP", nil, CFG.espMonsters, function(v) CFG.espMonsters = v end)
-							AddToggle(scroll, "物品 ESP", nil, CFG.espItems, function(v) CFG.espItems = v end)
-							AddToggle(scroll, "弹药补给点", nil, CFG.espAmmo, function(v) CFG.espAmmo = v end)
-							AddToggle(scroll, "好友独立 ESP", nil, CFG.espFriends, function(v) CFG.espFriends = v end)
+							AddToggle(scroll, "玩家", nil, CFG.espPlayers, function(v) CFG.espPlayers = v end)
+							AddToggle(scroll, "怪物", nil, CFG.espMonsters, function(v) CFG.espMonsters = v end)
+							AddToggle(scroll, "物品", nil, CFG.espItems, function(v) CFG.espItems = v end)
+							AddToggle(scroll, "弹药点", nil, CFG.espAmmo, function(v) CFG.espAmmo = v end)
+							AddToggle(scroll, "好友", nil, CFG.espFriends, function(v) CFG.espFriends = v end)
 							AddToggle(scroll, "方框", nil, CFG.box, function(v) CFG.box = v end)
 							AddToggle(scroll, "名字", nil, CFG.name, function(v) CFG.name = v end)
 							AddToggle(scroll, "血量", nil, CFG.health, function(v) CFG.health = v end)
 							AddToggle(scroll, "距离", nil, CFG.distance, function(v) CFG.distance = v end)
-							AddToggle(scroll, "屏幕连线", nil, CFG.tracer, function(v) CFG.tracer = v end)
-							AddToggle(scroll, "显示自己", nil, CFG.showSelf, function(v) CFG.showSelf = v end)
+							AddToggle(scroll, "连线", nil, CFG.tracer, function(v) CFG.tracer = v end)
+							AddToggle(scroll, "自己", nil, CFG.showSelf, function(v) CFG.showSelf = v end)
 							AddSlider(scroll, "最大距离", 50, 2000, CFG.maxDist, "m", function(v) CFG.maxDist = v end)
 						elseif seg == "颜色" then
-							createColorRow(scroll, "玩家（绿）", function() return CFG.colorPlayer end, function(v) CFG.colorPlayer = v end)
-							createColorRow(scroll, "好友（粉）", function() return CFG.colorFriend end, function(v) CFG.colorFriend = v end)
+							createColorRow(scroll, "玩家", function() return CFG.colorPlayer end, function(v) CFG.colorPlayer = v end)
+							createColorRow(scroll, "好友", function() return CFG.colorFriend end, function(v) CFG.colorFriend = v end)
 							createColorRow(scroll, "怪物", function() return CFG.colorMonster end, function(v) CFG.colorMonster = v end)
-							createColorRow(scroll, "Boss", function() return CFG.colorBoss end, function(v) CFG.colorBoss = v end)
+							createColorRow(scroll, "BOSS", function() return CFG.colorBoss end, function(v) CFG.colorBoss = v end)
 							createColorRow(scroll, "物品", function() return CFG.colorItem end, function(v) CFG.colorItem = v end)
-							createColorRow(scroll, "弹药点", function() return CFG.colorAmmo end, function(v) CFG.colorAmmo = v end)
+							createColorRow(scroll, "弹药", function() return CFG.colorAmmo end, function(v) CFG.colorAmmo = v end)
 						else
-							AddToggle(scroll, "生成轨迹", nil, CFG.trail, function(v) CFG.trail = v end)
-							AddToggle(scroll, "枪口轨迹", nil, CFG.muzzleTrail, function(v) CFG.muzzleTrail = v end)
-							AddSlider(scroll, "轨迹持续", 1, 10, CFG.trailTime, "s", function(v) CFG.trailTime = v end)
-							createColorRow(scroll, "轨迹颜色", function() return CFG.trailColor end, function(v) CFG.trailColor = v end)
-							AddToggle(scroll, "他人弹道", nil, CFG.otherTrails, function(v) CFG.otherTrails = v end)
-							createColorRow(scroll, "队友弹道", function() return CFG.colorTeamTrail end, function(v) CFG.colorTeamTrail = v end)
-							createColorRow(scroll, "怪物弹道", function() return CFG.colorEnemyTrail end, function(v) CFG.colorEnemyTrail = v end)
+							AddToggle(scroll, "轨迹", nil, CFG.trail, function(v) CFG.trail = v end)
+							AddToggle(scroll, "枪口", nil, CFG.muzzleTrail, function(v) CFG.muzzleTrail = v end)
+							AddSlider(scroll, "时长", 1, 10, CFG.trailTime, "s", function(v) CFG.trailTime = v end)
+							createColorRow(scroll, "颜色", function() return CFG.trailColor end, function(v) CFG.trailColor = v end)
+							AddToggle(scroll, "他人", nil, CFG.otherTrails, function(v) CFG.otherTrails = v end)
+							createColorRow(scroll, "队友", function() return CFG.colorTeamTrail end, function(v) CFG.colorTeamTrail = v end)
+							createColorRow(scroll, "怪道", function() return CFG.colorEnemyTrail end, function(v) CFG.colorEnemyTrail = v end)
 						end
 					end)
 				end)
@@ -4213,8 +4123,8 @@ local UISuccess, UIErr = pcall(function()
 		["Settings"] = {
 			hasSub = true,
 			render = function()
-				CreateTitle(MainConfigCard, "应用设置")
-				CreateSubSegmentNav(MainConfigCard, { "主题", "音频", "UI" }, function(seg)
+				CreateTitle(MainConfigCard, "设置")
+				CreateSubSegmentNav(MainConfigCard, { "主题", "音频", "界面" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "主题" then
 							local curIdx = 1
@@ -4224,12 +4134,10 @@ local UISuccess, UIErr = pcall(function()
 							AddDropdown(scroll, "调色板", PaletteNames, curIdx, function(selected)
 								ApplyPalette(selected)
 							end)
-							AddToggle(scroll, "自动运行", "启动时生效", true, function() end)
 						elseif seg == "音频" then
-							AddButton(scroll, "Roblox 音乐播放器", "播放自定义音频", ShowAudioModal)
+							AddButton(scroll, "音乐", "播放音频", ShowAudioModal)
 						else
-							AddToggle(scroll, "紧凑模式", "更小的内边距", false, function() end)
-							AddSlider(scroll, "UI 缩放", 50, 150, math.floor(MainUIScale.Scale * 100), "%", function(v)
+							AddSlider(scroll, "缩放", 50, 150, math.floor(MainUIScale.Scale * 100), "%", function(v)
 								MainUIScale.Scale = v / 100
 							end)
 						end
@@ -4241,10 +4149,10 @@ local UISuccess, UIErr = pcall(function()
 		["Updates"] = {
 			hasSub = false,
 			render = function()
-				CreateTitle(MainConfigCard, "更新日志")
+				CreateTitle(MainConfigCard, "更新")
 				local SubScroll = CreateScrollList(MainConfigCard, 35)
 				local lbl = Instance.new("TextLabel", SubScroll)
-				lbl.Size = UDim2.new(1, -12, 0, 260)
+				lbl.Size = UDim2.new(1, -12, 0, 780)
 				lbl.BackgroundTransparency = 1
 				lbl.TextWrapped = true
 				lbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -4252,36 +4160,65 @@ local UISuccess, UIErr = pcall(function()
 				lbl.Font = Enum.Font.Gotham
 				lbl.TextSize = 10
 				lbl.TextColor3 = DynamicContext.CurrentSubTextColor
-				lbl.Text = "v2.1 更新:\n• 修复 UI 缩放 (Settings -> UI)\n• 新增独立加速与跳跃控制\n• 修复功能区点击循环加载\n• 优化动态岛和背景动画\n• 修复 UI 框架内存泄漏\n\n历史版本:\n• 整合 Link UI V2"
+				lbl.Text = table.concat({
+					"v2.4",
+					"──────────────────────────",
+					"",
+					"【用户请求】",
+					"· 删除 Ragebot 内「真实Ragebot」开关",
+					"  （silentReal 字段保留默认 false）",
+					"· Ragebot 新增独立「自动换弹」开关",
+					"  默认开，可关闭",
+					"· 全部功能按中文重新分类",
+					"· 功能副标题大幅精简",
+					"· 单击 Logo 直接缩小（v2.3 起）",
+					"",
+					"【v2.3 深度审计修复】",
+					"· N-01 Raycast hook 可还原",
+					"· N-02 视角锁定鼠标逻辑修复",
+					"· N-03 监听全纳入 HUB.conns",
+					"· N-04 hlCache 弱引用 + destroy 清理",
+					"· N-05 副作用方法收入 Internal",
+					"· N-06 缓存弱引用",
+					"· N-07 spawnImpact 预算",
+					"· N-08 dmgWatch 双条件",
+					"· N-09 换弹 10 次轮询",
+					"· N-10 camMinZoom 参与约束",
+					"· N-11 自瞄排除 isSelf",
+					"· N-12 好友 pending 中性色",
+					"· N-13 gunConfig 模糊匹配",
+					"· N-14 _newindex 链式",
+					"· N-15 packetWarned 冷却",
+				}, "\n")
 				table.insert(DynamicContext.TextElements, { Obj = lbl, Type = "Sub" })
 			end,
 		},
 		["Advanced"] = {
 			hasSub = true,
 			render = function()
-				CreateTitle(MainConfigCard, "高级 / 调试")
-				CreateSubSegmentNav(MainConfigCard, { "调试", "上限" }, function(seg)
+				CreateTitle(MainConfigCard, "高级")
+				CreateSubSegmentNav(MainConfigCard, { "调试", "工具" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "调试" then
-							AddToggle(scroll, "调试日志", "输出详细日志", true, function() end)
-							AddDropdown(scroll, "性能档", { "默认", "均衡", "性能" }, 1, function() end)
-							AddButton(scroll, "重载网络层", nil, function()
+							AddToggle(scroll, "日志", nil, CFG.debugLog, function(v)
+								CFG.debugLog = v
+								warn("[BTR][debug] " .. (v and "enabled" or "disabled"))
+							end)
+							AddButton(scroll, "重载网络", nil, function()
 								Network = nil
 								installNetHooks()
 								installRayHooks()
 								if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
 							end)
-							AddButton(scroll, "重载射线层", nil, function() installRayHooks() end)
+							AddButton(scroll, "重载射线", nil, function() installRayHooks() end)
 						else
-							AddSlider(scroll, "限流", 0, 100, 25, "%", function() end)
-							AddButton(scroll, "模拟复活", "调试用", function()
-								if HUB.api and HUB.api.simulateRespawn then HUB.api.simulateRespawn() end
+							AddButton(scroll, "静默探测", nil, function()
+								local a, b, c, d = Internal.silentProbe()
+								toast(string.format("%s / %s / %s / %.1f", tostring(a), tostring(b), tostring(c), d or 0), 3)
 							end)
-							AddButton(scroll, "静默探测", "调试用", function()
-								if HUB.api and HUB.api.silentProbe then
-									local a, b, c, d = HUB.api.silentProbe()
-									toast(string.format("%s / %s / %s / %.1f", tostring(a), tostring(b), tostring(c), d or 0), 3)
-								end
+							AddButton(scroll, "重捕获", "镜头", function()
+								local ok = Internal.camLockRecapture()
+								toast(ok and "已重捕获" or "失败", 1.6)
 							end)
 						end
 					end)
@@ -4296,11 +4233,13 @@ local UISuccess, UIErr = pcall(function()
 				CreateSubSegmentNav(MainConfigCard, { "说明", "按键" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "说明" then
-							AddToggle(scroll, "RightShift 呼出", "显示 / 隐藏面板", true, function() end)
-							AddToggle(scroll, "双击 Logo 收缩", "变为灵动岛小球", true, function() end)
+							AddToggle(scroll, "热键", "RightShift", CFG.hotkeyEnabled, function(v) CFG.hotkeyEnabled = v end)
+							AddButton(scroll, "单击 Logo", "缩小（默认）", function()
+								toast("单击 Logo 已默认缩小", 2.2)
+							end)
 						else
-							AddToggle(scroll, "单击灵动岛", "展开面板", true, function() end)
-							AddToggle(scroll, "长按灵动岛拖动", "移动到任意位置", true, function() end)
+							AddToggle(scroll, "单击岛", "展开", CFG.islandClickExpand, function(v) CFG.islandClickExpand = v end)
+							AddToggle(scroll, "长按岛", "拖动", CFG.islandLongPressDrag, function(v) CFG.islandLongPressDrag = v end)
 						end
 					end)
 				end)
@@ -4312,7 +4251,6 @@ local UISuccess, UIErr = pcall(function()
 	local function SwitchTabWithAnimation(tabName)
 		if DynamicContext.CurrentTab == tabName then return end
 		DynamicContext.CurrentTab = tabName
-
 		for name, btnObj in pairs(DynamicContext.TabButtons) do
 			if btnObj and btnObj.Parent then
 				if name == tabName then
@@ -4324,20 +4262,16 @@ local UISuccess, UIErr = pcall(function()
 				end
 			end
 		end
-
 		if DynamicContext.TabSwitchThread then
 			task.cancel(DynamicContext.TabSwitchThread)
 			DynamicContext.TabSwitchThread = nil
 		end
-		
 		DynamicContext.ActiveToggles = {}
 		DynamicContext.ActiveSliders = {}
 		DynamicContext.TextElements = {}
 		DynamicContext.BorderElements = {}
-		
 		ClearContainer(MainConfigCard)
 		ClearContainer(SubConfigCard)
-		
 		local tabInfo = TabData[tabName]
 		if tabInfo then
 			AdjustLayoutMode(tabInfo.hasSub)
@@ -4357,8 +4291,7 @@ local UISuccess, UIErr = pcall(function()
 	local Buttons = {}
 	DynamicContext.TabButtons = Buttons
 	local Tabs = { "General", "Combat", "Ragebot", "Visuals", "Settings", "Updates", "Advanced", "Help" }
-	local TabLabels = { General = "通用", Combat = "战斗", Ragebot = "Ragebot", Visuals = "视觉", Settings = "设置", Updates = "日志", Advanced = "高级", Help = "帮助" }
-
+	local TabLabels = { General = "常规", Combat = "战斗", Ragebot = "Ragebot", Visuals = "透视", Settings = "设置", Updates = "更新", Advanced = "高级", Help = "帮助" }
 	for _, name in ipairs(Tabs) do
 		local Btn = Instance.new("TextButton", NavCard)
 		Btn.Size = UDim2.new(1, 0, 0, 28)
@@ -4374,9 +4307,7 @@ local UISuccess, UIErr = pcall(function()
 		Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
 		Btn:SetAttribute("TabKey", name)
 		Buttons[name] = Btn
-		Btn.MouseButton1Click:Connect(function()
-			SwitchTabWithAnimation(name)
-		end)
+		Btn.MouseButton1Click:Connect(function() SwitchTabWithAnimation(name) end)
 	end
 
 	task.spawn(function()
@@ -4400,12 +4331,10 @@ local UISuccess, UIErr = pcall(function()
 		DynamicContext.CurrentTextColor = DynamicContext.CurrentTextColor:Lerp(DynamicContext.TargetTextColor, lerpSpeed)
 		DynamicContext.CurrentSubTextColor = DynamicContext.CurrentSubTextColor:Lerp(DynamicContext.TargetSubTextColor, lerpSpeed)
 		DynamicContext.CurrentBorderColor = DynamicContext.CurrentBorderColor:Lerp(DynamicContext.TargetBorderColor, lerpSpeed)
-
 		LogoBtn.TextColor3 = DynamicContext.CurrentLogoColor
 		IslandLogo.TextColor3 = DynamicContext.CurrentLogoColor
 		IslandBall.TextColor3 = DynamicContext.CurrentLogoColor
 		ConfirmBtn.BackgroundColor3 = DynamicContext.CurrentActiveColor
-
 		for _, item in ipairs(DynamicContext.TextElements) do
 			if item.Obj and item.Obj.Parent then
 				if item.Type == "Main" then
@@ -4489,23 +4418,9 @@ local UISuccess, UIErr = pcall(function()
 	end))
 
 	local isBallMode, autoBallTask = false, nil
-
 	local function cancelAutoBall()
-		if autoBallTask then
-			task.cancel(autoBallTask)
-			autoBallTask = nil
-		end
+		if autoBallTask then task.cancel(autoBallTask); autoBallTask = nil end
 	end
-
-	local function scheduleAutoBall()
-		cancelAutoBall()
-		if not isBallMode then
-			autoBallTask = task.delay(3.5, function()
-				if not isIslandDragging then doSmoothToBall() end
-			end)
-		end
-	end
-
 	local function doSmoothToBall()
 		if isBallMode then return end
 		isBallMode = true
@@ -4523,7 +4438,6 @@ local UISuccess, UIErr = pcall(function()
 		ExpandBtn.Visible = false
 		IslandBall.Visible = true
 	end
-
 	local function doSmoothToRect()
 		if not isBallMode then return end
 		isBallMode = false
@@ -4548,10 +4462,8 @@ local UISuccess, UIErr = pcall(function()
 			end
 			ExpandBtn.Visible = true
 		end)
-		if not isPlayingMusic then scheduleAutoBall() end
 	end
 
-	local lastClickTime = 0
 	local longPressTime = 0.6
 	local isIslandDragging = false
 	local islandDragStartVec = Vector2.new()
@@ -4569,6 +4481,7 @@ local UISuccess, UIErr = pcall(function()
 			cancelAutoBall()
 			if longPressTask then task.cancel(longPressTask) end
 			longPressTask = task.delay(longPressTime, function()
+				if not CFG.islandLongPressDrag then return end
 				if isPressing and not isIslandDragging then
 					isIslandDragging = true
 					safeTween(IslandStroke, TweenInfo.new(0.2), { Thickness = 4 })
@@ -4576,7 +4489,6 @@ local UISuccess, UIErr = pcall(function()
 			end)
 		end
 	end)
-
 	UIS.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			if isPressing then
@@ -4586,25 +4498,12 @@ local UISuccess, UIErr = pcall(function()
 				if isIslandDragging then
 					isIslandDragging = false
 					safeTween(IslandStroke, TweenInfo.new(0.2), { Thickness = 2 })
-					if not isBallMode then scheduleAutoBall() end
-				elseif duration < longPressTime then
-					local currentTime = os.clock()
-					if (currentTime - lastClickTime) < 0.35 then
-						lastClickTime = 0
-						if isBallMode then doSmoothToRect() else doSmoothToBall() end
-					else
-						lastClickTime = currentTime
-						task.delay(0.36, function()
-							if lastClickTime == currentTime then
-								if isBallMode then doSmoothToRect() end
-							end
-						end)
-					end
+				elseif duration < longPressTime and isBallMode then
+					if CFG.islandClickExpand then doSmoothToRect() end
 				end
 			end
 		end
 	end)
-
 	UIS.InputChanged:Connect(function(input)
 		if isIslandDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			local delta = Vector2.new(input.Position.X, input.Position.Y) - islandDragStartVec
@@ -4616,9 +4515,7 @@ local UISuccess, UIErr = pcall(function()
 	local function HideMainAndShowIsland()
 		local shrinkTweenInfo = TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 		safeTween(MainFrame, shrinkTweenInfo, {
-			GroupTransparency = 1,
-			Size = UDim2.new(0, 480, 0, 290),
-			Position = UDim2.new(0.5, 0, 0.5, 0),
+			GroupTransparency = 1, Size = UDim2.new(0, 480, 0, 290), Position = UDim2.new(0.5, 0, 0.5, 0),
 		})
 		task.delay(0.25, function()
 			MainFrame.Visible = false
@@ -4642,22 +4539,16 @@ local UISuccess, UIErr = pcall(function()
 			ExpandBtn.Visible = true
 			local islandShowTween = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 			safeTween(Island, islandShowTween, {
-				GroupTransparency = 0,
-				Size = UDim2.new(0, 200, 0, 36),
-				Position = UDim2.new(0.5, -100, 0, 15),
+				GroupTransparency = 0, Size = UDim2.new(0, 200, 0, 36), Position = UDim2.new(0.5, -100, 0, 15),
 			})
 			safeTween(IslandCorner, islandShowTween, { CornerRadius = UDim.new(0, 18) })
-			if not isPlayingMusic then scheduleAutoBall() end
 		end)
 	end
-
 	local function HideIslandAndShowMain()
 		cancelAutoBall()
 		local hideIslandTween = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
 		safeTween(Island, hideIslandTween, {
-			GroupTransparency = 1,
-			Size = UDim2.new(0, 150, 0, 30),
-			Position = UDim2.new(0.5, -75, 0, 15),
+			GroupTransparency = 1, Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0.5, -75, 0, 15),
 		})
 		task.delay(0.2, function()
 			Island.Visible = false
@@ -4666,15 +4557,19 @@ local UISuccess, UIErr = pcall(function()
 			MainFrame.Size = UDim2.new(0, 490, 0, 296)
 			MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
 			safeTween(MainFrame, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-				GroupTransparency = 0,
-				Size = UDim2.new(0, 530, 0, 320),
-				Position = UDim2.new(0.5, 0, 0.5, 0),
+				GroupTransparency = 0, Size = UDim2.new(0, 530, 0, 320), Position = UDim2.new(0.5, 0, 0.5, 0),
 			})
 		end)
 	end
 
-	LogoBtn.MouseButton1Click:Connect(HideMainAndShowIsland)
-	ExpandBtn.MouseButton1Click:Connect(HideIslandAndShowMain)
+	-- 用户要求：单击 Logo 直接缩小
+	LogoBtn.MouseButton1Click:Connect(function()
+		HideMainAndShowIsland()
+	end)
+	ExpandBtn.MouseButton1Click:Connect(function()
+		if not CFG.islandClickExpand then return end
+		HideIslandAndShowMain()
+	end)
 
 	MainFrame.Visible = true
 	MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
@@ -4683,10 +4578,14 @@ local UISuccess, UIErr = pcall(function()
 	safeTween(MainFrame, TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 })
 
 	UIS.InputBegan:Connect(function(input, gpe)
-		if not gpe and input.KeyCode == Enum.KeyCode.RightShift then
+		if gpe or not CFG.hotkeyEnabled then return end
+		if input.KeyCode == Enum.KeyCode.RightShift then
 			if MainFrame.Visible then HideMainAndShowIsland() else HideIslandAndShowMain() end
 		end
 	end)
+
+	Internal.hideToIsland = HideMainAndShowIsland
+	Internal.showMain = HideIslandAndShowMain
 end)
 
 if not UISuccess then
@@ -4701,7 +4600,6 @@ if NB then
 end
 if CFG.noFog or CFG.mapGlow then applyWorld() end
 
--- 相机解锁 / 强制第三人称：挂到「相机更新之后」的 RenderStep 上（每帧自动重新应用）
 camBind()
 
 task.spawn(function()
@@ -4716,10 +4614,9 @@ local function onRespawn()
 	Aim.offsetKind = nil; Aim.muzzleBlocked = false; Aim.hadOrigin = false
 	Aim.shotOK = false; Aim.shotDist = 0; Aim.lastOffset = nil
 	Aim.packetMuzzle = nil; Aim.packetTarget = nil
-	gunCfgCache = {}
+	gunCfgCache = setmetatable({}, { __mode = "k" })
 	staminaGui.bar = nil; staminaGui.vig = nil; staminaGui.last = 0
 	forceRelease()
-
 	HUB.silentAmmo = nil
 	HUB.silentAcc = 0
 	HUB.silentIdle, HUB.silentIdleAt = 0, 0
@@ -4729,22 +4626,23 @@ local function onRespawn()
 	HUB.packetOK, HUB.packetTries = 0, 0
 	HUB.silentBypassHits = 0
 	HUB.packetWarned = false
+	HUB.packetWarnedAt = 0
 	HUB.reloadNotified, HUB.reloadAt = false, 0
 	HUB.reloadBusy = false
 	HUB.noDamage, HUB.aimPartCycle = 0, 0
-	HUB.silentWallCap = CFG.silentWallOffset or 4
-	HUB.silentObsCap = CFG.silentObsOffset or 6
+	HUB.silentWallCap = CFG.silentWallOffset or 2.5
+	HUB.silentObsCap = CFG.silentObsOffset or 4
 	HUB.maxOffsetOK = CFG.muzzleRadius or 4
 	shotCache.inst, shotCache.ok, shotCache.at = nil, false, 0
 	silentScan.at, silentScan.t, silentScan.part = 0, nil, nil
-	silentFailAt = {}
+	silentFailAt = setmetatable({}, { __mode = "k" })
 	dmgWatch.inst, dmgWatch.hp, dmgWatch.t = nil, nil, 0
+	dmgWatch.hitAt, dmgWatch.ammoBefore = 0, nil
 	Aim.muzzleAt = 0
-	-- 复活后游戏会重新锁第一人称 / 重新限制缩放，立刻再应用一次
+	HUB.netReady = false
 	if CFG.camUnlock or CFG.camForceThird then
 		task.defer(function() pcall(camApply) end)
 	end
-
 	task.delay(0.8, function()
 		Network = nil
 		NB = nil
@@ -4752,7 +4650,8 @@ local function onRespawn()
 		installNetHooks()
 		installRayHooks()
 		if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
-		gunCfgCache = {}
+		gunCfgCache = setmetatable({}, { __mode = "k" })
+		HUB.netReady = true
 	end)
 end
 
@@ -4761,16 +4660,6 @@ table.insert(HUB.conns, LP.CharacterAdded:Connect(function() pcall(onRespawn) en
 HUB.cfg = CFG
 HUB.stats = STATS
 HUB.api = {
-	mouseDown = function() mouseDown() end,
-	mouseUp = function() mouseUp() end,
-	forceRelease = function() forceRelease() end,
-	removeAimHook = function() removeAimHook() end,
-	installAimHook = function() installAimHook() end,
-	getGun = getEquippedGun,
-	getGunConfig = getGunConfig,
-	spawnTrail = function(a, b, d) return spawnTrail(a, b, d) end,
-	reinstallRay = function() installRayHooks() end,
-	rayStats = function() return RAY.casts or 0, RAY.hits or 0, RAY.ready == true end,
 	aimInfo = function()
 		return Aim.point, Aim.occluded, Aim.origin, Aim.muzzle,
 			Aim.part and Aim.part.Name, Aim.offsetUsed, Aim.muzzleBlocked
@@ -4778,39 +4667,9 @@ HUB.api = {
 	debugInfo = function()
 		return Aim.shotOK == true, tostring(Aim.offsetKind or "none"), Aim.shotDist or 0,
 			HUB.noDamage or 0, HUB.aimPartCycle or 0, HUB.silentBypassHits or 0,
-			HUB.packetOK or 0, HUB.silentWallCap or 4, HUB.silentObsCap or 6,
+			HUB.packetOK or 0, HUB.silentWallCap or 2.5, HUB.silentObsCap or 4,
 			HUB.silentPacketShots or 0
 	end,
-	pellets = function() return HUB.lastPellets or 1 end,
-	simulateRespawn = function()
-		local ok, err = pcall(onRespawn)
-		return ok, tostring(err)
-	end,
-	silentProbe = function()
-		local gun = getEquippedGun()
-		local cfg = gun and getGunConfig(gun)
-		local sa = gun and ensureSilentAmmo(gun)
-		local pT, pPart, pOrigin, pDist, pKind = silentTarget(320)
-		local m = getRealMuzzle()
-		return tostring(pT and pT.label or "nil"), tostring(pPart and pPart.Name or "nil"),
-			tostring(pKind), pDist or 0, tostring(cfg ~= nil),
-			sa and (sa.clip or -1) or -1,
-			typeof(m) == "Vector3" and "muzzleOK" or "noMuzzle",
-			typeof(pOrigin) == "Vector3" and string.format("%.2f", m and (pOrigin - m).Magnitude or -1) or "-"
-	end,
-	offsetProbe = function(fromPos, targetPos, targetInst)
-		local p, d, k = findSilentOffset(fromPos, targetPos, targetInst)
-		return p, d, k
-	end,
-	classifyPart = function(p)
-		if not p then return "nil" end
-		return isWallPart(p) and "wall" or "obstacle"
-	end,
-	setOrigin = function(p) Aim.forceOrigin = p end,
-	clearOrigin = function() Aim.forceOrigin = nil; Aim.origin = nil end,
-	-- 相机：立即应用 / 切第三人称 / 查状态
-	camApply = function() pcall(camApply); return true end,
-	camThird = function(on) return camSetThird(on == true) end,
 	camInfo = function()
 		local cam = workspace.CurrentCamera
 		local ch = LP.Character
@@ -4829,36 +4688,7 @@ HUB.api = {
 			hidden, tostring(Cam.lastReason),
 			Cam.locked == true, tostring(CFG.camLockMode or "fixed"), tostring(Cam.lockModeUsed or "-")
 	end,
-	-- 视角锁定：开/关 + 重新捕获当前朝向（冻结镜头用）
-	camLock = function(on)
-		CFG.camLock = (on ~= false)
-		if CFG.camLock then
-			CFG.camUnlock = true
-		else
-			Cam.mouseApplied = false
-			pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
-		end
-		pcall(camApply)
-		return CFG.camLock
-	end,
-	camFreeze = function(on)
-		CFG.camFreeze = (on ~= false)
-		if CFG.camFreeze then
-			CFG.camUnlock = true
-			if not Cam.lockPitch then camCaptureLook() end
-		else
-			Cam.locked = false
-			Cam.lockPitch, Cam.lockYaw, Cam.lockCharYaw = nil, nil, nil
-		end
-		pcall(camApply)
-		return CFG.camFreeze
-	end,
-	camLockRecapture = function()
-		Cam.lockPitch, Cam.lockYaw, Cam.lockCharYaw = nil, nil, nil
-		local ok = camCaptureLook()
-		pcall(camApply)
-		return ok == true
-	end,
+	rayStats = function() return RAY.casts or 0, RAY.hits or 0, RAY.ready == true end,
 	offsetStats = function() return HUB.maxOffsetOK or 0, HUB.offsetAccepted or 0, HUB.offsetRejected or 0 end,
 	packetStats = function()
 		return HUB.packetOK or 0, HUB.packetTries or 0, HUB.packetStrat or 1,
@@ -4886,18 +4716,18 @@ HUB.api = {
 		return total, vis
 	end,
 	targets = function() return buildTargets() end,
-	switchTab = function(name) if DynamicContext.SwitchTab then DynamicContext.SwitchTab(name) end end,
+	pellets = function() return HUB.lastPellets or 1 end,
 }
 
 HUB.destroy = function()
 	pcall(removeAimHook)
 	pcall(removeSpeedHook)
 	pcall(forceRelease)
-	-- 相机：解绑并把游戏原本的 CameraMode / 缩放区间还回去
 	CFG.camUnlock = false
 	CFG.camForceThird = false
 	pcall(camUnbind)
 	pcall(camRestoreOriginals)
+	pcall(RAY.restore)
 	local ORIG = genv.__BTRHUB_NET_ORIG
 	if ORIG and ORIG.net then
 		pcall(function() ORIG.net.FireServer = ORIG.FireServer end)
@@ -4912,11 +4742,42 @@ HUB.destroy = function()
 		pcall(applyWorld)
 	end
 	for _, c in ipairs(HUB.conns) do pcall(function() c:Disconnect() end) end
+	HUB.conns = {}
+	for inst, hl in pairs(hlCache) do
+		if hl and hl.Parent then pcall(function() hl:Destroy() end) end
+		hlCache[inst] = nil
+	end
+	hlCache = setmetatable({}, { __mode = "k" })
 	if hasDrawing then
 		for _, e in pairs(pool) do
 			for _, d in pairs(e) do pcall(function() d:Remove() end) end
 		end
 		if fovCircle then pcall(function() fovCircle:Remove() end) end
+	end
+	pool = {}
+	lastDraw = {}
+	pcall(function()
+		for _, v in ipairs(workspace.Terrain:GetChildren()) do
+			if v.Name == "__btrTrail" or v.Name == "__btrMuzzle" or v.Name == "__btrImpact" or v.Name == "__btrHL" then
+				v:Destroy()
+			end
+		end
+	end)
+	trailBudget = {}
+	gunCfgCache = setmetatable({}, { __mode = "k" })
+	ammoCache = {}
+	ammoSeen = setmetatable({}, { __mode = "k" })
+	itemCache = {}
+	monsterCache = {}
+	friendCache = {}
+	friendPending = {}
+	silentFailAt = setmetatable({}, { __mode = "k" })
+	if DynamicContext.GlobalAudio then
+		pcall(function()
+			DynamicContext.GlobalAudio:Stop()
+			DynamicContext.GlobalAudio:Destroy()
+		end)
+		DynamicContext.GlobalAudio = nil
 	end
 	pcall(function()
 		if DynamicContext.ScreenGui then DynamicContext.ScreenGui:Destroy() end
@@ -4933,4 +4794,6 @@ HUB.destroy = function()
 		end
 	end)
 	genv.__BTRHUB = nil
+	genv.__BTRHUB_STATS = nil
+	genv.__BTRHUB_RAY = nil
 end
