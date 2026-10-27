@@ -111,8 +111,8 @@ local CFG = {
 	islandClickExpand = true,
 	islandLongPressDrag = true,
 	silentPacket = false,
-	silentReal = false,          -- 保留字段，UI 已隐藏（永远 false → 全走发包）
-	autoReload = true,           -- v2.4 新增：Ragebot 自动换弹开关
+	silentReal = false,          
+	autoReload = true,           
 	trail = true, trailTime = 5, muzzleTrail = true,
 	trailColor = Color3.fromRGB(255, 190, 60),
 	otherTrails = true, colorTeamTrail = Color3.fromRGB(70, 255, 110),
@@ -2538,7 +2538,7 @@ local function onRender(dt)
 			if gun:GetAttribute("Reloading") == true then wantFire = false end
 		end
 
-		-- Ragebot 分支：命中后强制 wantFire=false 避免再走鼠标模拟
+		
 		if CFG.silentPacket and alive and gun and HUB.netReady then
 			local cfgP = getGunConfig(gun)
 			local sa = ensureSilentAmmo(gun)
@@ -2550,7 +2550,7 @@ local function onRender(dt)
 				pT, pPart, pOrigin, pDist, pKind = silentTarget(320)
 			end
 			local fired = 0
-			-- v2.4：自动换弹受 CFG.autoReload 开关控制
+			
 			if CFG.autoReload and sa.clip <= 0 and not HUB.reloadBusy then
 				startReloadCycle(gun, cfgP)
 				toast("Ragebot · 弹夹空了，自动换弹", 1.6)
@@ -2677,7 +2677,7 @@ local function onRender(dt)
 				Aim.shotOK = true
 				Aim.shotDist = pDist or 0
 				if clip ~= nil and clip <= 0 then
-					-- v2.4：packetMode 换弹也受 CFG.autoReload 开关控制
+					
 					if CFG.autoReload and not reloading and not HUB.reloadBusy and now - (HUB.reloadAt or 0) > 1.0 then
 						startReloadCycle(gun, cfg)
 						toast("弹匣打空 · 正在自动换弹", 2.2)
@@ -3898,10 +3898,6 @@ local UISuccess, UIErr = pcall(function()
 		if enterPressed then HideAudioModal(true) end
 	end)
 
-	-- ===========================
-	-- TabData：全中文 + 副标题精简
-	-- Ragebot tab 结构保留（删真实Ragebot，加自动换弹）
-	-- ===========================
 	local TabData = {
 		["General"] = {
 			hasSub = true,
@@ -4053,9 +4049,7 @@ local UISuccess, UIErr = pcall(function()
 				renderStatusPanel(SubConfigCard)
 			end,
 		},
-		-- Ragebot tab 结构保留，仅做两处改动：
-		--   1. 删除「真实Ragebot」开关（silentReal 字段保留默认 false）
-		--   2. 新增「自动换弹」开关（CFG.autoReload）
+		
 		["Ragebot"] = {
 			hasSub = true,
 			render = function()
@@ -4063,9 +4057,9 @@ local UISuccess, UIErr = pcall(function()
 				CreateSubSegmentNav(MainConfigCard, { "核心", "辅助" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "核心" then
-							AddToggle(scroll, "Ragebot", "直接发包·无特效", CFG.silentPacket, function(v) CFG.silentPacket = v end)
-							-- v2.4：自动换弹独立开关
-							AddToggle(scroll, "自动换弹", "弹夹空时自动 reload", CFG.autoReload, function(v) CFG.autoReload = v end)
+							AddToggle(scroll, "Ragebot", "静默", CFG.silentPacket, function(v) CFG.silentPacket = v end)
+							
+							AddToggle(scroll, "自动换弹", "瞬间补充", CFG.autoReload, function(v) CFG.autoReload = v end)
 						else
 							AddSlider(scroll, "静默·隔墙最大偏移", 1, 4, CFG.silentWallOffset, "", function(v)
 								CFG.silentWallOffset = v; HUB.silentWallCap = v
@@ -4562,7 +4556,6 @@ local UISuccess, UIErr = pcall(function()
 		end)
 	end
 
-	-- 用户要求：单击 Logo 直接缩小
 	LogoBtn.MouseButton1Click:Connect(function()
 		HideMainAndShowIsland()
 	end)
