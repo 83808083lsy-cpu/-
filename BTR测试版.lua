@@ -4032,7 +4032,7 @@ local UISuccess, UIErr = pcall(function()
 							end)
 							AddSlider(scroll, "最大缩放距离", 10, 400, CFG.camMaxZoom, "格", function(v) CFG.camMaxZoom = v; pcall(camApply) end)
 							AddSlider(scroll, "强制第三人称距离", 6, 40, CFG.camForceMin, "格", function(v) CFG.camForceMin = v; pcall(camApply) end)
-							AddToggle(scroll, "视角锁定", "第三人称·准星锁屏幕正中（收起面板后生效）", CFG.camLock, function(v)
+							AddToggle(scroll, "视角锁定", "第三人称鼠标锁定", CFG.camLock, function(v)
 								CFG.camLock = v
 								if v then
 									if not CFG.camUnlock then CFG.camUnlock = true end
@@ -4107,13 +4107,13 @@ local UISuccess, UIErr = pcall(function()
 				CreateTitle(MainConfigCard, "战斗功能")
 				CreateSubSegmentNav(MainConfigCard, { "自瞄", "偏移" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
-						if seg == "自瞄" then
-							AddToggle(scroll, "启用自瞄", "视角完全不动", CFG.aimbot, function(v) CFG.aimbot = v; if not v then removeAimHook() end end)
-							AddToggle(scroll, "静默模式", "不转视角", CFG.silent, function(v) CFG.silent = v end)
-							AddToggle(scroll, "伪装摄像机", "上报朝向对齐目标", CFG.spoofCam, function(v) CFG.spoofCam = v end)
-							AddToggle(scroll, "自动开火", "瞄准到目标自动射击", CFG.autoFire, function(v) CFG.autoFire = v; if not v then forceRelease() end end)
-							AddToggle(scroll, "只打可见目标", "仅普通自瞄", CFG.visibleOnly, function(v) CFG.visibleOnly = v end)
-							AddToggle(scroll, "360° 锁敌", "不看屏幕", CFG.aim360, function(v) CFG.aim360 = v end)
+						if seg == "Aimbot" then
+							AddToggle(scroll, "无声瞄准", "Raycast", CFG.aimbot, function(v) CFG.aimbot = v; if not v then removeAimHook() end end)
+							AddToggle(scroll, "静默模式", "Hook Raycast", CFG.silent, function(v) CFG.silent = v end)
+							AddToggle(scroll, "伪装摄像机", "反作弊越过", CFG.spoofCam, function(v) CFG.spoofCam = v end)
+							AddToggle(scroll, "自动开火", "智能开火", CFG.autoFire, function(v) CFG.autoFire = v; if not v then forceRelease() end end)
+							AddToggle(scroll, "墙壁检测", "可视化攻击", CFG.visibleOnly, function(v) CFG.visibleOnly = v end)
+							AddToggle(scroll, "360° 锁敌", "优先", CFG.aim360, function(v) CFG.aim360 = v end)
 							AddSlider(scroll, "角度上限", 5, 180, CFG.fovAngle, "°", function(v) CFG.fovAngle = v end)
 							AddToggle(scroll, "瞄准怪物", nil, CFG.aimMonsters, function(v) CFG.aimMonsters = v end)
 							AddToggle(scroll, "瞄准玩家", nil, CFG.aimPlayers, function(v) CFG.aimPlayers = v end)
@@ -4153,8 +4153,8 @@ local UISuccess, UIErr = pcall(function()
 				CreateSubSegmentNav(MainConfigCard, { "核心", "辅助" }, function(seg)
 					AnimateSubPageTransition(MainConfigCard, function(scroll)
 						if seg == "核心" then
-							AddToggle(scroll, "Ragebot", "直接发包·无特效", CFG.silentPacket, function(v) CFG.silentPacket = v end)
-							AddToggle(scroll, "真实Ragebot", "会扣子弹·默认发包", CFG.silentReal, function(v) CFG.silentReal = v end)
+							AddToggle(scroll, "Ragebot", "完全静默", CFG.silentPacket, function(v) CFG.silentPacket = v end)
+							AddToggle(scroll, "真实Ragebot", "半静默", CFG.silentReal, function(v) CFG.silentReal = v end)
 							-- 已删除静默自动射击
 						else
 							AddSlider(scroll, "静默·隔墙最大偏移", 1, 4, CFG.silentWallOffset, "", function(v)
@@ -4252,7 +4252,7 @@ local UISuccess, UIErr = pcall(function()
 				lbl.Font = Enum.Font.Gotham
 				lbl.TextSize = 10
 				lbl.TextColor3 = DynamicContext.CurrentSubTextColor
-				lbl.Text = "v2.1 更新:\n• 修复 UI 缩放 (Settings -> UI)\n• 新增独立加速与跳跃控制\n• 修复功能区点击循环加载\n• 优化动态岛和背景动画\n• 修复 UI 框架内存泄漏\n\n历史版本:\n• 整合 Link UI V2"
+				lbl.Text = "v2.3 更新:\n• 修复了Ragebot封禁问题 (Settings -> UI)\n• 新增相机切换\n• 优化了Ragebot\n• 优化了整体流畅度\n• 修复 UI 框架内存泄漏\n\n历史版本:\n• 2.2"
 				table.insert(DynamicContext.TextElements, { Obj = lbl, Type = "Sub" })
 			end,
 		},
