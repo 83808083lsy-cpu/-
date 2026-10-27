@@ -1,20 +1,8 @@
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local CoreGuiSvc = game:GetService("CoreGui")
-local Players = game:GetService("Players")
-local Lighting = game:GetService("Lighting")
-local Debris = game:GetService("Debris")
-local RS = game:GetService("ReplicatedStorage")
-
 local ENVT = nil
 local function envTable()
 	if ENVT then return ENVT end
 	local ok, v = pcall(getgenv)
-	if ok and type(v) == "table" then
-		ENVT = v
-		return ENVT
-	end
+	if ok and type(v) == "table" then ENVT = v; return ENVT end
 	ENVT = _G
 	return ENVT
 end
@@ -39,16 +27,37 @@ do
 end
 
 local COMPAT = {
-	hook     = safeGet("hookmetamethod"),
-	restore  = safeGet("restorefunction") or safeGet("restorefunction_"),
-	m1press  = safeGet("mouse1press"),
+	hook = safeGet("hookmetamethod"),
+	restore = safeGet("restorefunction") or safeGet("restorefunction_"),
+	m1press = safeGet("mouse1press"),
 	m1release = safeGet("mouse1release"),
-	m1click  = safeGet("mouse1click"),
+	m1click = safeGet("mouse1click"),
 }
 
-if genv.__BTRHUB and genv.__BTRHUB.destroy then
-	pcall(genv.__BTRHUB.destroy)
+if genv.__BTRHUB then
+	local OLD = genv.__BTRHUB
+	pcall(function()
+		if OLD.api and OLD.api.clearOrigin then OLD.api.clearOrigin() end
+		if OLD.cfg then
+			OLD.cfg.aimbot = false
+			OLD.cfg.silentPacket = false
+			OLD.cfg.packetMode = false
+			OLD.cfg.autoFire = false
+		end
+		if OLD.destroy then OLD.destroy() end
+	end)
+	genv.__BTRHUB = nil
 end
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local Run = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local Tween = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local CoreGui = game:GetService("CoreGui")
+local SoundService = game:GetService("SoundService")
 
 local LP = Players.LocalPlayer
 if not LP then
@@ -59,35 +68,53 @@ if not LP then
 	end
 end
 if not LP then
-	warn("[BTR-HUB] 找不到 LocalPlayer，脚本中止")
 	return
 end
 
-local HUB = { conns = {}, drawing = {}, destroy = nil, fps = 0, warned = false, worldOn = false, tweaksActive = false, otherBeams = 0, otherDrawn = 0, otherSkip = 0, rayHits = 0, rayCasts = 0, rayLast = nil, raySkip = nil, maxOffsetOK = 5, offsetAccepted = 0, offsetRejected = 0, packetOK = 0, packetTries = 0, packetStrat = 1, packetStratFail = 0, packetShots = 0, packetGaveUp = false, silentIdle = 0, silentIdleAt = 0, reloadAt = 0, reloadNotified = false, silentPacketShots = 0, badDirs = 0, ammoCount = 0, packetStratOK = {}, renderMode = "", reserveOK = false }
+local HUB = {
+	conns = {}, drawing = {}, destroy = nil, fps = 0, warned = false, worldOn = false,
+	otherBeams = 0, otherDrawn = 0, otherSkip = 0,
+	rayHits = 0, rayCasts = 0, rayLast = nil, raySkip = nil,
+	maxOffsetOK = 4, offsetAccepted = 0, offsetRejected = 0,
+	packetOK = 0, packetTries = 0, packetStrat = 1, packetStratFail = 0,
+	packetShots = 0, packetGaveUp = false, silentIdle = 0, silentIdleAt = 0,
+	reloadAt = 0, reloadNotified = false, silentPacketShots = 0, badDirs = 0,
+	ammoCount = 0, packetStratOK = {}, packetStratN = {}, packetRetryAt = 0,
+	renderMode = "", reserveOK = false, silentAmmo = nil, fireInterval = 0.12,
+	silentAcc = 0, silentFallbackReal = false, silentWallCap = 4, silentObsCap = 6,
+	noDamage = 0, aimPartCycle = 0, silentBypass = {}, silentNoCast = {},
+	silentBypassHits = 0, ourCasts = 0, netCheckAt = 0, packetCall = 0,
+	packetWarned = false, reloadBusy = false, api = nil, cfg = nil, stats = nil,
+	lastPellets = 1, hitSends = 0, pelletOverride = nil,}
 genv.__BTRHUB = HUB
 
 local PALETTE = {
-	Color3.fromRGB(255, 60, 60),   Color3.fromRGB(255, 140, 0),
-	Color3.fromRGB(255, 220, 0),   Color3.fromRGB(90, 255, 90),
-	Color3.fromRGB(0, 230, 255),   Color3.fromRGB(60, 120, 255),
-	Color3.fromRGB(200, 80, 255),  Color3.fromRGB(255, 255, 255),
+	Color3.fromRGB(255, 60, 60), Color3.fromRGB(255, 140, 0),
+	Color3.fromRGB(255, 220, 0), Color3.fromRGB(90, 255, 90),
+	Color3.fromRGB(0, 230, 255), Color3.fromRGB(60, 120, 255),
+	Color3.fromRGB(200, 80, 255), Color3.fromRGB(255, 255, 255),
 }
 
 local CFG = {
-	espPlayers = true, espMonsters = true, espItems = true, espAmmo = true, espFriends = true, showSelf = false,
-	box = true, name = true, health = true, distance = true, tracer = true, maxDist = 500,
+	espPlayers = true, espMonsters = true, espItems = true, espAmmo = true, espFriends = true,
+	showSelf = false, box = true, name = true, health = true, distance = true, tracer = true,
+	maxDist = 500,
 	colorPlayer = Color3.fromRGB(70, 255, 110), colorFriend = Color3.fromRGB(255, 105, 180),
-	colorMonster = PALETTE[1], colorBoss = PALETTE[7], colorItem = PALETTE[3], colorAmmo = Color3.fromRGB(0, 255, 200),
-	aimbot = false, silent = true, autoFire = false, aimPart = "Head", fov = 600, visibleOnly = true,
-	aimMonsters = true, aimPlayers = false, aimSmartPart = true, aim360 = true, fovAngle = 180,
-	dropComp = true, spoofCam = true, noShield = false,
-	muzzleOffset = true, muzzleRadius = 5, muzzleStep = 1.5, ricochet = true,
-	packetMode = false, packetForge = false, silentPacket = false,
-	trail = true, trailTime = 5, muzzleTrail = true, trailColor = Color3.fromRGB(255, 190, 60),
-	otherTrails = true, colorTeamTrail = Color3.fromRGB(70, 255, 110), colorEnemyTrail = Color3.fromRGB(255, 45, 45),
-	noFog = false, mapGlow = false, infStamina = false, 
-	changeSpeed = false, walkSpeed = 24, 
-	changeJump = false, jumpPower = 60, 
+	colorMonster = PALETTE[1], colorBoss = PALETTE[7], colorItem = PALETTE[3],
+	colorAmmo = Color3.fromRGB(0, 255, 200),
+	aimbot = false, silent = true, autoFire = false,
+	aimPart = "Head", fov = 600, visibleOnly = true,
+	aimMonsters = true, aimPlayers = false, aimSmartPart = true, aim360 = true,
+	fovAngle = 180, dropComp = true, spoofCam = true, 
+	noShield = false, muzzleOffset = true, muzzleRadius = 4, muzzleStep = 0.5,
+	silentWallOffset = 4, silentObsOffset = 6,
+	ricochet = true, packetMode = false, packetForge = false,
+	silentPacket = false, silentReal = false,
+	trail = true, trailTime = 5, muzzleTrail = true,
+	trailColor = Color3.fromRGB(255, 190, 60),
+	otherTrails = true, colorTeamTrail = Color3.fromRGB(70, 255, 110),
+	colorEnemyTrail = Color3.fromRGB(255, 45, 45),
+	noFog = false, mapGlow = false, infStamina = false, customWalkSpeed = false, walkSpeed = 24, customJumpPower = false, jumpPower = 60,
 	noFall = false, fallSpeed = 45,
 }
 
@@ -99,13 +126,24 @@ end
 STATS.target = "-"
 STATS.hitCalls = STATS.hitCalls or 0
 
-local Aim = { point = nil, target = nil, gunCfg = nil, occluded = false, part = nil, origin = nil, originAt = 0, muzzle = nil, offsetUsed = nil, offsetDir = nil, forceOrigin = nil, muzzleAt = 0, muzzleBlocked = false, lastOffset = nil, hadOrigin = false }
+local Aim = {
+	point = nil, target = nil, gunCfg = nil, occluded = false, part = nil,
+	origin = nil, originAt = 0, muzzle = nil, offsetUsed = nil, offsetDir = nil,
+	forceOrigin = nil, muzzleAt = 0, muzzleBlocked = false, lastOffset = nil,
+	hadOrigin = false, shotOK = false, shotDist = 0, offsetKind = nil,
+	packetMuzzle = nil, packetTarget = nil,
+}
+
+local losClearFrom, getRealMuzzle, resolveMuzzleShot, findFiringOrigin
 
 local function w2s(pos)
 	local cam = workspace.CurrentCamera
 	if not cam then return Vector2.new(), false end
-	local sp, on = cam:WorldToViewportPoint(pos)
-	return Vector2.new(sp.X, sp.Y), (on and sp.Z > 0)
+	local ok, sp = pcall(function() return cam:WorldToViewportPoint(pos) end)
+	if ok and sp then
+		return Vector2.new(sp.X, sp.Y), (sp.Z > 0)
+	end
+	return Vector2.new(), false
 end
 
 local function rayParams(exclude)
@@ -157,10 +195,7 @@ local Network
 local function getNetwork()
 	if Network then return Network end
 	local ok, m = pcall(require, RS.Assets.Modules.Network)
-	if ok and type(m) == "table" then
-		Network = m
-		return m
-	end
+	if ok and type(m) == "table" then Network = m; return m end
 	return nil
 end
 
@@ -168,63 +203,99 @@ local spawnTrail, spawnImpact
 local trailBudget = {}
 
 local function onFirePacket(tool, cfg, dir) STATS.fires = STATS.fires + 1 end
+
 local function onHitPacket(hit, tool, cfg, payload)
 	if hit then STATS.hits = STATS.hits + 1 end
 	if not CFG.trail or not CFG.muzzleTrail then return end
-	if type(payload) == "table" and typeof(payload[3]) == "Vector3" then spawnImpact(payload[3]) end
+	if type(payload) == "table" and typeof(payload[3]) == "Vector3" then
+		spawnImpact(payload[3])
+	end
 end
 
-local NB = genv.__BTRHUB_NET
+local NB = nil
 local function installNetHooks()
 	if NB then return end
 	local net = getNetwork()
 	if not net then return end
-	NB = { onFire = nil, onHit = nil }
+	local ORIG = genv.__BTRHUB_NET_ORIG
+	if ORIG and ORIG.net == net then
+		pcall(function() net.FireServer = ORIG.FireServer end)
+		pcall(function() net.InvokeServer = ORIG.InvokeServer end)
+	end
+	genv.__BTRHUB_NET_ORIG = { net = net, FireServer = net.FireServer, InvokeServer = net.InvokeServer }
+	NB = { onFire = nil, onHit = nil, net = net }
 	genv.__BTRHUB_NET = NB
+
 	local oldFire = net.FireServer
 	net.FireServer = function(self, channel, ...)
 		if channel == "fire" then
 			local a = table.pack(...)
 			if NB.onFire then pcall(NB.onFire, a[1], a[2], a[3]) end
-			if CFG.aimbot and Aim.point and typeof(a[3]) == "Vector3" then
-				local cam = workspace.CurrentCamera
-				if cam then
-					local nd = Aim.point - cam.CFrame.Position
+			if (CFG.aimbot or CFG.silentPacket or CFG.packetMode) and Aim.point and typeof(a[3]) == "Vector3" then
+				local base = nil
+				if (Aim.offsetUsed or 0) > 0 and typeof(Aim.muzzle) == "Vector3" then
+					base = Aim.muzzle
+				else
+					local cam = workspace.CurrentCamera
+					base = cam and cam.CFrame.Position or nil
+				end
+				if base then
+					local nd = Aim.point - base
 					if nd.Magnitude > 0.1 then return oldFire(self, channel, a[1], a[2], nd.Unit) end
 				end
 			end
 			return oldFire(self, channel, ...)
 		end
-		if channel == "cam/mouse" and CFG.aimbot and CFG.spoofCam and Aim.point then
+		if channel == "cam/mouse" and (CFG.aimbot or CFG.silentPacket or CFG.packetMode) and CFG.spoofCam and Aim.point then
 			local cam = workspace.CurrentCamera
 			if cam then
 				local base = cam.CFrame.Position
-				local pos = base
-				local cf = CFrame.lookAt(pos, Aim.point)
-				return oldFire(self, channel, cf, { pos, Aim.point })
+				local cf = CFrame.lookAt(base, Aim.point)
+				return oldFire(self, channel, cf, { base, Aim.point })
 			end
 		end
 		return oldFire(self, channel, ...)
 	end
+
 	local oldInvoke = net.InvokeServer
 	net.InvokeServer = function(self, channel, ...)
 		if channel == "hit" or channel == "fleshHit" or channel == "droneHit" then
 			STATS.hitCalls = (STATS.hitCalls or 0) + 1
 			local args = table.pack(...)
-			if channel == "hit" and Aim.origin and type(args[3]) == "table" then
+			if channel == "hit" and type(args[3]) == "table" then
 				local pl = args[3]
-				if typeof(pl[5]) == "Vector3" then pl[5] = Aim.origin end
+				local m = Aim.packetMuzzle or Aim.origin
+				local hp = pl[3]
+				local hum = pl[1]
+				local charInst = (typeof(hum) == "Instance" and hum:IsA("Humanoid")) and hum.Parent or nil
+				local sameTarget = (not Aim.packetTarget) or (not charInst) or (Aim.packetTarget == charInst)
+				if typeof(m) == "Vector3" and typeof(pl[5]) == "Vector3" and sameTarget
+					and (Aim.offsetUsed or 0) > 0 then
+					local real = getRealMuzzle()
+					local md = real and (m - real).Magnitude or 0
+					if (m - pl[5]).Magnitude > 0.75 and md <= 14
+						and (typeof(hp) ~= "Vector3" or not charInst or losClearFrom(m, hp, charInst)) then
+						pl[5] = m
+					end
+				end
 			end
 			local r = table.pack(oldInvoke(self, channel, table.unpack(args, 1, args.n)))
 			if channel == "hit" then
 				local used = Aim.offsetUsed or 0
+				local kind = Aim.offsetKind
 				if used > 0 then
 					if r[1] then
 						HUB.offsetAccepted = (HUB.offsetAccepted or 0) + 1
 						if used > (HUB.maxOffsetOK or 0) then HUB.maxOffsetOK = used end
 					else
 						HUB.offsetRejected = (HUB.offsetRejected or 0) + 1
-						HUB.maxOffsetOK = math.max(1.5, math.min(HUB.maxOffsetOK or used, used - 1))
+						if kind == "wall" then
+							HUB.silentWallCap = math.max(1, math.min(HUB.silentWallCap or 4, used - 0.5))
+						elseif kind == "obstacle" then
+							HUB.silentObsCap = math.max(1, math.min(HUB.silentObsCap or 6, used - 0.5))
+						else
+							HUB.maxOffsetOK = math.max(1, math.min(HUB.maxOffsetOK or used, used - 0.5))
+						end
 						Aim.lastOffset = nil
 					end
 				end
@@ -258,8 +329,9 @@ spawnTrail = function(from, to, duration, flash, color)
 	part.Transparency = 0.1
 	part.Parent = workspace.Terrain
 	table.insert(trailBudget, part)
-	TweenService:Create(part, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Transparency = 1 }):Play()
+	Tween:Create(part, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Transparency = 1 }):Play()
 	Debris:AddItem(part, duration + 0.2)
+
 	if CFG.muzzleTrail and flash ~= false then
 		local m = Instance.new("Part")
 		m.Name = "__btrMuzzle"
@@ -276,7 +348,7 @@ spawnTrail = function(from, to, duration, flash, color)
 		m.Transparency = 0.05
 		m.Parent = workspace.Terrain
 		table.insert(trailBudget, m)
-		TweenService:Create(m, TweenInfo.new(duration * 0.95, Enum.EasingStyle.Quad), {
+		Tween:Create(m, TweenInfo.new(duration * 0.95, Enum.EasingStyle.Quad), {
 			Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05),
 		}):Play()
 		Debris:AddItem(m, duration + 0.2)
@@ -298,7 +370,7 @@ spawnImpact = function(pos)
 	p.CFrame = CFrame.new(pos)
 	p.Transparency = 0.1
 	p.Parent = workspace.Terrain
-	TweenService:Create(p, TweenInfo.new(CFG.trailTime, Enum.EasingStyle.Quad), {
+	Tween:Create(p, TweenInfo.new(CFG.trailTime, Enum.EasingStyle.Quad), {
 		Transparency = 1, Size = Vector3.new(0.05, 0.05, 0.05),
 	}):Play()
 	Debris:AddItem(p, CFG.trailTime + 0.2)
@@ -324,66 +396,79 @@ local function scanShields()
 end
 
 local RAY = genv.__BTRHUB_RAY
-if not RAY then
-	RAY = {}
-	genv.__BTRHUB_RAY = RAY
+if not RAY then RAY = {}; genv.__BTRHUB_RAY = RAY end
+
+local function ensureRaycastWrapped()
 	local mod = RS.Assets.Modules:FindFirstChild("Raycast")
+	if not mod then return false end
 	local okm, RaycastMod = pcall(require, mod)
-	if okm and type(RaycastMod) == "table" then
-		local oldNew = RaycastMod.new
-		RaycastMod.new = function(self, ...)
-			local cast = oldNew(self, ...)
-			RAY.casts = (RAY.casts or 0) + 1
-			pcall(function()
-				cast.RayHit:Connect(function(c, result)
-					if RAY.onHit then RAY.onHit(c, result) end
-				end)
-				cast.RayPierced:Connect(function(c, result, vel)
-					if RAY.onPierce then RAY.onPierce(c, result, vel) end
-				end)
+	if not (okm and type(RaycastMod) == "table") then return false end
+	if RAY.mod == RaycastMod then return true end
+	local oldNew = RaycastMod.new
+	RaycastMod.new = function(self, ...)
+		local cast = oldNew(self, ...)
+		RAY.casts = (RAY.casts or 0) + 1
+		pcall(function()
+			cast.RayHit:Connect(function(c, result)
+				if RAY.onHit then RAY.onHit(c, result) end
 			end)
-			return cast
-		end
-		local oldFire = RaycastMod.Fire
-		RaycastMod.Fire = function(self, origin, dir, speed, behavior)
-			if RAY.onOrigin then
-				local okO, no = pcall(RAY.onOrigin, origin, dir)
-				if okO and typeof(no) == "Vector3" then origin = no end
-			end
-			if RAY.onAim then
-				local okAim, nd = pcall(RAY.onAim, origin, dir)
-				if okAim and typeof(nd) == "Vector3" then dir = nd end
-			end
-			if typeof(dir) == "Vector3" then
-				local len = dir.Magnitude
-				if len ~= len or len < 0.001 or len > 1e9 then
-					HUB.badDirs = (HUB.badDirs or 0) + 1
-					dir = Vector3.new(0, 0, -1)
-				end
-			end
-			local cast = oldFire(self, origin, dir, speed, behavior)
-			pcall(function()
-				if cast then
-					cast.__btrOrigin = origin
-					cast.__btrLast = origin
-				end
-				if RAY.onCast then RAY.onCast(cast) end
+			cast.RayPierced:Connect(function(c, result, vel)
+				if RAY.onPierce then RAY.onPierce(c, result, vel) end
 			end)
-			return cast
-		end
-		RAY.ready = true
+		end)
+		return cast
 	end
+	local oldFire = RaycastMod.Fire
+	RaycastMod.Fire = function(self, origin, dir, speed, behavior)
+		if RAY.onOrigin then
+			local okO, no = pcall(RAY.onOrigin, origin, dir)
+			if okO and typeof(no) == "Vector3" then origin = no end
+		end
+		if RAY.onAim then
+			local okAim, nd = pcall(RAY.onAim, origin, dir)
+			if okAim and typeof(nd) == "Vector3" then dir = nd end
+		end
+		if typeof(dir) == "Vector3" then
+			local len = dir.Magnitude
+			if len ~= len or len < 0.001 or len > 1e9 then
+				HUB.badDirs = (HUB.badDirs or 0) + 1
+				dir = Vector3.new(0, 0, -1)
+			end
+		end
+		local cast = oldFire(self, origin, dir, speed, behavior)
+		pcall(function()
+			if cast then
+				cast.__btrOrigin = origin
+				cast.__btrLast = origin
+			end
+			if RAY.onCast then RAY.onCast(cast) end
+		end)
+		return cast
+	end
+	RAY.mod = RaycastMod
+	RAY.ready = true
+	return true
 end
 
+ensureRaycastWrapped()
+
 local function installRayHooks()
+	pcall(ensureRaycastWrapped)
 	RAY.onOrigin = function(origin, dir)
-		if not CFG.aimbot then return nil end
+		if not (CFG.aimbot or CFG.packetMode or CFG.silentPacket) then return nil end
 		local o = Aim.origin
-		if o and typeof(o) == "Vector3" then return o end
-		return nil
+		if typeof(o) ~= "Vector3" then return nil end
+		local real = getRealMuzzle()
+		if real and (o - real).Magnitude > 20 then return nil end
+		return o
 	end
 	RAY.onAim = function(origin, dir)
-		if not (CFG.aimbot or CFG.packetMode) then return nil end
+		RAY.fires = (RAY.fires or 0) + 1
+		if Aim.shotOK and typeof(origin) == "Vector3" and typeof(Aim.muzzle) == "Vector3"
+			and (origin - Aim.muzzle).Magnitude < 3.5 then
+			HUB.ourCasts = (HUB.ourCasts or 0) + 1
+		end
+		if not (CFG.aimbot or CFG.packetMode or CFG.silentPacket) then return nil end
 		local p = Aim.point
 		if not p or typeof(origin) ~= "Vector3" then return nil end
 		local cfg = Aim.gunCfg
@@ -414,7 +499,10 @@ local function installRayHooks()
 		if not (c and result) then HUB.raySkip = "args"; return end
 		local origin = c.__btrLast or c.__btrOrigin or (c.RayInfo and c.RayInfo.Origin)
 		c.__btrLast = result.Position
-		if typeof(origin) ~= "Vector3" or typeof(result.Position) ~= "Vector3" then return end
+		if typeof(origin) ~= "Vector3" or typeof(result.Position) ~= "Vector3" then
+			HUB.raySkip = "origin"
+			return
+		end
 		local now = os.clock()
 		local flash = (now - lastFlash) > 0.03
 		if flash then lastFlash = now end
@@ -428,10 +516,8 @@ local function installRayHooks()
 		for _, v in ipairs(p.FilterDescendantsInstances) do
 			if v then list[#list + 1] = v end
 		end
-		if CFG.noShield then
-			for _, t in ipairs(shieldCache) do
-				if t.Parent then list[#list + 1] = t end
-			end
+		for _, t in ipairs(shieldCache) do
+			if t.Parent then list[#list + 1] = t end
 		end
 		p.FilterType = Enum.RaycastFilterType.Exclude
 		p.FilterDescendantsInstances = list
@@ -439,6 +525,7 @@ local function installRayHooks()
 end
 
 local function isAlive(hum) return hum and hum.Health > 0 end
+
 local BOSS_NAMES = {
 	Chimera = true, Gilbert = true, Slasher = true, Mutant = true, Riser = true,
 	Vorax = true, Lurker = true, Deceiver = true, ViralSin = true, Bulldozer = true,
@@ -446,14 +533,14 @@ local BOSS_NAMES = {
 }
 
 local function classifyMonster(model, hum)
-	local nm = model.Name
-	local base = nm:gsub("%d+$", "")
+	local base = model.Name:gsub("%d+$", "")
 	if BOSS_NAMES[base] or (hum.MaxHealth and hum.MaxHealth >= 500) then return "boss" end
 	return "monster"
 end
 
 local monsterCache = {}
 local lastMonsterScan = 0
+
 local function scanMonsters()
 	local out = {}
 	local chars = workspace:FindFirstChild("Characters")
@@ -463,9 +550,7 @@ local function scanMonsters()
 			out[#out + 1] = m
 		else
 			for _, c in ipairs(m:GetChildren()) do
-				if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then
-					out[#out + 1] = c
-				end
+				if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then out[#out + 1] = c end
 			end
 		end
 	end
@@ -485,7 +570,8 @@ local function otherShotTrail(beam)
 				if (p1 - p0).Magnitude >= 2 then break end
 			end
 		end
-		if not (p0 and p1) or (p1 - p0).Magnitude < 2 then return end
+		if not (p0 and p1) then return end
+		if (p1 - p0).Magnitude < 2 then return end
 		local myChar = getMyChar()
 		local shooter, bestD
 		for _, m in ipairs(monsterCache) do
@@ -513,7 +599,8 @@ local function otherShotTrail(beam)
 		end
 		local isPlayer = Players:GetPlayerFromCharacter(shooter) ~= nil
 		HUB.otherDrawn = (HUB.otherDrawn or 0) + 1
-		spawnTrail(p0, p1, CFG.trailTime, false, isPlayer and CFG.colorTeamTrail or CFG.colorEnemyTrail)
+		spawnTrail(p0, p1, CFG.trailTime, false,
+			isPlayer and CFG.colorTeamTrail or CFG.colorEnemyTrail)
 	end)
 end
 
@@ -522,8 +609,7 @@ workspace.Terrain.ChildAdded:Connect(function(v)
 	if v:IsA("Beam") then otherShotTrail(v) end
 end)
 
-local friendCache = {}
-local friendPending = {}
+local friendCache, friendPending = {}, {}
 local function isFriend(pl)
 	local v = friendCache[pl.UserId]
 	if v ~= nil then return v end
@@ -537,6 +623,7 @@ local function isFriend(pl)
 	end
 	return false
 end
+
 Players.PlayerRemoving:Connect(function(pl)
 	friendCache[pl.UserId] = nil
 	friendPending[pl.UserId] = nil
@@ -566,6 +653,7 @@ local function buildTargets()
 								kind = "player", isPlayer = true, friend = isFr,
 								color = isFr and CFG.colorFriend or CFG.colorPlayer,
 								label = (isFr and "[好友] " or "") .. pl.Name, dist = d,
+								part = nil, visible = false, visiblePart = nil,
 							}
 						end
 					end
@@ -590,6 +678,7 @@ local function buildTargets()
 								kind = kind, isPlayer = false,
 								color = kind == "boss" and CFG.colorBoss or CFG.colorMonster,
 								label = m.Name, dist = d,
+								part = nil, visible = false, visiblePart = nil,
 							}
 						end
 					end
@@ -601,15 +690,25 @@ local function buildTargets()
 end
 
 local itemCache = {}
-local ITEM_PATTERNS = { "Ammo", "Crate", "Loot", "Medkit", "Morphine", "Bandage", "C4", "Landmine", "Glowstick", "Chemlight", "Keycard", "Intel", "Sample", "Battery", "Food", "Water", "NVG", "Case", "Supply", "Pickup", "Weapon", "Tool", "Objective" }
+local ITEM_PATTERNS = {
+	"Ammo", "Crate", "Loot", "Medkit", "Morphine", "Bandage", "C4", "Landmine",
+	"Glowstick", "Chemlight", "Keycard", "Intel", "Sample", "Battery", "Food",
+	"Water", "NVG", "Case", "Supply", "Pickup", "Weapon", "Tool", "Objective",
+}
+
 local function nameMatchesItem(n)
-	for _, p in ipairs(ITEM_PATTERNS) do if n:find(p, 1, true) then return true end end
+	for _, p in ipairs(ITEM_PATTERNS) do
+		if n:find(p, 1, true) then return true end
+	end
 	return false
 end
+
 local function isAmmoName(n)
 	local l = string.lower(n)
-	return l == "ammobox" or l == "ammo box" or l == "ammoboxgiver" or string.find(l, "ammobox", 1, true) ~= nil
+	return l == "ammobox" or l == "ammo box" or l == "ammoboxgiver"
+		or string.find(l, "ammobox", 1, true) ~= nil
 end
+
 local function scanItems()
 	local out, seen = {}, {}
 	local function consider(v)
@@ -618,7 +717,8 @@ local function scanItems()
 		if v:IsA("Model") and v:FindFirstChildOfClass("Humanoid") then return end
 		if not (v:IsA("Tool") or v:IsA("Model") or v:IsA("BasePart")) then return end
 		local nm = v.Name
-		if nm:sub(1, 2) == "__" or isAmmoName(nm) then return end
+		if nm:sub(1, 2) == "__" then return end
+		if isAmmoName(nm) then return end
 		if nameMatchesItem(nm) or v:GetAttribute("IsLandmine") or v:GetAttribute("IsPickup") then
 			local part = v:IsA("BasePart") and v or v:FindFirstChildWhichIsA("BasePart")
 			if part then out[#out + 1] = { inst = v, part = part, label = nm } end
@@ -634,7 +734,9 @@ local function scanItems()
 end
 
 local ammoCache, ammoSeen = {}, {}
+
 local function isGiverName(n) return string.find(string.lower(n), "giver", 1, true) ~= nil end
+
 local function hasAmmoAncestor(m)
 	local cur = m.Parent
 	while cur and cur ~= workspace do
@@ -646,6 +748,7 @@ local function hasAmmoAncestor(m)
 	end
 	return false
 end
+
 local function inInteractions(m)
 	local cur = m.Parent
 	while cur and cur ~= workspace do
@@ -654,10 +757,14 @@ local function inInteractions(m)
 	end
 	return false
 end
+
 local function addAmmoHost(m)
-	if not m or not m:IsA("Model") or hasAmmoAncestor(m) then return end
+	if not m or not m:IsA("Model") then return end
+	if hasAmmoAncestor(m) then return end
 	local prompt = m:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if not prompt and not isGiverName(m.Name) and not inInteractions(m) then return end
+	local giver = isGiverName(m.Name)
+	local region = inInteractions(m)
+	if not prompt and not giver and not region then return end
 	local part = m:FindFirstChildWhichIsA("BasePart", true)
 	local pivot = nil
 	if not part then
@@ -670,6 +777,7 @@ local function addAmmoHost(m)
 		local pp = prompt.Parent
 		if pp and pp:IsA("Attachment") then att = pp end
 	end
+	local label = prompt and "弹药" or (giver and "弹药" or "弹药点")
 	if ammoSeen[m] then
 		for _, a in ipairs(ammoCache) do
 			if a.inst == m then
@@ -677,40 +785,52 @@ local function addAmmoHost(m)
 				if pivot then a.pivot = pivot end
 				if prompt then a.prompt = prompt end
 				if att then a.att = att end
+				if prompt then a.label = "弹药" end
 				return
 			end
 		end
 		return
 	end
 	ammoSeen[m] = true
-	ammoCache[#ammoCache + 1] = { inst = m, part = part, att = att, prompt = prompt, label = prompt and "弹药" or "弹药点", pivot = pivot }
+	ammoCache[#ammoCache + 1] = {
+		inst = m, part = part, att = att, prompt = prompt, label = label, pivot = pivot,
+	}
 	HUB.ammoCount = #ammoCache
 end
+
 local function ancestorAmmoHost(v)
 	local cur = v
 	while cur and cur ~= workspace do
-		if cur:IsA("Model") and (isGiverName(cur.Name) or string.lower(cur.Name) == "ammo box") then return cur end
+		if cur:IsA("Model") then
+			if isGiverName(cur.Name) or (string.lower(cur.Name) == "ammo box") then return cur end
+		end
 		cur = cur.Parent
 	end
 	return nil
 end
+
 local function scanAmmo()
 	ammoCache, ammoSeen = {}, {}
 	local stack = {}
 	for _, c in ipairs(workspace:GetChildren()) do
-		if c ~= workspace.CurrentCamera and c.Name ~= "Characters" and c.Name ~= "Terrain" then stack[#stack + 1] = c end
+		if c ~= workspace.CurrentCamera and c.Name ~= "Characters" and c.Name ~= "Terrain" then
+			stack[#stack + 1] = c
+		end
 	end
 	local budget = 120000
 	while #stack > 0 and budget > 0 do
 		local v = table.remove(stack)
 		budget = budget - 1
 		if v.Parent then
-			if v:IsA("Model") and (isGiverName(v.Name) or string.lower(v.Name) == "ammo box") then addAmmoHost(v) end
+			if v:IsA("Model") and (isGiverName(v.Name) or string.lower(v.Name) == "ammo box") then
+				addAmmoHost(v)
+			end
 			for _, ch in ipairs(v:GetChildren()) do stack[#stack + 1] = ch end
 		end
 	end
 	HUB.ammoCount = #ammoCache
 end
+
 workspace.DescendantAdded:Connect(function(v)
 	if not (v:IsA("BasePart") or v:IsA("ProximityPrompt") or v:IsA("Model")) then return end
 	task.defer(function()
@@ -718,18 +838,25 @@ workspace.DescendantAdded:Connect(function(v)
 		if host then addAmmoHost(host) end
 	end)
 end)
+
 workspace.DescendantAdded:Connect(function(v)
 	pcall(function()
-		if not (v:IsA("Tool") or v:IsA("Model")) or v:FindFirstChildOfClass("Humanoid") then return end
+		if not (v:IsA("Tool") or v:IsA("Model")) then return end
+		if v:FindFirstChildOfClass("Humanoid") then return end
 		local nm = v.Name
-		if nm == "" or nm:sub(1, 2) == "__" or not (nameMatchesItem(nm) or v:GetAttribute("IsLandmine") or v:GetAttribute("IsPickup")) then return end
+		if nm == "" or nm:sub(1, 2) == "__" then return end
+		if not (nameMatchesItem(nm) or v:GetAttribute("IsLandmine") or v:GetAttribute("IsPickup")) then return end
 		local part = v:IsA("BasePart") and v or v:FindFirstChildWhichIsA("BasePart")
 		if part then table.insert(itemCache, { inst = v, part = part, label = nm }) end
 	end)
 end)
 
+local function installAimHook() end
+local function removeAimHook() end
+
 local Fire = { down = false }
 local VIM = game:FindFirstChild("VirtualInputManager") or game:GetService("VirtualInputManager")
+
 local function vpCenter()
 	local cam = workspace.CurrentCamera
 	if cam then
@@ -738,6 +865,7 @@ local function vpCenter()
 	end
 	return 400, 300
 end
+
 local function nearestMonster(maxDist)
 	local me = getMyChar()
 	if not me then return nil end
@@ -745,7 +873,9 @@ local function nearestMonster(maxDist)
 	if not origin then return nil end
 	local best, bd
 	for _, t in ipairs(buildTargets()) do
-		if not t.isPlayer and (not bd or t.dist < bd) and t.dist <= (maxDist or 250) then bd = t.dist; best = t end
+		if not t.isPlayer and (not bd or t.dist < bd) and t.dist <= (maxDist or 250) then
+			bd = t.dist; best = t
+		end
 	end
 	return best
 end
@@ -756,7 +886,8 @@ local PACKET_STRATS = {
 	function(ctx) return { ctx.hum, ctx.part, ctx.hitPos } end,
 	function(ctx) return { ctx.hum, ctx.part, ctx.hitPos, ctx.normal, ctx.origin, ctx.dir, ctx.rel, 1 } end,
 }
-local function getRealMuzzle()
+
+getRealMuzzle = function()
 	local gun = getEquippedGun()
 	if gun then
 		local fp = gun:FindFirstChild("FirePoint", true)
@@ -772,6 +903,7 @@ local function getRealMuzzle()
 end
 
 local toastGui, toastLabel, toastUntil = nil, nil, 0
+
 local function toastParent()
 	local ok, p = pcall(function()
 		local gh = safeGet("gethui") or safeGet("get_hidden_gui")
@@ -779,10 +911,11 @@ local function toastParent()
 			local r = gh()
 			if typeof(r) == "Instance" then return r end
 		end
-		return game:GetService("CoreGui")
+		return CoreGui
 	end)
-	return (ok and p) or game:GetService("CoreGui")
+	return (ok and p) or CoreGui
 end
+
 local function toast(msg, secs)
 	pcall(function()
 		if not toastGui or not toastGui.Parent then
@@ -795,17 +928,24 @@ local function toast(msg, secs)
 			toastLabel = Instance.new("TextLabel")
 			toastLabel.Name = "msg"
 			toastLabel.AnchorPoint = Vector2.new(0.5, 1)
-			toastLabel.Position = UDim2.new(0.5, 0, 0.78, 0)
-			toastLabel.Size = UDim2.new(0, 420, 0, 42)
-			toastLabel.BackgroundColor3 = Color3.fromRGB(15, 18, 24)
-			toastLabel.BackgroundTransparency = 0.15
+			toastLabel.Position = UDim2.new(0.5, 0, 0.82, 0)
+			toastLabel.Size = UDim2.new(0, 420, 0, 40)
+			toastLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+			toastLabel.BackgroundTransparency = 0.08
 			toastLabel.BorderSizePixel = 0
-			toastLabel.Font = Enum.Font.GothamBold
-			toastLabel.TextSize = 18
-			toastLabel.TextColor3 = Color3.fromRGB(120, 230, 255)
+			toastLabel.Font = Enum.Font.GothamMedium
+			toastLabel.TextSize = 15
+			toastLabel.TextColor3 = Color3.fromRGB(60, 60, 75)
 			toastLabel.Text = ""
 			toastLabel.Visible = false
-			Instance.new("UICorner", toastLabel).CornerRadius = UDim.new(0, 8)
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0, 14)
+			corner.Parent = toastLabel
+			local stroke = Instance.new("UIStroke")
+			stroke.Thickness = 1
+			stroke.Transparency = 0.5
+			stroke.Color = Color3.fromRGB(220, 225, 235)
+			stroke.Parent = toastLabel
 			toastLabel.Parent = toastGui
 		end
 		toastLabel.Text = msg
@@ -813,11 +953,111 @@ local function toast(msg, secs)
 		toastUntil = os.clock() + (secs or 2)
 	end)
 end
+
 local function toastTick()
-	if toastLabel and toastLabel.Visible and os.clock() >= toastUntil then toastLabel.Visible = false end
+	if toastLabel and toastLabel.Visible and os.clock() >= toastUntil then
+		toastLabel.Visible = false
+	end
 end
 
-local function packetShot(gun, cfg, t)
+local silentGui, silentLabel = nil, nil
+
+local function gunFireInterval(cfg)
+	local fd = nil
+	if cfg and type(cfg.fire) == "table" then fd = tonumber(cfg.fire.fireDelay) end
+	if not fd or fd <= 0 then return 0.12 end
+	local mode = 1
+	if cfg.ammo and type(cfg.ammo.mode) == "number" then mode = cfg.ammo.mode end
+	if mode == 2 then fd = fd * 2 end
+	if fd < 0.02 then fd = 0.02 end
+	if fd > 2 then fd = 2 end
+	return fd
+end
+
+local function ensureSilentAmmo(gun)
+	local sa = HUB.silentAmmo
+	if not sa then
+		sa = { clip = 0, reserve = 0, size = 30, gun = nil,
+			lastRealClip = nil, lastRealReserve = nil, pending = 0, pendingAt = 0 }
+		HUB.silentAmmo = sa
+	end
+	if not gun then return sa end
+	if sa.gun ~= gun then
+		sa.gun = gun
+		sa.size = gun:GetAttribute("ClipSize") or 30
+		sa.lastRealClip = gun:GetAttribute("ClipCurrent")
+		sa.lastRealReserve = gun:GetAttribute("MaxAmmo")
+		sa.pending = 0
+	end
+	local cs = gun:GetAttribute("ClipSize")
+	if type(cs) == "number" and cs > 0 then sa.size = cs end
+	local rc = gun:GetAttribute("ClipCurrent")
+	if type(rc) == "number" then
+		sa.clip = math.max(0, rc)
+		sa.lastRealClip = rc
+		sa.pending = 0
+	end
+	local rm = gun:GetAttribute("MaxAmmo")
+	if type(rm) == "number" then
+		sa.reserve = rm
+		sa.lastRealReserve = rm
+	end
+	return sa
+end
+
+local function silentHudTick(on, gun)
+	if not on then
+		if silentLabel and silentLabel.Visible then silentLabel.Visible = false end
+		return
+	end
+	if not gun then return end
+	local sa = ensureSilentAmmo(gun)
+	if not silentGui or not silentGui.Parent then
+		pcall(function()
+			silentGui = Instance.new("ScreenGui")
+			silentGui.Name = "__btrAmmo"
+			silentGui.IgnoreGuiInset = true
+			silentGui.ResetOnSpawn = false
+			silentGui.DisplayOrder = 2147483647
+			silentGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+			silentGui.Parent = toastParent()
+			silentLabel = Instance.new("TextLabel")
+			silentLabel.AnchorPoint = Vector2.new(0.5, 0)
+			silentLabel.Position = UDim2.new(0.5, 0, 0.5, 46)
+			silentLabel.Size = UDim2.new(0, 220, 0, 28)
+			silentLabel.BackgroundTransparency = 0.15
+			silentLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+			silentLabel.Font = Enum.Font.GothamBold
+			silentLabel.TextSize = 15
+			silentLabel.TextColor3 = Color3.fromRGB(55, 55, 70)
+			silentLabel.Text = ""
+			silentLabel.ZIndex = 2147483647
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0, 12)
+			corner.Parent = silentLabel
+			local stroke = Instance.new("UIStroke")
+			stroke.Thickness = 1
+			stroke.Transparency = 0.5
+			stroke.Color = Color3.fromRGB(220, 225, 235)
+			stroke.Parent = silentLabel
+			silentLabel.Parent = silentGui
+		end)
+	end
+	HUB.fireInterval = gunFireInterval(getGunConfig(gun))
+	if silentLabel then
+		silentLabel.Visible = true
+		if sa.clip <= 0 then
+			silentLabel.Text = string.format("0 / %d", sa.reserve)
+			silentLabel.TextColor3 = Color3.fromRGB(220, 80, 100)
+		else
+			silentLabel.Text = string.format("%d / %d", sa.clip, sa.reserve)
+			silentLabel.TextColor3 = Color3.fromRGB(55, 55, 70)
+		end
+	end
+end
+
+local function packetShot(gun, cfg, t, partHint)
+	HUB.packetCall = (HUB.packetCall or 0) + 1
 	local N = getNetwork()
 	if not N or not gun then return false end
 	if not cfg then
@@ -833,76 +1073,160 @@ local function packetShot(gun, cfg, t)
 	end
 	t = t or nearestMonster(250)
 	if not t then return false end
-	local part, hum = t.part or t.head or t.root, t.hum
+	local part = partHint or t.part or t.head or t.root
+	local hum = t.hum
 	if not (part and hum and hum.Parent) then return false end
-	local origin = Aim.origin or Aim.muzzle or getRealMuzzle()
+	local origin = Aim.muzzle or Aim.origin or getRealMuzzle()
 	if not origin then return false end
 	local hitPos = part.Position
 	local delta = hitPos - origin
 	if delta.Magnitude < 0.3 then return false end
-	local dir = delta.Unit
-	local normal = -dir
-	local rel = CFrame.new()
-	pcall(function()
-		if hum.RootPart then rel = hum.RootPart.CFrame:ToObjectSpace(CFrame.new(hitPos, hitPos + normal * 1.5)) end
-	end)
-	local ctx = { hum = hum, part = part, hitPos = hitPos, normal = normal, origin = origin, dir = dir, rel = rel }
-	HUB.packetTries = (HUB.packetTries or 0) + 1
-	pcall(function()
-		local cam = workspace.CurrentCamera
-		if cam then N:FireServer("cam/mouse", cam.CFrame, { cam.CFrame.Position, hitPos }) end
-	end)
-	pcall(function() N:FireServer("fire", gun, cfg, dir) end)
-	local idx = HUB.packetStrat or 1
-	local okS, payload = pcall(PACKET_STRATS[idx], ctx)
-	if not okS then return false end
-	local ok, ret = pcall(function() return N:InvokeServer("hit", gun, cfg, payload) end)
-	if ok and ret ~= false and ret ~= nil then
-		HUB.packetOK = (HUB.packetOK or 0) + 1
+
+	local pellets = 1
+	if type(cfg.fire) == "table" then
+		local bp = tonumber(cfg.fire.bulletPerRound)
+		if bp and bp > 1 then pellets = math.min(math.floor(bp), 24) end
+	end
+	if HUB.pelletOverride then pellets = HUB.pelletOverride end
+	HUB.lastPellets = pellets
+
+	local function makeCtx(hp)
+		local d = hp - origin
+		if d.Magnitude < 0.3 then return nil end
+		local dir = d.Unit
+		local normal = -dir
+		local rel = CFrame.new()
 		pcall(function()
-			local clipNow = gun:GetAttribute("ClipCurrent")
-			if clipNow ~= nil and clipNow <= 0 and not HUB.reserveOK then
-				HUB.reserveOK = true
-				toast("备用弹药射击已生效", 2)
+			if hum.RootPart then
+				rel = hum.RootPart.CFrame:ToObjectSpace(CFrame.new(hp, hp + normal * 1.5))
 			end
 		end)
-		HUB.packetStratOK = HUB.packetStratOK or {}
-		HUB.packetStratOK[idx] = (HUB.packetStratOK[idx] or 0) + 1
-		if CFG.trail then spawnTrail(origin, hitPos, nil, true) end
-		return true
+		return { hum = hum, part = part, hitPos = hp, normal = normal,
+			origin = origin, dir = dir, rel = rel }
 	end
-	HUB.packetStrat = (idx % #PACKET_STRATS) + 1
-	HUB.packetStratFail = (HUB.packetStratFail or 0) + 1
-	if (HUB.packetTries or 0) >= 40 and (HUB.packetOK or 0) == 0 then
-		CFG.packetMode = false
-		HUB.packetGaveUp = true
+
+	HUB.packetTries = (HUB.packetTries or 0) + 1
+	local baseCtx = makeCtx(hitPos)
+	if not baseCtx then return false end
+	pcall(function()
+		local cam = workspace.CurrentCamera
+		if cam then
+			local from = origin
+			local cp = cam.CFrame.Position
+			if (from - cp).Magnitude > 8 then from = cp end
+			if (hitPos - from).Magnitude > 0.2 then
+				local cf = CFrame.lookAt(from, hitPos)
+				N:FireServer("cam/mouse", cf, { from, hitPos })
+			end
+		end
+	end)
+	pcall(function() N:FireServer("fire", gun, cfg, baseCtx.dir) end)
+
+	local idx = HUB.packetStrat or 1
+	local ctxList = { baseCtx }
+	for i = 2, pellets do
+		local jitter = Vector3.new(
+			(math.random() - 0.5) * 0.14,
+			(math.random() - 0.5) * 0.14,
+			(math.random() - 0.5) * 0.14)
+		local ctx2 = makeCtx(hitPos + jitter)
+		if ctx2 then ctxList[#ctxList + 1] = ctx2 end
 	end
-	return false
+
+	local okS, payload = pcall(PACKET_STRATS[idx], baseCtx)
+	if not okS then return false end
+
+	for i, ctx in ipairs(ctxList) do
+		local pl = payload
+		if i > 1 then
+			local okp, p2 = pcall(PACKET_STRATS[idx], ctx)
+			pl = okp and p2 or nil
+		end
+		if pl then
+			local isFirst = (i == 1)
+			task.spawn(function()
+				HUB.hitSends = (HUB.hitSends or 0) + 1
+				local ok, ret = pcall(function() return N:InvokeServer("hit", gun, cfg, pl) end)
+				if ok and ret ~= false and ret ~= nil then
+					HUB.packetOK = (HUB.packetOK or 0) + 1
+					HUB.packetStratOK = HUB.packetStratOK or {}
+					HUB.packetStratOK[idx] = (HUB.packetStratOK[idx] or 0) + 1
+					HUB.packetStratN = HUB.packetStratN or {}
+					HUB.packetStratN[idx] = (HUB.packetStratN[idx] or 0) + 1
+					if isFirst and CFG.trail then
+						pcall(spawnTrail, origin, ctx.hitPos, nil, true)
+					end
+				else
+					HUB.packetStratFail = (HUB.packetStratFail or 0) + 1
+					HUB.packetStratN = HUB.packetStratN or {}
+					HUB.packetStratN[idx] = (HUB.packetStratN[idx] or 0) + 1
+					if isFirst then
+						local okN = HUB.packetStratOK or {}
+						local nN = HUB.packetStratN or {}
+						local best, bestScore = nil, -1
+						for j = 1, #PACKET_STRATS do
+							if j ~= idx then
+								local fails = (nN[j] or 0) - (okN[j] or 0)
+								if fails <= 0 then best = j; break end
+								local score = (okN[j] or 0) / math.max(nN[j] or 1, 1)
+								if score > bestScore then bestScore, best = score, j end
+							end
+						end
+						HUB.packetStrat = best or ((idx % #PACKET_STRATS) + 1)
+						if (HUB.packetTries or 0) >= 40 and (HUB.packetOK or 0) == 0 then
+							CFG.packetMode = false
+						end
+					end
+				end
+			end)
+		end
+	end
+	return true
 end
 
 local function sendMouse(isDown)
 	if VIM then
 		local x, y = vpCenter()
-		if pcall(function() VIM:SendMouseButtonEvent(x, y, 0, isDown, game, 0) end) then return end
+		local ok = pcall(function() VIM:SendMouseButtonEvent(x, y, 0, isDown, game, 0) end)
+		if ok then return end
 	end
 	local f = isDown and COMPAT.m1press or COMPAT.m1release
-	if type(f) == "function" and pcall(f) then return end
+	if type(f) == "function" then
+		if pcall(f) then return end
+	end
 	if isDown and type(COMPAT.m1click) == "function" then pcall(COMPAT.m1click) end
 end
-local function mouseDown() if not Fire.down then Fire.down = true; sendMouse(true) end end
-local function mouseUp() if Fire.down then Fire.down = false; sendMouse(false) end end
-local function forceRelease() Fire.down = false; sendMouse(false) end
+
+local function mouseDown()
+	if Fire.down then return end
+	Fire.down = true
+	sendMouse(true)
+end
+
+local function mouseUp()
+	if not Fire.down then return end
+	Fire.down = false
+	sendMouse(false)
+end
+
+local function forceRelease()
+	Fire.down = false
+	sendMouse(false)
+end
 
 local SpeedHook = { installed = false, orig = nil }
+
 local function installSpeedHook()
-	if SpeedHook.installed or type(COMPAT.hook) ~= "function" then return false end
+	if SpeedHook.installed then return end
+	if type(COMPAT.hook) ~= "function" then return false end
 	local ok = pcall(function()
 		local orig
 		orig = COMPAT.hook(game, "__newindex", function(self, key, value)
-			if key == "WalkSpeed" and CFG.changeSpeed then
+			if key == "WalkSpeed" and CFG.customWalkSpeed then
 				local h = getMyHumanoid()
 				if h and self == h then value = CFG.walkSpeed end
-			elseif key == "JumpPower" and CFG.changeJump then
+			end
+			if key == "JumpPower" and CFG.customJumpPower then
 				local h = getMyHumanoid()
 				if h and self == h then value = CFG.jumpPower end
 			end
@@ -913,6 +1237,7 @@ local function installSpeedHook()
 	end)
 	return ok
 end
+
 local function removeSpeedHook()
 	if not SpeedHook.installed then return end
 	pcall(function() (COMPAT.restore or restorefunction)(SpeedHook.orig) end)
@@ -932,12 +1257,22 @@ end
 local lightBackup = genv.__BTRHUB_LIGHT
 local function ensureBackup()
 	if lightBackup then return end
-	lightBackup = { Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient, Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime, GlobalShadows = Lighting.GlobalShadows, FogStart = Lighting.FogStart, FogEnd = Lighting.FogEnd, FogColor = Lighting.FogColor, Atmosphere = {} }
+	lightBackup = {
+		Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
+		Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime,
+		GlobalShadows = Lighting.GlobalShadows, FogStart = Lighting.FogStart,
+		FogEnd = Lighting.FogEnd, FogColor = Lighting.FogColor,
+	}
+	local atmo = {}
 	for _, e in ipairs(Lighting:GetChildren()) do
-		if e:IsA("Atmosphere") then table.insert(lightBackup.Atmosphere, { obj = e, Density = e.Density, Haze = e.Haze, Glare = e.Glare }) end
+		if e:IsA("Atmosphere") then
+			atmo[#atmo + 1] = { obj = e, Density = e.Density, Haze = e.Haze, Glare = e.Glare }
+		end
 	end
+	lightBackup.Atmosphere = atmo
 	genv.__BTRHUB_LIGHT = lightBackup
 end
+
 local function applyWorld()
 	ensureBackup()
 	local fogOn = CFG.noFog or CFG.mapGlow
@@ -945,13 +1280,17 @@ local function applyWorld()
 		pcall(function() Lighting:SetAttribute("LocalFogFullbright", true) end)
 		Lighting.FogStart = 1e6
 		Lighting.FogEnd = 1e6
-		for _, a in ipairs(lightBackup.Atmosphere) do a.obj.Density = 0; a.obj.Haze = 0; a.obj.Glare = 0 end
+		for _, a in ipairs(lightBackup.Atmosphere) do
+			a.obj.Density = 0; a.obj.Haze = 0; a.obj.Glare = 0
+		end
 	else
 		pcall(function() Lighting:SetAttribute("LocalFogFullbright", false) end)
 		Lighting.FogStart = lightBackup.FogStart
 		Lighting.FogEnd = lightBackup.FogEnd
 		Lighting.FogColor = lightBackup.FogColor
-		for _, a in ipairs(lightBackup.Atmosphere) do a.obj.Density = a.Density; a.obj.Haze = a.Haze; a.obj.Glare = a.Glare end
+		for _, a in ipairs(lightBackup.Atmosphere) do
+			a.obj.Density = a.Density; a.obj.Haze = a.Haze; a.obj.Glare = a.Glare
+		end
 	end
 	if CFG.mapGlow then
 		Lighting.Ambient = Color3.fromRGB(80, 80, 85)
@@ -971,58 +1310,111 @@ end
 local DRAW
 for _, nm in ipairs({ "Drawing", "drawing", "Draw", "Render" }) do
 	local d = safeGet(nm)
-	if d ~= nil and pcall(function() return d.new end) then
-		if pcall(function() local s = d.new("Square"); s.Visible = false; pcall(function() s:Remove() end) end) then DRAW = d; break end
+	if d ~= nil then
+		local okNew = pcall(function() return d.new end)
+		if okNew then
+			local ok = pcall(function()
+				local s = d.new("Square")
+				s.Visible = false
+				pcall(function() s:Remove() end)
+			end)
+			if ok then DRAW = d; break end
+		end
 	end
 end
+
 local hasDrawing = DRAW ~= nil
 HUB.renderMode = hasDrawing and "Drawing" or "Highlight"
 
-local PROP_ALIAS = { TextSize = { "TextSize", "Size", "FontSize", "TextFontSize" }, Center = { "Center", "Centered" }, Outline = { "Outline", "Outlined" }, OutlineColor = { "OutlineColor", "OutlinedColor" }, Filled = { "Filled", "Fill" }, Thickness = { "Thickness", "Width", "LineWidth" }, NumSides = { "NumSides", "Sides", "Segments" }, Transparency = { "Transparency", "Alpha" }, Font = { "Font", "FontFace" } }
+local PROP_ALIAS = {
+	TextSize = { "TextSize", "Size", "FontSize", "TextFontSize" },
+	Center = { "Center", "Centered" },
+	Outline = { "Outline", "Outlined" },
+	OutlineColor = { "OutlineColor", "OutlinedColor" },
+	Filled = { "Filled", "Fill" },
+	Thickness = { "Thickness", "Width", "LineWidth" },
+	NumSides = { "NumSides", "Sides", "Segments" },
+	Transparency = { "Transparency", "Alpha" },
+	Font = { "Font", "FontFace" },
+}
+
 local propCache = setmetatable({}, { __mode = "k" })
+
 local function setP(obj, prop, value)
 	if obj == nil then return false end
-	local cache = propCache[obj] or {}
-	propCache[obj] = cache
+	local cache = propCache[obj]
+	if not cache then cache = {}; propCache[obj] = cache end
 	local name = cache[prop]
 	if name == false then return false end
-	if name then if pcall(function() obj[name] = value end) then return true end; cache[prop] = false; return false end
+	if name then
+		if pcall(function() obj[name] = value end) then return true end
+		cache[prop] = false
+		return false
+	end
 	for _, cand in ipairs(PROP_ALIAS[prop] or { prop }) do
-		if pcall(function() obj[cand] = value end) then cache[prop] = cand; return true end
+		if pcall(function() obj[cand] = value end) then
+			cache[prop] = cand
+			return true
+		end
 	end
 	cache[prop] = false
 	return false
 end
 
 local pool, used = {}, {}
+
 local function getPool(id)
 	local e = pool[id]
 	if e then return e end
 	local ok, res = pcall(function()
-		local o = { box = DRAW.new("Square"), name = DRAW.new("Text"), hpBg = DRAW.new("Square"), hp = DRAW.new("Square"), dist = DRAW.new("Text"), tracer = DRAW.new("Line") }
-		setP(o.box, "Thickness", 1); setP(o.box, "Filled", false)
-		setP(o.hpBg, "Filled", true); o.hpBg.Color = Color3.fromRGB(0, 0, 0); setP(o.hpBg, "Transparency", 0.6)
+		local o = {
+			box = DRAW.new("Square"), name = DRAW.new("Text"),
+			hpBg = DRAW.new("Square"), hp = DRAW.new("Square"),
+			dist = DRAW.new("Text"), tracer = DRAW.new("Line"),
+		}
+		setP(o.box, "Thickness", 1)
+		setP(o.box, "Filled", false)
+		setP(o.hpBg, "Filled", true)
+		o.hpBg.Color = Color3.fromRGB(0, 0, 0)
+		setP(o.hpBg, "Transparency", 0.6)
 		setP(o.hp, "Filled", true)
-		setP(o.name, "Center", true); setP(o.name, "Outline", true); setP(o.name, "OutlineColor", Color3.fromRGB(0, 0, 0)); setP(o.name, "TextSize", 14)
-		setP(o.dist, "Center", true); setP(o.dist, "Outline", true); setP(o.dist, "OutlineColor", Color3.fromRGB(0, 0, 0)); setP(o.dist, "TextSize", 12)
+		setP(o.name, "Center", true)
+		setP(o.name, "Outline", true)
+		setP(o.name, "OutlineColor", Color3.fromRGB(0, 0, 0))
+		setP(o.name, "TextSize", 14)
+		setP(o.dist, "Center", true)
+		setP(o.dist, "Outline", true)
+		setP(o.dist, "OutlineColor", Color3.fromRGB(0, 0, 0))
+		setP(o.dist, "TextSize", 12)
 		setP(o.tracer, "Thickness", 1)
 		return o
 	end)
-	if not ok or not res then hasDrawing = false; HUB.renderMode = "Highlight(回退)"; return nil end
+	if not ok or not res then
+		hasDrawing = false
+		HUB.renderMode = "Highlight(回退)"
+		return nil
+	end
 	pool[id] = res
 	return res
 end
 
 local lastDraw = {}
+
 local function hideStale(now)
 	for id, e in pairs(pool) do
 		if now - (lastDraw[id] or 0) > 0.15 then
-			e.box.Visible = false; e.name.Visible = false; e.hpBg.Visible = false; e.hp.Visible = false; e.dist.Visible = false; e.tracer.Visible = false
+			e.box.Visible = false
+			e.name.Visible = false
+			e.hpBg.Visible = false
+			e.hp.Visible = false
+			e.dist.Visible = false
+			e.tracer.Visible = false
 		end
 	end
 end
 
 local hlCache = {}
+
 local function espHighlight(targets)
 	local seen = {}
 	for _, t in ipairs(targets) do
@@ -1032,9 +1424,18 @@ local function espHighlight(targets)
 			seen[t.inst] = true
 			local hl = hlCache[t.inst]
 			if not hl or not hl.Parent then
-				hl = Instance.new("Highlight"); hl.Name = "__btrHL"; hl.Adornee = t.inst; hl.FillTransparency = 0.62; hl.OutlineTransparency = 0.1; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop; hl.Parent = workspace.Terrain; hlCache[t.inst] = hl
+				hl = Instance.new("Highlight")
+				hl.Name = "__btrHL"
+				hl.Adornee = t.inst
+				hl.FillTransparency = 0.62
+				hl.OutlineTransparency = 0.1
+				hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+				hl.Parent = workspace.Terrain
+				hlCache[t.inst] = hl
 			end
-			hl.FillColor = t.color; hl.OutlineColor = t.color; hl.Enabled = true
+			hl.FillColor = t.color
+			hl.OutlineColor = t.color
+			hl.Enabled = true
 		end
 	end
 	if CFG.espAmmo then
@@ -1043,9 +1444,18 @@ local function espHighlight(targets)
 				seen[it.inst] = true
 				local hl = hlCache[it.inst]
 				if not hl or not hl.Parent then
-					hl = Instance.new("Highlight"); hl.Name = "__btrHL"; hl.Adornee = it.inst; hl.FillTransparency = 0.55; hl.OutlineTransparency = 0; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop; hl.Parent = workspace.Terrain; hlCache[it.inst] = hl
+					hl = Instance.new("Highlight")
+					hl.Name = "__btrHL"
+					hl.Adornee = it.inst
+					hl.FillTransparency = 0.55
+					hl.OutlineTransparency = 0
+					hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+					hl.Parent = workspace.Terrain
+					hlCache[it.inst] = hl
 				end
-				hl.FillColor = CFG.colorAmmo; hl.OutlineColor = CFG.colorAmmo; hl.Enabled = true
+				hl.FillColor = CFG.colorAmmo
+				hl.OutlineColor = CFG.colorAmmo
+				hl.Enabled = true
 			end
 		end
 	end
@@ -1058,118 +1468,369 @@ local function espHighlight(targets)
 end
 
 local function drawTarget(t)
-	local e = getPool(t.inst)
-	if not e then return end
-	local cam = workspace.CurrentCamera
-	if not cam then return end
-	local headPos = t.head.Position + Vector3.new(0, t.head.Size.Y * 0.5, 0)
-	local footPos = t.root.Position - Vector3.new(0, 2.75, 0)
-	local sTop, onTop = w2s(headPos)
-	local sBot, onBot = w2s(footPos)
-	if not (onTop and onBot) then return end
-	lastDraw[t.inst] = os.clock()
-	local h = math.abs(sBot.Y - sTop.Y)
-	local w = h * 0.55
-	if h < 4 or h > 3000 then return end
-	local boxPos = Vector2.new(sTop.X - w * 0.5, sTop.Y)
-	if CFG.box then
-		e.box.Visible = true; e.box.Color = t.color; e.box.Position = boxPos; e.box.Size = Vector2.new(w, h); setP(e.box, "Thickness", 1)
-	end
-	if CFG.health then
-		local frac = math.clamp(t.hum.Health / math.max(t.hum.MaxHealth, 1), 0, 1)
-		local barX = boxPos.X - 5
-		e.hpBg.Visible = true; e.hpBg.Position = Vector2.new(barX - 1, sTop.Y - 1); e.hpBg.Size = Vector2.new(4, h + 2)
-		e.hp.Visible = true; e.hp.Color = Color3.fromRGB(math.floor(255 * (1 - frac)), math.floor(255 * frac), 40); e.hp.Position = Vector2.new(barX, sTop.Y + h * (1 - frac)); e.hp.Size = Vector2.new(2, h * frac)
-	end
-	if CFG.name then
-		e.name.Visible = true; e.name.Text = t.label; e.name.Color = t.color; e.name.Position = Vector2.new(sTop.X, sTop.Y - 16); setP(e.name, "TextSize", math.clamp(16 - t.dist / 120, 10, 16))
-	end
-	if CFG.distance then
-		e.dist.Visible = true; e.dist.Text = string.format("[%d]", math.floor(t.dist)); e.dist.Color = t.color; e.dist.Position = Vector2.new(sTop.X, sBot.Y + 2); setP(e.dist, "TextSize", 12)
-	end
-	if CFG.tracer then
-		e.tracer.Visible = true; e.tracer.Color = t.color; e.tracer.From = Vector2.new(cam.ViewportSize.X * 0.5, cam.ViewportSize.Y); e.tracer.To = Vector2.new(sTop.X, sBot.Y); setP(e.tracer, "Thickness", 1)
-	end
+	pcall(function()
+		local e = getPool(t.inst)
+		if not e then return end
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+		local headSizeY = 0
+		if t.head:IsA("BasePart") then headSizeY = t.head.Size.Y end
+		local headPos = t.head.Position + Vector3.new(0, headSizeY * 0.5, 0)
+		local footPos = t.root.Position - Vector3.new(0, 2.75, 0)
+		local sTop, onTop = w2s(headPos)
+		local sBot, onBot = w2s(footPos)
+		if not (onTop and onBot) then return end
+		lastDraw[t.inst] = os.clock()
+		local h = math.abs(sBot.Y - sTop.Y)
+		local w = h * 0.55
+		if h < 4 or h > 3000 then return end
+		local boxPos = Vector2.new(sTop.X - w * 0.5, sTop.Y)
+		if CFG.box then
+			e.box.Visible = true
+			e.box.Color = t.color
+			e.box.Position = boxPos
+			e.box.Size = Vector2.new(w, h)
+			setP(e.box, "Thickness", 1)
+		end
+		if CFG.health then
+			local frac = math.clamp(t.hum.Health / math.max(t.hum.MaxHealth, 1), 0, 1)
+			local barX = boxPos.X - 5
+			e.hpBg.Visible = true
+			e.hpBg.Position = Vector2.new(barX - 1, sTop.Y - 1)
+			e.hpBg.Size = Vector2.new(4, h + 2)
+			e.hp.Visible = true
+			e.hp.Color = Color3.fromRGB(math.floor(255 * (1 - frac)), math.floor(255 * frac), 40)
+			e.hp.Position = Vector2.new(barX, sTop.Y + h * (1 - frac))
+			e.hp.Size = Vector2.new(2, h * frac)
+		end
+		if CFG.name then
+			e.name.Visible = true
+			e.name.Text = t.label
+			e.name.Color = t.color
+			e.name.Position = Vector2.new(sTop.X, sTop.Y - 16)
+			setP(e.name, "TextSize", math.clamp(16 - t.dist / 120, 10, 16))
+		end
+		if CFG.distance then
+			e.dist.Visible = true
+			e.dist.Text = string.format("[%d]", math.floor(t.dist))
+			e.dist.Color = t.color
+			e.dist.Position = Vector2.new(sTop.X, sBot.Y + 2)
+			setP(e.dist, "TextSize", 12)
+		end
+		if CFG.tracer then
+			e.tracer.Visible = true
+			e.tracer.Color = t.color
+			e.tracer.From = Vector2.new(cam.ViewportSize.X * 0.5, cam.ViewportSize.Y)
+			e.tracer.To = Vector2.new(sTop.X, sBot.Y)
+			setP(e.tracer, "Thickness", 1)
+		end
+	end)
 end
 
 local fovCircle
 if hasDrawing then
 	local okC, c = pcall(function() return DRAW.new("Circle") end)
 	if okC and c then
-		fovCircle = c; setP(fovCircle, "Thickness", 1); setP(fovCircle, "Filled", false); setP(fovCircle, "NumSides", 48); setP(fovCircle, "Transparency", 0.7); fovCircle.Visible = false
+		fovCircle = c
+		setP(fovCircle, "Thickness", 1)
+		setP(fovCircle, "Filled", false)
+		setP(fovCircle, "NumSides", 48)
+		setP(fovCircle, "Transparency", 0.7)
+		fovCircle.Visible = false
 	else
 		fovCircle = nil
 	end
 end
 
-local function hasLineOfSight(part)
-	local cam = workspace.CurrentCamera
-	if not cam then return false end
-	local excl = { workspace.Terrain:FindFirstChild("Ignore") }
-	local ch = getMyChar()
-	if ch then table.insert(excl, ch) end
-	local res = workspace:Raycast(cam.CFrame.Position, (part.Position - cam.CFrame.Position), rayParams(excl))
-	if res == nil then return true end
-	return res.Instance:IsDescendantOf(part.Parent) or res.Instance == part
+local PART_ORDER = { "Head", "UpperTorso", "Torso", "HumanoidRootPart", "Right Arm", "Left Arm", "Right Leg", "Left Leg" }
+local PART_ROT = { "Head", "UpperTorso", "Torso", "HumanoidRootPart" }
+
+local function muzzleSees(part, inst)
+	if not part then return false end
+	local m = getRealMuzzle()
+	if not m then return false end
+	return losClearFrom(m, part.Position, inst)
 end
 
-local PART_ORDER = { "Head", "UpperTorso", "Torso", "HumanoidRootPart", "Right Arm", "Left Arm", "Right Leg", "Left Leg" }
-local function pickVisiblePart(t)
-	local cands = {}
-	if t.head then cands[#cands + 1] = t.head end
-	for _, nm in ipairs(PART_ORDER) do
-		local p = t.inst:FindFirstChild(nm)
-		if p and p:IsA("BasePart") and p ~= t.head then cands[#cands + 1] = p end
+local function pickVisiblePart(t, rot)
+	local cands, seen = {}, {}
+	local function add(p)
+		if p and p:IsA("BasePart") and not seen[p] then seen[p] = true; cands[#cands + 1] = p end
 	end
+	if rot and rot > 0 then
+		for i = 0, #PART_ROT - 1 do
+			add(t.inst and t.inst:FindFirstChild(PART_ROT[((i + rot) % #PART_ROT) + 1]))
+		end
+	end
+	if t.head then add(t.head) end
+	for _, nm in ipairs(PART_ORDER) do add(t.inst and t.inst:FindFirstChild(nm)) end
 	if #cands == 0 then return nil, false end
-	for _, p in ipairs(cands) do if hasLineOfSight(p) then return p, true end end
+	for _, p in ipairs(cands) do
+		if muzzleSees(p, t.inst) then t.visiblePart = p; return p, true end
+	end
 	return cands[1], false
 end
 
-local function losClearFrom(pos, targetPos, targetInst)
+losClearFrom = function(pos, targetPos, targetInst)
 	local d = targetPos - pos
-	if d.Magnitude < 0.6 then return false end
+	local dist = d.Magnitude
+	if dist < 0.6 then return false end
+	local dir = d / dist
 	local excl = { workspace.Terrain:FindFirstChild("Ignore"), getMyChar() }
-	local res = workspace:Raycast(pos, d, rayParams(excl))
-	if res == nil then return true end
-	if targetInst and (res.Instance == targetInst or res.Instance:IsDescendantOf(targetInst)) then return true end
+	local rp = rayParams(excl)
+	local cur, left = pos, dist
+	for _ = 1, 4 do
+		local res = workspace:Raycast(cur, dir * left, rp)
+		if res == nil then return true end
+		if targetInst and (res.Instance == targetInst or res.Instance:IsDescendantOf(targetInst)) then return true end
+		local p = res.Instance
+		local soft = (p.CanCollide == false) or (p.Transparency and p.Transparency > 0.6)
+		if not soft then return false end
+		local adv = (res.Position - cur).Magnitude + 0.06
+		left = left - adv
+		if left <= 0.2 then return true end
+		cur = res.Position + dir * 0.06
+	end
 	return false
 end
 
 local function pointIsOpen(p)
-	local op = OverlapParams.new(); op.FilterType = Enum.RaycastFilterType.Exclude; op.FilterDescendantsInstances = { getMyChar(), workspace.Terrain:FindFirstChild("Ignore") }
+	local op = OverlapParams.new()
+	op.FilterType = Enum.RaycastFilterType.Exclude
+	op.FilterDescendantsInstances = { getMyChar(), workspace.Terrain:FindFirstChild("Ignore") }
 	local parts = workspace:GetPartBoundsInRadius(p, 0.35, op)
-	for _, part in ipairs(parts) do if part.CanCollide then return false end end
+	for _, part in ipairs(parts) do
+		if part.CanCollide then return false end
+	end
 	return true
 end
 
-local function findFiringOrigin(targetPos)
+local WALL_HINTS = {
+	"wall", "floor", "ceiling", "roof", "ground", "cliff", "building",
+	"tower", "structure", "stairs", "ramp", "platform", "door", "gate",
+}
+local OFFSET_MAX_WALL = 4
+local OFFSET_MAX_OBSTACLE = 6
+
+local function isWallPart(p)
+	if not p or not p.Parent then return false end
+	if p:IsA("Terrain") then return true end
+	if not p:IsA("BasePart") then return false end
+	local sz = p.Size
+	local a, b, c = sz.X, sz.Y, sz.Z
+	local minD = math.min(a, math.min(b, c))
+	local maxD = math.max(a, math.max(b, c))
+	local midD = a + b + c - minD - maxD
+	if midD >= 12 then return true end
+	if midD >= 6 and minD <= 2.5 then return true end
+	local n = string.lower(p.Name)
+	for _, k in ipairs(WALL_HINTS) do
+		if string.find(n, k, 1, true) then return true end
+	end
+	return false
+end
+
+local function firstBlocker(from, to, targetInst)
+	local d = to - from
+	local dist = d.Magnitude
+	if dist < 0.6 then return nil, nil, true end
+	local dir = d / dist
+	local rp = rayParams({ workspace.Terrain:FindFirstChild("Ignore"), getMyChar() })
+	local cur, left = from, dist
+	for _ = 1, 4 do
+		local res = workspace:Raycast(cur, dir * left, rp)
+		if res == nil then return nil, nil, true end
+		local p = res.Instance
+		if targetInst and (p == targetInst or p:IsDescendantOf(targetInst)) then return nil, nil, true end
+		local soft = (p.CanCollide == false) or (p.Transparency and p.Transparency > 0.6)
+		if not soft then return p, res.Position, false, res.Normal end
+		local adv = (res.Position - cur).Magnitude + 0.06
+		left = left - adv
+		if left <= 0.2 then return nil, nil, true end
+		cur = res.Position + dir * 0.06
+	end
+	return nil, nil, false
+end
+
+local OFFSET_EMBED_SKIP = 1.2
+
+local function offsetPathClear(from, to)
+	local d = to - from
+	local dist = d.Magnitude
+	if dist < 0.05 then return true end
+	local dir = d / dist
+	local rp = rayParams({ workspace.Terrain:FindFirstChild("Ignore"), getMyChar() })
+	local cur, left, travelled = from, dist, 0
+	for _ = 1, 4 do
+		local res = workspace:Raycast(cur, dir * left, rp)
+		if res == nil then return true end
+		local hitI = res.Instance
+		local stepd = (res.Position - cur).Magnitude
+		travelled = travelled + stepd
+		local soft = (hitI.CanCollide == false) or (hitI.Transparency and hitI.Transparency > 0.6)
+		if not soft and travelled > OFFSET_EMBED_SKIP then return false end
+		local adv = stepd + 0.06
+		left = left - adv
+		if left <= 0.1 then return true end
+		cur = res.Position + dir * 0.06
+	end
+	return false
+end
+
+local function findSilentOffset(fromPos, targetPos, targetInst)
+	if not fromPos or not targetPos then return nil end
+	if (targetPos - fromPos).Magnitude < 1.0 then return nil end
+	local blocker, bPos, clear, bNormal = firstBlocker(fromPos, targetPos, targetInst)
+	if clear or not blocker then return nil end
+
+	local wall = isWallPart(blocker)
+	local cap
+	if wall then cap = math.min(CFG.silentWallOffset or 4, HUB.silentWallCap or 4, OFFSET_MAX_WALL)
+	else cap = math.min(CFG.silentObsOffset or 6, HUB.silentObsCap or 6, OFFSET_MAX_OBSTACLE) end
+	cap = math.max(0.8, cap)
+	local kind = wall and "wall" or "obstacle"
+
+	local function sameSide(cand)
+		if not (bPos and bNormal) then return true end
+		local n = bNormal
+		if n.Magnitude < 0.1 then return true end
+		local dm = n:Dot(fromPos - bPos)
+		if math.abs(dm) < 0.55 then return true end
+		local dc = n:Dot(cand - bPos)
+		if math.abs(dc) < 0.35 then return true end
+		return dm * dc > 0
+	end
+
+	local dirs = {}
+	local toT = (targetPos - fromPos).Unit
+	local right = toT:Cross(Vector3.new(0, 1, 0))
+	if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) end
+	right = right.Unit
+	for i = 0, 11 do
+		local a = math.rad(i * 30)
+		dirs[#dirs + 1] = (right * math.cos(a) + toT * math.sin(a)).Unit
+	end
+	local heights = { 0, 0.7, -0.7, 1.4 }
+	local step = math.max(math.min(CFG.muzzleStep or 0.5, 1.0), 0.3)
+	local hw = 1.0
+	if blocker:IsA("BasePart") then
+		local a, b, c = blocker.Size.X, blocker.Size.Y, blocker.Size.Z
+		local mid = a + b + c - math.min(a, b, c) - math.max(a, b, c)
+		hw = math.max(mid * 0.5, 0.5)
+	end
+	local need = hw + 0.7
+	local rMin = math.max(step, math.min(need, cap) - step)
+	local asc, desc = {}, {}
+	do
+		local r = rMin
+		while r < cap - 0.05 do asc[#asc + 1] = r; r = r + step end
+		asc[#asc + 1] = cap
+		r = cap
+		while r > rMin + 0.05 do desc[#desc + 1] = r; r = r - step end
+		desc[#desc + 1] = rMin
+	end
+	local budget = 150
+
+	local function attempt(radiiList, heightList)
+		for _, r in ipairs(radiiList) do
+			for _, hy in ipairs(heightList) do
+				for _, d in ipairs(dirs) do
+					if budget <= 0 then return nil end
+					budget = budget - 1
+					local cand = fromPos + d * r + Vector3.new(0, hy, 0)
+					if sameSide(cand) and offsetPathClear(fromPos, cand) then
+						if losClearFrom(cand, targetPos, targetInst) then
+							if pointIsOpen(cand) then return cand, r end
+						end
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	local p, r = attempt(asc, { 0 })
+	if p then return p, r, kind end
+	p, r = attempt(desc, heights)
+	if p then return p, r, kind end
+	return nil
+end
+
+local shotCache = { inst = nil, part = nil, at = 0, origin = nil, dist = 0, kind = "none", ok = false }
+
+resolveMuzzleShot = function(t, targetPos, part, silentRules, force)
+	if not (t and targetPos) then return nil, 0, "none", false end
+	local now = os.clock()
+	if not force and shotCache.inst == t.inst and shotCache.part == part then
+		local ttl = shotCache.ok and 0.07 or 0.35
+		if now - shotCache.at < ttl then
+			return shotCache.origin, shotCache.dist, shotCache.kind, shotCache.ok
+		end
+	end
+	local muzzle = getRealMuzzle()
+	local origin, dist, kind, ok = nil, 0, "none", false
+	if muzzle then
+		if losClearFrom(muzzle, targetPos, t.inst) then
+			origin, dist, kind, ok = muzzle, 0, "muzzle", true
+		elseif silentRules then
+			local p, d, k = findSilentOffset(muzzle, targetPos, t.inst)
+			if p then origin, dist, kind, ok = p, d, k, true end
+		else
+			local p = findFiringOrigin(targetPos)
+			if p then origin, dist, kind, ok = p, (Aim.offsetUsed or 0), "offset", true end
+		end
+	end
+	shotCache.inst, shotCache.part, shotCache.at = t.inst, part, now
+	shotCache.origin, shotCache.dist, shotCache.kind, shotCache.ok = origin, dist, kind, ok
+	return origin, dist, kind, ok
+end
+
+findFiringOrigin = function(targetPos)
 	local ch = getMyChar()
 	local root = ch and ch:FindFirstChild("HumanoidRootPart")
 	if not root or not targetPos then return nil end
 	local base = root.Position
 	local muzzle = getRealMuzzle()
 	local targetInst = Aim.target and Aim.target.inst
-	if muzzle and losClearFrom(muzzle, targetPos, targetInst) then Aim.muzzle = muzzle; Aim.offsetUsed = 0; Aim.lastOffset = nil; return nil end
+
+	if muzzle and losClearFrom(muzzle, targetPos, targetInst) then
+		Aim.muzzle = muzzle
+		Aim.offsetUsed = 0
+		Aim.lastOffset = nil
+		return nil
+	end
+
 	local escape = nil
 	if muzzle then
 		local rp = rayParams({ workspace.Terrain:FindFirstChild("Ignore"), ch })
 		local block = workspace:Raycast(muzzle, targetPos - muzzle, rp)
 		if block then
-			local n = block.Normal; n = Vector3.new(n.X, 0, n.Z)
+			local n = block.Normal
+			n = Vector3.new(n.X, 0, n.Z)
 			if n.Magnitude > 0.01 then escape = n.Unit end
 		end
 	end
+
 	local dirs = {}
 	if escape then dirs[#dirs + 1] = escape end
-	for i = 0, 7 do local a = math.rad(i * 45); dirs[#dirs + 1] = Vector3.new(math.cos(a), 0, math.sin(a)) end
+	for i = 0, 7 do
+		local a = math.rad(i * 45)
+		dirs[#dirs + 1] = Vector3.new(math.cos(a), 0, math.sin(a))
+	end
 	local heights = { 0.4, 1.2, -0.6 }
+
 	local lo = Aim.lastOffset
 	if lo then
 		local cand = base + lo.d * lo.r + Vector3.new(0, lo.hy or 0, 0)
-		if pointIsOpen(cand) and losClearFrom(cand, targetPos, targetInst) then Aim.muzzle = cand; Aim.offsetUsed = lo.r; Aim.offsetDir = lo.d; return cand end
+		if pointIsOpen(cand) and losClearFrom(cand, targetPos, targetInst) then
+			Aim.muzzle = cand
+			Aim.offsetUsed = lo.r
+			Aim.offsetDir = lo.d
+			return cand
+		end
 	end
-	local step = math.max(CFG.muzzleStep or 1.5, 0.5)
+
+	local step = math.max(CFG.muzzleStep or 0.5, 0.3)
 	local maxR = math.min(CFG.muzzleRadius, HUB.maxOffsetOK or CFG.muzzleRadius)
 	local budget = 130
 	local r = step
@@ -1179,32 +1840,72 @@ local function findFiringOrigin(targetPos)
 				if budget <= 0 then break end
 				budget = budget - 1
 				local cand = base + d * r + Vector3.new(0, hy, 0)
-				if pointIsOpen(cand) and losClearFrom(cand, targetPos, targetInst) then Aim.muzzle = cand; Aim.offsetUsed = r; Aim.offsetDir = d; Aim.lastOffset = { d = d, r = r, hy = hy }; return cand end
+				if pointIsOpen(cand) and losClearFrom(cand, targetPos, targetInst) then
+					Aim.muzzle = cand
+					Aim.offsetUsed = r
+					Aim.offsetDir = d
+					Aim.lastOffset = { d = d, r = r, hy = hy }
+					return cand
+				end
 			end
 		end
 		r = r + step
 	end
-	Aim.muzzle = nil; Aim.offsetUsed = nil
+	Aim.muzzle = nil
+	Aim.offsetUsed = nil
 	return nil
 end
 
-local function nearestVisibleMonster(maxDist)
-	local cam = workspace.CurrentCamera
-	if not cam then return nil end
-	local vp = cam.ViewportSize
-	local best, bd = nil, nil
-	for _, t in ipairs(buildTargets()) do
-		if not t.isPlayer and t.dist <= (maxDist or 250) then
-			local part = t.part or t.head or t.root
-			local onScreen = false
-			if part then
-				local sp, on = cam:WorldToViewportPoint(part.Position)
-				onScreen = on and sp.Z > 0 and sp.X >= 0 and sp.Y >= 0 and sp.X <= vp.X and sp.Y <= vp.Y
-			end
-			if part and onScreen and hasLineOfSight(part) then if not bd or t.dist < bd then bd = t.dist; best = t end end
+local silentScan = { at = 0, t = nil, part = nil, origin = nil, dist = 0, kind = "none" }
+local silentFailAt = {}
+
+local function silentTarget(maxDist)
+	local now = os.clock()
+	if now - silentScan.at < 0.1 then
+		return silentScan.t, silentScan.part, silentScan.origin, silentScan.dist, silentScan.kind
+	end
+	silentScan.at = now
+	silentScan.t, silentScan.part, silentScan.origin = nil, nil, nil
+	silentScan.dist, silentScan.kind = 0, "none"
+
+	local list = buildTargets()
+	local cand = {}
+	for _, t in ipairs(list) do
+		if not t.isPlayer and t.dist <= (maxDist or 320) and t.hum and t.hum.Health > 0 then
+			cand[#cand + 1] = t
 		end
 	end
-	return best
+	if #cand == 0 then return nil end
+	table.sort(cand, function(a, b) return a.dist < b.dist end)
+
+	local m = getRealMuzzle()
+	local rot = HUB.aimPartCycle or 0
+	for i = 1, math.min(#cand, 8) do
+		local t = cand[i]
+		local part, okv = pickVisiblePart(t, rot)
+		t.part, t.visible = part, okv
+		if okv then
+			silentScan.t, silentScan.part = t, part
+			silentScan.origin, silentScan.dist, silentScan.kind = m, 0, "muzzle"
+			return t, part, m, 0, "muzzle"
+		end
+	end
+	for i = 1, math.min(#cand, 2) do
+		local t = cand[i]
+		local part = t.part or t.head or t.root
+		local failedAt = silentFailAt[t.inst]
+		if part and not (failedAt and now - failedAt < 0.35) then
+			local o, d, k, ok = resolveMuzzleShot(t, part.Position, part, true, true)
+			if ok then
+				silentFailAt[t.inst] = nil
+				silentScan.t, silentScan.part = t, part
+				silentScan.origin, silentScan.dist, silentScan.kind = o, d, k
+				return t, part, o, d, k
+			end
+			silentFailAt[t.inst] = now
+		end
+	end
+	return nil
 end
 
 local function pickTarget(targets)
@@ -1215,12 +1916,14 @@ local function pickTarget(targets)
 	local camPos = cam.CFrame.Position
 	local look = cam.CFrame.LookVector
 	local cands = {}
+
 	local camHalf = math.rad(math.clamp(cam.FieldOfView, 1, 179)) * 0.5
 	local halfH = math.max(cam.ViewportSize.Y * 0.5, 1)
 	local angleFromPx = math.deg(math.atan(math.tan(camHalf) * (halfFov / halfH)))
 	local angleLimit = math.min(CFG.fovAngle, math.max(angleFromPx, 1))
+
 	for _, t in ipairs(targets) do
-		local allowed = t.isPlayer and CFG.aimPlayers or (not t.isPlayer and CFG.aimMonsters)
+		local allowed = t.isPlayer and CFG.aimPlayers or CFG.aimMonsters
 		if allowed then
 			local pos = (t.head or t.root).Position
 			local score
@@ -1240,18 +1943,23 @@ local function pickTarget(targets)
 			if score then cands[#cands + 1] = { t = t, s = score } end
 		end
 	end
+
 	if #cands == 0 then return nil end
 	table.sort(cands, function(a, b) return a.s < b.s end)
+
+	local rot = HUB.aimPartCycle or 0
 	local fallback
 	local limit = math.min(#cands, 5)
 	for i = 1, limit do
 		local t = cands[i].t
-		local part, visible = pickVisiblePart(t)
-		t.part = part; t.visible = visible
+		local part, visible = pickVisiblePart(t, rot)
+		t.part = part
+		t.visible = visible
 		if visible then return t end
 		if not fallback then fallback = t end
 	end
-	if CFG.visibleOnly then return nil end
+
+	if CFG.visibleOnly and not CFG.silentPacket then return nil end
 	return fallback or cands[1].t
 end
 
@@ -1271,7 +1979,28 @@ local function computeAimPoint(t, gun, part)
 	return p
 end
 
-local lastFire, lastWorld, lastItem = 0, 0, 0
+local dmgWatch = { t = 0, inst = nil, hp = nil }
+
+local function dmgWatchTick(now)
+	if not dmgWatch.inst then return end
+	if now - dmgWatch.t < 0.45 then return end
+	local inst, hp = dmgWatch.inst, dmgWatch.hp
+	dmgWatch.inst, dmgWatch.hp, dmgWatch.t = nil, nil, 0
+	local hum = inst and inst.Parent and inst:FindFirstChildOfClass("Humanoid")
+	if not (hum and hp) then return end
+	if hum.Health >= hp and hum.Health > 0 then
+		HUB.noDamage = (HUB.noDamage or 0) + 1
+		HUB.aimPartCycle = ((HUB.aimPartCycle or 0) + 1) % #PART_ROT
+		shotCache.at, shotCache.ok = 0, false
+		Aim.lastOffset = nil
+		if (HUB.noDamage % 4) == 0 then toast("连续未命中 · 自动切换瞄准部位", 2) end
+	end
+end
+
+local lastFire = 0
+local lastWorld = 0
+local lastItem = 0
+
 local function onRender(dt)
 	local now = os.clock()
 	HUB.fps = HUB.fps and (HUB.fps * 0.9 + (1 / math.max(dt, 0.001)) * 0.1) or (1 / math.max(dt, 0.001))
@@ -1280,48 +2009,92 @@ local function onRender(dt)
 		local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
 		local alive = hum and hum.Health > 0
 		local gun = getEquippedGun()
-		local wantWorld = CFG.noFog or CFG.mapGlow
-		if wantWorld ~= HUB.worldOn then HUB.worldOn = wantWorld; applyWorld()
-		elseif wantWorld and now - lastWorld > 1 then lastWorld = now; applyWorld() end
 
-		if CFG.changeSpeed or CFG.changeJump or CFG.infStamina then
+		pcall(dmgWatchTick, now)
+
+		if now - (HUB.netCheckAt or 0) > 3 then
+			HUB.netCheckAt = now
+			local okN, m = pcall(require, RS.Assets.Modules.Network)
+			if okN and type(m) == "table" and NB and NB.net ~= m then
+				Network = nil
+				NB = nil
+				genv.__BTRHUB_NET = nil
+				installNetHooks()
+				if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
+			end
+		end
+
+		local wantWorld = CFG.noFog or CFG.mapGlow
+		if wantWorld ~= HUB.worldOn then
+			HUB.worldOn = wantWorld
+			applyWorld()
+		elseif wantWorld and now - lastWorld > 1 then
+			lastWorld = now
+			applyWorld()
+		end
+
+		if CFG.infStamina then
 			installSpeedHook()
+			if now - staminaGui.last > 2 or not staminaGui.bar or not staminaGui.bar.Parent then
+				staminaGui.last = now
+				refreshStaminaGui()
+			end
+			if staminaGui.bar and staminaGui.bar:IsA("GuiObject") then
+				staminaGui.bar.Size = UDim2.new(1, 0, 1, 0)
+			end
+			if staminaGui.vig and staminaGui.vig:IsA("ImageLabel") then
+				staminaGui.vig.ImageTransparency = 1
+			end
 		else
 			removeSpeedHook()
 		end
-		
-		if CFG.infStamina then
-			if now - staminaGui.last > 2 or not staminaGui.bar or not staminaGui.bar.Parent then staminaGui.last = now; refreshStaminaGui() end
-			if staminaGui.bar and staminaGui.bar:IsA("GuiObject") then staminaGui.bar.Size = UDim2.new(1, 0, 1, 0) end
-			if staminaGui.vig and staminaGui.vig:IsA("ImageLabel") then staminaGui.vig.ImageTransparency = 1 end
-		end
-		
+
 		if hum and alive then
-			if CFG.changeSpeed and hum.WalkSpeed ~= CFG.walkSpeed then hum.WalkSpeed = CFG.walkSpeed end
-			if CFG.changeJump and hum.JumpPower ~= CFG.jumpPower then hum.JumpPower = CFG.jumpPower end
+			if CFG.customWalkSpeed and hum.WalkSpeed ~= CFG.walkSpeed then
+				hum.WalkSpeed = CFG.walkSpeed
+			end
+			if CFG.customJumpPower and hum.JumpPower ~= CFG.jumpPower then
+				hum.JumpPower = CFG.jumpPower
+			end
 		end
 
 		if CFG.noFall and hum and alive and myChar then
 			local root = myChar:FindFirstChild("HumanoidRootPart")
-			if root and hum.FloorMaterial == Enum.Material.Air then
-				local v = root.AssemblyLinearVelocity
-				if v.Y < -CFG.fallSpeed then root.AssemblyLinearVelocity = Vector3.new(v.X, -CFG.fallSpeed, v.Z) end
+			if root then
+				if hum.FloorMaterial == Enum.Material.Air then
+					local v = root.AssemblyLinearVelocity
+					if v.Y < -CFG.fallSpeed then
+						root.AssemblyLinearVelocity = Vector3.new(v.X, -CFG.fallSpeed, v.Z)
+					end
+				end
 			end
 		end
-		if CFG.noShield and now - lastShieldScan > 0.5 then lastShieldScan = now; shieldCache = scanShields() end
-		if now - lastMonsterScan > 1 then lastMonsterScan = now; monsterCache = scanMonsters() end
+
+		if CFG.noShield and now - lastShieldScan > 0.5 then
+			lastShieldScan = now
+			shieldCache = scanShields()
+		end
+
+		if now - lastMonsterScan > 1 then
+			lastMonsterScan = now
+			monsterCache = scanMonsters()
+		end
 		local targets = buildTargets()
 
 		if hasDrawing then
 			hideStale(now)
 			toastTick()
+			silentHudTick(CFG.silentPacket == true, getEquippedGun())
 			used = {}
 			for _, t in ipairs(targets) do
 				local show = (t.isPlayer and CFG.espPlayers) or ((not t.isPlayer) and CFG.espMonsters)
 				if t.isPlayer and t.friend and CFG.espFriends then show = true end
 				if show then used[t.inst] = true; drawTarget(t) end
 			end
-			if CFG.espItems and now - lastItem > 0.35 then lastItem = now; scanItems() end
+			if CFG.espItems and now - lastItem > 0.35 then
+				lastItem = now
+				scanItems()
+			end
 			if CFG.espItems then
 				local cam = workspace.CurrentCamera
 				for _, it in ipairs(itemCache) do
@@ -1331,9 +2104,21 @@ local function onRender(dt)
 						local sp, on = w2s(it.part.Position)
 						local d = (it.part.Position - cam.CFrame.Position).Magnitude
 						if on and d <= CFG.maxDist then
-							e.box.Visible = true; e.box.Color = CFG.colorItem; e.box.Position = Vector2.new(sp.X - 3, sp.Y - 3); e.box.Size = Vector2.new(6, 6); setP(e.box, "Thickness", 1)
-							e.name.Visible = true; e.name.Text = it.label; e.name.Color = CFG.colorItem; e.name.Position = Vector2.new(sp.X, sp.Y - 14); setP(e.name, "TextSize", 11)
-							e.dist.Visible = true; e.dist.Text = string.format("[%d]", math.floor(d)); e.dist.Color = CFG.colorItem; e.dist.Position = Vector2.new(sp.X, sp.Y + 6); setP(e.dist, "TextSize", 11)
+							e.box.Visible = true
+							e.box.Color = CFG.colorItem
+							e.box.Position = Vector2.new(sp.X - 3, sp.Y - 3)
+							e.box.Size = Vector2.new(6, 6)
+							setP(e.box, "Thickness", 1)
+							e.name.Visible = true
+							e.name.Text = it.label
+							e.name.Color = CFG.colorItem
+							e.name.Position = Vector2.new(sp.X, sp.Y - 14)
+							setP(e.name, "TextSize", 11)
+							e.dist.Visible = true
+							e.dist.Text = string.format("[%d]", math.floor(d))
+							e.dist.Color = CFG.colorItem
+							e.dist.Position = Vector2.new(sp.X, sp.Y + 6)
+							setP(e.dist, "TextSize", 11)
 						end
 					end
 				end
@@ -1344,60 +2129,118 @@ local function onRender(dt)
 					if it.inst.Parent then
 						if not (it.part and it.part.Parent) then
 							it.part = it.inst:FindFirstChildWhichIsA("BasePart", true)
-							if not it.part then local okp, pv = pcall(function() return it.inst:GetPivot().Position end); if okp then it.pivot = pv end end
+							if not it.part then
+								local okp, pv = pcall(function() return it.inst:GetPivot().Position end)
+								if okp then it.pivot = pv end
+							end
 						end
 						if it.att and not it.att.Parent then it.att = nil end
 						local e = getPool(it.inst)
-						local pos = (it.att and it.att.Parent and it.att.WorldPosition) or (it.part and it.part.Parent and it.part.Position) or it.pivot
+						local pos = (it.att and it.att.Parent and it.att.WorldPosition)
+							or (it.part and it.part.Parent and it.part.Position) or it.pivot
 						if e and pos then
 							local sp, on = w2s(pos)
 							local d = (pos - cam2.CFrame.Position).Magnitude
 							if on and d <= CFG.maxDist then
-								e.box.Visible = true; e.box.Color = CFG.colorAmmo; e.box.Position = Vector2.new(sp.X - 5, sp.Y - 5); e.box.Size = Vector2.new(10, 10); setP(e.box, "Thickness", 2)
-								e.name.Visible = true; e.name.Text = it.label or "弹药"; e.name.Color = CFG.colorAmmo; e.name.Position = Vector2.new(sp.X, sp.Y - 17); setP(e.name, "TextSize", 12)
-								e.dist.Visible = true; e.dist.Text = string.format("[%d]", math.floor(d)); e.dist.Color = CFG.colorAmmo; e.dist.Position = Vector2.new(sp.X, sp.Y + 8); setP(e.dist, "TextSize", 11)
+								e.box.Visible = true
+								e.box.Color = CFG.colorAmmo
+								e.box.Position = Vector2.new(sp.X - 5, sp.Y - 5)
+								e.box.Size = Vector2.new(10, 10)
+								setP(e.box, "Thickness", 2)
+								e.name.Visible = true
+								e.name.Text = it.label or "弹药"
+								e.name.Color = CFG.colorAmmo
+								e.name.Position = Vector2.new(sp.X, sp.Y - 17)
+								setP(e.name, "TextSize", 12)
+								e.dist.Visible = true
+								e.dist.Text = string.format("[%d]", math.floor(d))
+								e.dist.Color = CFG.colorAmmo
+								e.dist.Position = Vector2.new(sp.X, sp.Y + 8)
+								setP(e.dist, "TextSize", 11)
 							end
 						end
 					end
 				end
 			end
-		else espHighlight(targets) end
+		else
+			espHighlight(targets)
+		end
 
 		local aimTarget
 		if CFG.aimbot and alive then aimTarget = pickTarget(targets) end
+
 		if CFG.aimbot and aimTarget and gun then
 			Aim.target = aimTarget
 			Aim.gunCfg = getGunConfig(gun)
-			local part, visible = aimTarget.part, aimTarget.visible
+			local part = aimTarget.part
+			local visible = aimTarget.visible
 			if part == nil then
-				if CFG.aimSmartPart then part, visible = pickVisiblePart(aimTarget)
-				else part = (CFG.aimPart == "Head" and aimTarget.head) or aimTarget.root; visible = hasLineOfSight(part) end
-				aimTarget.part, aimTarget.visible = part, visible
-			end
-			Aim.part, Aim.occluded, Aim.point = part, not visible, computeAimPoint(aimTarget, gun, part)
-			if Aim.forceOrigin then Aim.origin = Aim.forceOrigin
-			elseif CFG.muzzleOffset then
-				if now - Aim.muzzleAt > 0.1 then
-					Aim.muzzleAt = now
-					local realM = getRealMuzzle()
-					local blocked = realM and (not losClearFrom(realM, Aim.point, aimTarget.inst))
-					Aim.muzzleBlocked = blocked and true or false
-					if blocked then Aim.origin = findFiringOrigin(Aim.point)
-					else Aim.origin = nil; Aim.muzzle = realM; Aim.offsetUsed = 0 end
+				if CFG.aimSmartPart then part, visible = pickVisiblePart(aimTarget, HUB.aimPartCycle or 0)
+				else
+					part = (CFG.aimPart == "Head" and aimTarget.head) or aimTarget.root
+					visible = muzzleSees(part, aimTarget.inst)
 				end
-			else Aim.origin = nil; Aim.muzzleBlocked = false end
+				aimTarget.part = part
+				aimTarget.visible = visible
+			end
+			Aim.part = part
+			Aim.occluded = not visible
+			Aim.point = computeAimPoint(aimTarget, gun, part)
+			if Aim.forceOrigin then
+				Aim.origin = Aim.forceOrigin
+				Aim.muzzle = Aim.forceOrigin
+				Aim.offsetUsed = 0
+				Aim.offsetKind = "force"
+				Aim.shotOK = true
+			elseif CFG.muzzleOffset or CFG.silentPacket then
+				if now - Aim.muzzleAt > 0.07 then
+					Aim.muzzleAt = now
+					local o, d, k, ok = resolveMuzzleShot(aimTarget, Aim.point, part, CFG.silentPacket == true)
+					local dd = d or 0
+					Aim.shotOK = ok == true
+					Aim.shotDist = dd
+					if ok then
+						Aim.muzzle = o
+						Aim.offsetUsed = dd
+						Aim.offsetKind = k
+						Aim.muzzleBlocked = dd > 0
+						Aim.origin = (dd > 0) and o or nil
+					else
+						Aim.muzzle = nil
+						Aim.offsetUsed = nil
+						Aim.offsetKind = "none"
+						Aim.muzzleBlocked = true
+						Aim.origin = nil
+					end
+				end
+			else
+				Aim.origin = nil
+				Aim.muzzle = getRealMuzzle()
+				Aim.offsetUsed = 0
+				Aim.offsetKind = "muzzle"
+				Aim.muzzleBlocked = not visible
+				Aim.shotOK = visible == true
+			end
 			if not CFG.silent then
 				local aimPart = (CFG.aimPart == "Head" and aimTarget.head) or aimTarget.root
 				local cam = workspace.CurrentCamera
 				if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, aimPart.Position) end
 			end
-			STATS.target = aimTarget.label .. " " .. math.floor(aimTarget.dist) .. "m" .. (visible and "" or " (遮挡)")
+			local extra = ""
+			if Aim.shotOK and (Aim.offsetUsed or 0) > 0 then
+				extra = string.format(" 偏移%.1f(%s)", Aim.offsetUsed, tostring(Aim.offsetKind or "?"))
+			end
+			STATS.target = aimTarget.label .. " " .. math.floor(aimTarget.dist) .. "m" ..
+				(visible and "" or " (枪口被挡)") .. extra
 		else
-			Aim.point, Aim.target, Aim.gunCfg, Aim.occluded, Aim.origin, Aim.muzzle, Aim.muzzleBlocked, STATS.target = nil, nil, nil, false, nil, nil, false, "-"
+			Aim.point = nil; Aim.target = nil; Aim.gunCfg = nil; Aim.occluded = false
+			Aim.origin = nil; Aim.muzzle = nil; Aim.offsetUsed = nil; Aim.offsetKind = nil
+			Aim.muzzleBlocked = false; Aim.shotOK = false; Aim.shotDist = 0
+			STATS.target = "-"
 		end
 
 		local wantFire = CFG.autoFire and alive and gun and aimTarget ~= nil
-		if wantFire and not CFG.packetMode and Aim.occluded and not Aim.origin then
+		if wantFire and not Aim.shotOK then
 			wantFire = false
 		end
 		if wantFire and Aim.origin and not Aim.hadOrigin then lastFire = 0 end
@@ -1407,1212 +2250,2068 @@ local function onRender(dt)
 			if clip ~= nil and clip <= 0 then wantFire = false end
 			if gun:GetAttribute("Reloading") == true then wantFire = false end
 		end
+
 		if CFG.silentPacket and alive and gun then
 			local cfgP = getGunConfig(gun)
-			local pT = nearestVisibleMonster(320) or aimTarget
-			local clipP = gun:GetAttribute("ClipCurrent")
-			if pT and cfgP and clipP ~= nil and clipP > 0 then
-				local intervalP = 0.12
-				if cfgP.fire then intervalP = math.max(cfgP.fire.fireDelay or 0.12, 0.03) end
-				if now - lastFire >= intervalP then
-					lastFire = now
-					if not aimTarget then local ap = pT.part or pT.head or pT.root; Aim.point = ap and ap.Position; Aim.gunCfg = cfgP; Aim.target = pT end
-					HUB.silentPacketShots = (HUB.silentPacketShots or 0) + 1
-					packetShot(gun, cfgP, pT)
+			local sa = ensureSilentAmmo(gun)
+			local pT, pPart, pOrigin, pDist, pKind = nil, nil, nil, 0, "none"
+			if aimTarget and Aim.shotOK and Aim.part then
+				pT, pPart = aimTarget, Aim.part
+				pOrigin, pDist, pKind = Aim.muzzle, Aim.offsetUsed or 0, Aim.offsetKind or "muzzle"
+			else
+				pT, pPart, pOrigin, pDist, pKind = silentTarget(320)
+			end
+			local fired = 0
+			if sa.clip <= 0 and not HUB.reloadBusy then
+				HUB.reloadBusy = true
+				HUB.reloadAt = now
+				HUB.reloadNotified = true
+				local N = getNetwork()
+				if N then
+					pcall(function() N:FireServer("reload", gun, cfgP, "register") end)
+					task.spawn(function()
+						for _ = 1, 10 do
+							task.wait(0.45)
+							if not gun.Parent then break end
+							local clip = gun:GetAttribute("ClipCurrent")
+							if type(clip) == "number" and clip > 0 then break end
+							pcall(function() N:FireServer("reload", gun, cfgP, "reloaded") end)
+						end
+						HUB.reloadBusy = false
+					end)
+				else
+					HUB.reloadBusy = false
 				end
+				toast("Ragebot · 弹夹空了，自动换弹", 1.6)
+			end
+			if pT and pPart and cfgP and sa.clip > 0 and (not pT.hum or pT.hum.Health > 0) then
+				local origin = (typeof(pOrigin) == "Vector3") and pOrigin or nil
+				local od = pDist or 0
+				local okShot = origin ~= nil and losClearFrom(origin, pPart.Position, pT.inst)
+				if not okShot then
+					local o2, d2, k2, ok2 = resolveMuzzleShot(pT, pPart.Position, pPart, true, true)
+					if ok2 then origin, od, pKind, okShot = o2, d2 or 0, k2, true end
+				end
+				if not okShot then
+					HUB.silentAcc = 0
+					HUB.silentIdle = (HUB.silentIdle or 0) + 1
+				else
+					local intervalP = gunFireInterval(cfgP)
+					HUB.fireInterval = intervalP
+					HUB.silentAcc = (HUB.silentAcc or 0) + (dt or 0)
+					local burst = 0
+					while HUB.silentAcc >= intervalP and burst < 8 and sa.clip > 0 do
+						HUB.silentAcc = HUB.silentAcc - intervalP
+						burst = burst + 1
+						fired = fired + 1
+						Aim.point = pPart.Position
+						Aim.gunCfg = cfgP
+						Aim.target = pT
+						Aim.part = pPart
+						Aim.muzzle = origin
+						Aim.offsetUsed = od
+						Aim.offsetKind = (od > 0) and (pKind or "obstacle") or "muzzle"
+						Aim.origin = origin
+						Aim.packetMuzzle = origin
+						Aim.packetTarget = pT.inst
+						Aim.shotOK = true
+						Aim.shotDist = od
+						lastFire = now
+						HUB.silentPacketShots = (HUB.silentPacketShots or 0) + 1
+						local firesBefore = HUB.ourCasts or 0
+						local clipBefore = gun:GetAttribute("ClipCurrent")
+						local useReal = (CFG.silentReal or HUB.silentFallbackReal) and not HUB.silentBypass[gun.Name]
+						if useReal then
+							sendMouse(true)
+							task.delay(0.05, function() pcall(function() sendMouse(false) end) end)
+							local gunName = gun.Name
+							if not HUB.silentBypass[gunName] then
+								task.delay(0.2, function()
+									local after = gun.Parent and gun:GetAttribute("ClipCurrent")
+									local consumed = (type(clipBefore) == "number" and type(after) == "number")
+										and (after < clipBefore) or false
+									if (HUB.ourCasts or 0) > firesBefore then
+										HUB.silentNoCast[gunName] = 0
+									elseif consumed then
+										HUB.silentNoCast[gunName] = (HUB.silentNoCast[gunName] or 0) + 1
+										if HUB.silentNoCast[gunName] >= 3 and not HUB.silentBypass[gunName] then
+											HUB.silentBypass[gunName] = true
+											HUB.silentBypassHits = (HUB.silentBypassHits or 0) + 1
+											toast("该枪械绕过弹道层 · 已自动改用命中包", 3)
+										end
+									end
+								end)
+							end
+						else
+							packetShot(gun, cfgP, pT, pPart)
+						end
+					end
+					if fired > 0 and not dmgWatch.inst then
+						dmgWatch.inst = pT.inst
+						dmgWatch.hp = pT.hum and pT.hum.Health or nil
+						dmgWatch.t = now
+					end
+					local capAcc = intervalP * 4
+					if HUB.silentAcc > capAcc then HUB.silentAcc = capAcc end
+				end
+			else
+				HUB.silentAcc = 0
+			end
+			if not CFG.silentReal and not HUB.packetWarned
+				and (HUB.packetTries or 0) >= 15 and (HUB.packetOK or 0) == 0 then
+				HUB.packetWarned = true
+				toast("发包一直被服务器拒绝 · 需要的话自己开「真实Ragebot」", 4)
+			end
+			if (HUB.packetOK or 0) > 0 then
+				HUB.packetWarned = false
+				HUB.silentFallbackReal = false
 			end
 			wantFire = false
 		end
+
+		if not CFG.silentPacket and HUB.silentFallbackReal and not CFG.packetMode then
+			HUB.silentFallbackReal = false
+		end
+
 		if CFG.packetMode and alive and gun then
-			local pTarget = aimTarget or nearestVisibleMonster(250)
+			local pTarget, pPart, pOrigin, pDist, pKind = nil, nil, nil, 0, "none"
+			if aimTarget and Aim.shotOK then
+				pTarget, pPart = aimTarget, Aim.part
+				pOrigin, pDist, pKind = Aim.muzzle, Aim.offsetUsed or 0, Aim.offsetKind or "muzzle"
+			else
+				pTarget, pPart, pOrigin, pDist, pKind = silentTarget(250)
+			end
 			local cfg = getGunConfig(gun)
 			local clip = gun:GetAttribute("ClipCurrent")
 			local reloading = gun:GetAttribute("Reloading") == true
-			if not pTarget and now - (HUB.silentIdleAt or 0) > 0.5 then HUB.silentIdleAt = now; HUB.silentIdle = (HUB.silentIdle or 0) + 1 end
-			if pTarget and cfg then
-				if not aimTarget then local ap = pTarget.part or pTarget.head or pTarget.root; Aim.point = ap and ap.Position; Aim.gunCfg = cfg; Aim.target = pTarget; HUB.packetShots = (HUB.packetShots or 0) end
+			if not pTarget and now - (HUB.silentIdleAt or 0) > 0.5 then
+				HUB.silentIdleAt = now
+				HUB.silentIdle = (HUB.silentIdle or 0) + 1
+			end
+			if pTarget and cfg and pPart then
+				Aim.point = pPart.Position
+				Aim.gunCfg = cfg
+				Aim.target = pTarget
+				Aim.part = pPart
+				Aim.muzzle = pOrigin
+				Aim.offsetUsed = pDist or 0
+				Aim.offsetKind = ((pDist or 0) > 0) and (pKind or "obstacle") or "muzzle"
+				Aim.origin = ((pDist or 0) > 0) and pOrigin or nil
+				Aim.packetMuzzle = pOrigin
+				Aim.packetTarget = pTarget.inst
+				Aim.shotOK = true
+				Aim.shotDist = pDist or 0
+				HUB.packetShots = (HUB.packetShots or 0)
 				if clip ~= nil and clip <= 0 then
 					if not reloading and now - (HUB.reloadAt or 0) > 1.0 then
-						HUB.reloadAt = now; HUB.reloadNotified = true
+						HUB.reloadAt = now
+						HUB.reloadNotified = true
 						local N = getNetwork()
 						if N then pcall(function() N:FireServer("reload", gun, cfg, "register") end) end
 						toast("弹匣打空 · 正在自动换弹", 2.2)
 					end
 				elseif not reloading then
-					if HUB.reloadNotified and clip and clip > 0 then HUB.reloadNotified = false; toast("换弹完成 · 继续射击", 1.6) end
-					local interval = 0.12
-					if cfg.fire then interval = math.max(cfg.fire.fireDelay or 0.12, 0.03) end
+					if HUB.reloadNotified and clip and clip > 0 then
+						HUB.reloadNotified = false
+						toast("换弹完成 · 继续射击", 1.6)
+					end
+					local interval = gunFireInterval(cfg)
 					if now - lastFire >= interval then
-						lastFire = now; HUB.packetShots = (HUB.packetShots or 0) + 1
-						sendMouse(true); task.delay(0.045, function() sendMouse(false) end)
+						lastFire = now
+						HUB.packetShots = (HUB.packetShots or 0) + 1
+						sendMouse(true)
+						task.delay(0.045, function() sendMouse(false) end)
 					end
 				end
 			end
 			wantFire = false
 		end
+
 		if wantFire then
 			local cfg = getGunConfig(gun)
 			local interval = 0.12
 			if cfg and cfg.fire then interval = math.max(cfg.fire.fireDelay or 0.12, 0.03) end
 			if now - lastFire >= interval then
 				lastFire = now
-				if not Fire.down then mouseDown(); task.delay(0.06, function() if CFG.autoFire then mouseUp() end end) end
+				if not Fire.down then
+					mouseDown()
+					task.delay(0.06, function()
+						if CFG.autoFire then mouseUp() end
+					end)
+				end
 			end
-		else mouseUp() end
+		else
+			mouseUp()
+		end
+
 		if fovCircle then
 			local cam = workspace.CurrentCamera
 			if CFG.aimbot and cam then
 				local vp = cam.ViewportSize
-				fovCircle.Visible = true; fovCircle.Position = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
+				fovCircle.Visible = true
+				fovCircle.Position = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
 				local r = CFG.fov * 0.5
 				if r ~= r then r = 100 end
 				local maxR = math.min(vp.X, vp.Y) * 0.47
 				fovCircle.Radius = math.clamp(r, 6, maxR)
-				if not aimTarget then fovCircle.Color = Color3.fromRGB(255, 255, 255)
-				elseif not Aim.occluded then fovCircle.Color = Color3.fromRGB(90, 255, 120)
-				else fovCircle.Color = Color3.fromRGB(255, 70, 70) end
-			else fovCircle.Visible = false end
+				if not aimTarget then
+					fovCircle.Color = Color3.fromRGB(255, 255, 255)
+				elseif not Aim.shotOK then
+					fovCircle.Color = Color3.fromRGB(255, 70, 70)
+				elseif (Aim.offsetUsed or 0) <= 0 then
+					fovCircle.Color = Color3.fromRGB(90, 255, 120)
+				else
+					fovCircle.Color = Color3.fromRGB(90, 200, 255)
+				end
+			else
+				fovCircle.Visible = false
+			end
 		end
 	end)
-	if not ok and not HUB.warned then HUB.warned = true; warn("[BTR-HUB] loop error: " .. tostring(err)) end
+	if not ok and not HUB.warned then
+		HUB.warned = true
+		warn("[BTR-HUB] loop error: " .. tostring(err))
+	end
 end
-table.insert(HUB.conns, RunService.RenderStepped:Connect(onRender))
 
---============================================================================
--- UI 架构及优化
---============================================================================
+table.insert(HUB.conns, Run.RenderStepped:Connect(onRender))
+
 local DynamicContext = {
-	ActiveToggles = {}, ActiveSliders = {}, TextElements = {}, BorderElements = {},
-	CurrentTab = nil, TabSwitchThread = nil, IsSubCardActive = true, GlobalAudio = nil,
-	CurrentVolume = 2, BgPhase = math.random() * 100, StrokeRotation = 0
+	ActiveToggles = {},
+	ActiveSliders = {},
+	TextElements = {},
+	BorderElements = {},
+	CurrentTab = "",
+	TabSwitchThread = nil,
+	TabButtons = {},
+	IsSubCardActive = true,
+	GlobalAudio = nil,
+	CurrentVolume = 2,
+	BgPhase = math.random() * 100,
+	StrokeRotation = 0,
+	StatusLabel = nil,
+	ScreenGui = nil,
 }
 
-local PalettePresets = {
-	["Bubblegum"] = { Primary = Color3.fromRGB(255, 242, 248), Secondary = Color3.fromRGB(248, 240, 255), Accent = Color3.fromRGB(240, 250, 255), LogoAccent = Color3.fromRGB(255, 70, 135), ActiveColor = Color3.fromRGB(255, 90, 155), TextColor = Color3.fromRGB(35, 25, 40), SubTextColor = Color3.fromRGB(120, 100, 130), BorderColor = Color3.fromRGB(255, 215, 235) },
-	["Dark Pastel"] = { Primary = Color3.fromRGB(235, 230, 248), Secondary = Color3.fromRGB(225, 235, 255), Accent = Color3.fromRGB(242, 235, 250), LogoAccent = Color3.fromRGB(135, 90, 210), ActiveColor = Color3.fromRGB(145, 100, 225), TextColor = Color3.fromRGB(30, 25, 45), SubTextColor = Color3.fromRGB(110, 105, 130), BorderColor = Color3.fromRGB(215, 205, 240) },
-	["Ocean Mist"] = { Primary = Color3.fromRGB(230, 250, 255), Secondary = Color3.fromRGB(238, 255, 253), Accent = Color3.fromRGB(240, 248, 255), LogoAccent = Color3.fromRGB(10, 150, 245), ActiveColor = Color3.fromRGB(20, 170, 255), TextColor = Color3.fromRGB(20, 40, 55), SubTextColor = Color3.fromRGB(90, 115, 135), BorderColor = Color3.fromRGB(195, 238, 255) },
-	["Sunset Glow"] = { Primary = Color3.fromRGB(255, 240, 235), Secondary = Color3.fromRGB(255, 248, 228), Accent = Color3.fromRGB(255, 240, 250), LogoAccent = Color3.fromRGB(255, 85, 65), ActiveColor = Color3.fromRGB(255, 105, 85), TextColor = Color3.fromRGB(45, 25, 25), SubTextColor = Color3.fromRGB(135, 100, 100), BorderColor = Color3.fromRGB(255, 212, 200) },
-	["Mint Fresh"] = { Primary = Color3.fromRGB(235, 255, 245), Secondary = Color3.fromRGB(240, 255, 250), Accent = Color3.fromRGB(245, 255, 248), LogoAccent = Color3.fromRGB(15, 195, 130), ActiveColor = Color3.fromRGB(25, 215, 140), TextColor = Color3.fromRGB(20, 45, 30), SubTextColor = Color3.fromRGB(90, 125, 100), BorderColor = Color3.fromRGB(205, 250, 225) },
-	["Lavender Dream"] = { Primary = Color3.fromRGB(242, 235, 255), Secondary = Color3.fromRGB(232, 225, 250), Accent = Color3.fromRGB(250, 240, 255), LogoAccent = Color3.fromRGB(170, 105, 255), ActiveColor = Color3.fromRGB(185, 120, 255), TextColor = Color3.fromRGB(45, 30, 65), SubTextColor = Color3.fromRGB(125, 105, 150), BorderColor = Color3.fromRGB(220, 200, 250) },
-	["Cherry Red"] = { Primary = Color3.fromRGB(255, 235, 238), Secondary = Color3.fromRGB(255, 225, 230), Accent = Color3.fromRGB(255, 242, 245), LogoAccent = Color3.fromRGB(225, 35, 75), ActiveColor = Color3.fromRGB(240, 55, 90), TextColor = Color3.fromRGB(65, 20, 30), SubTextColor = Color3.fromRGB(145, 90, 105), BorderColor = Color3.fromRGB(250, 190, 200) },
-	["Cyber Blue"] = { Primary = Color3.fromRGB(225, 245, 255), Secondary = Color3.fromRGB(220, 235, 255), Accent = Color3.fromRGB(235, 250, 255), LogoAccent = Color3.fromRGB(0, 145, 255), ActiveColor = Color3.fromRGB(0, 175, 255), TextColor = Color3.fromRGB(15, 35, 65), SubTextColor = Color3.fromRGB(80, 115, 155), BorderColor = Color3.fromRGB(170, 220, 255) },
-	["Golden Cream"] = { Primary = Color3.fromRGB(255, 248, 225), Secondary = Color3.fromRGB(255, 240, 205), Accent = Color3.fromRGB(255, 252, 235), LogoAccent = Color3.fromRGB(235, 165, 25), ActiveColor = Color3.fromRGB(245, 180, 35), TextColor = Color3.fromRGB(60, 45, 20), SubTextColor = Color3.fromRGB(145, 120, 75), BorderColor = Color3.fromRGB(245, 215, 145) },
-	["Forest Calm"] = { Primary = Color3.fromRGB(230, 250, 235), Secondary = Color3.fromRGB(220, 245, 225), Accent = Color3.fromRGB(240, 255, 242), LogoAccent = Color3.fromRGB(35, 155, 80), ActiveColor = Color3.fromRGB(40, 180, 90), TextColor = Color3.fromRGB(20, 55, 30), SubTextColor = Color3.fromRGB(85, 125, 95), BorderColor = Color3.fromRGB(175, 230, 185) },
-	["Rose Gold"] = { Primary = Color3.fromRGB(255, 238, 235), Secondary = Color3.fromRGB(250, 225, 220), Accent = Color3.fromRGB(255, 245, 242), LogoAccent = Color3.fromRGB(205, 105, 115), ActiveColor = Color3.fromRGB(225, 125, 135), TextColor = Color3.fromRGB(65, 30, 35), SubTextColor = Color3.fromRGB(145, 100, 105), BorderColor = Color3.fromRGB(240, 195, 190) }
-}
-local PaletteNames = { "泡泡糖", "暗黑柔和", "海洋迷雾", "日落余晖", "薄荷清鲜", "薰衣草梦", "樱桃红", "赛博蓝", "金奶油", "森林宁静", "玫瑰金" }
-
-local function GeneratePalette(preset)
-	local p, s, a, white = preset.Primary, preset.Secondary, preset.Accent, Color3.fromRGB(255, 255, 255)
-	return { p:Lerp(white, 0.2), p:Lerp(s, 0.15), s:Lerp(white, 0.25), s:Lerp(a, 0.2), a:Lerp(white, 0.2) }
-end
-
-local function ApplyPalette(selected)
-	local p = PalettePresets[selected]
-	if not p then
-		for name, val in pairs(PalettePresets) do
-			if name == selected then p = val; break end
+pcall(function()
+	for _, cont in ipairs({ CoreGui, LP:FindFirstChildOfClass("PlayerGui") }) do
+		if cont then
+			for _, child in ipairs(cont:GetChildren()) do
+				if child:IsA("ScreenGui") and (string.sub(child.Name, 1, 5) == "__btr" or child.Name == "LinkCcUI") then
+					pcall(function() child:Destroy() end)
+				end
+			end
 		end
 	end
-	if not p then return end
-	DynamicContext.CurrentPreset = p
-	DynamicContext.TargetPalette = GeneratePalette(p)
-	DynamicContext.TargetLogoColor = p.LogoAccent
-	DynamicContext.TargetActiveColor = p.ActiveColor
-	DynamicContext.TargetTextColor = p.TextColor
-	DynamicContext.TargetSubTextColor = p.SubTextColor
-	DynamicContext.TargetBorderColor = p.BorderColor
+end)
+
+local function safeTween(obj, info, prop)
+	if obj and obj.Parent then
+		local t = Tween:Create(obj, info, prop)
+		if t then t:Play() end
+		return t
+	end
+	return nil
 end
 
-local defaultPreset = PalettePresets["Ocean Mist"]
-DynamicContext.CurrentPreset = defaultPreset
-DynamicContext.CurrentPalette = GeneratePalette(defaultPreset)
-DynamicContext.TargetPalette = DynamicContext.CurrentPalette
-DynamicContext.CurrentLogoColor = defaultPreset.LogoAccent
-DynamicContext.TargetLogoColor = DynamicContext.CurrentLogoColor
-DynamicContext.CurrentActiveColor = defaultPreset.ActiveColor
-DynamicContext.TargetActiveColor = DynamicContext.CurrentActiveColor
-DynamicContext.CurrentTextColor = defaultPreset.TextColor
-DynamicContext.TargetTextColor = DynamicContext.CurrentTextColor
-DynamicContext.CurrentSubTextColor = defaultPreset.SubTextColor
-DynamicContext.TargetSubTextColor = DynamicContext.CurrentSubTextColor
-DynamicContext.CurrentBorderColor = defaultPreset.BorderColor
-DynamicContext.TargetBorderColor = DynamicContext.CurrentBorderColor
+local UISuccess, UIErr = pcall(function()
+	local PalettePresets = {
+		["Bubblegum"] = { Primary = Color3.fromRGB(255, 242, 248), Secondary = Color3.fromRGB(248, 240, 255),
+			Accent = Color3.fromRGB(240, 250, 255), LogoAccent = Color3.fromRGB(255, 70, 135),
+			ActiveColor = Color3.fromRGB(255, 90, 155), TextColor = Color3.fromRGB(35, 25, 40),
+			SubTextColor = Color3.fromRGB(120, 100, 130), BorderColor = Color3.fromRGB(255, 215, 235) },
+		["Dark Pastel"] = { Primary = Color3.fromRGB(235, 230, 248), Secondary = Color3.fromRGB(225, 235, 255),
+			Accent = Color3.fromRGB(242, 235, 250), LogoAccent = Color3.fromRGB(135, 90, 210),
+			ActiveColor = Color3.fromRGB(145, 100, 225), TextColor = Color3.fromRGB(30, 25, 45),
+			SubTextColor = Color3.fromRGB(110, 105, 130), BorderColor = Color3.fromRGB(215, 205, 240) },
+		["Ocean Mist"] = { Primary = Color3.fromRGB(230, 250, 255), Secondary = Color3.fromRGB(238, 255, 253),
+			Accent = Color3.fromRGB(240, 248, 255), LogoAccent = Color3.fromRGB(10, 150, 245),
+			ActiveColor = Color3.fromRGB(20, 170, 255), TextColor = Color3.fromRGB(20, 40, 55),
+			SubTextColor = Color3.fromRGB(90, 115, 135), BorderColor = Color3.fromRGB(195, 238, 255) },
+		["Sunset Glow"] = { Primary = Color3.fromRGB(255, 240, 235), Secondary = Color3.fromRGB(255, 248, 228),
+			Accent = Color3.fromRGB(255, 240, 250), LogoAccent = Color3.fromRGB(255, 85, 65),
+			ActiveColor = Color3.fromRGB(255, 105, 85), TextColor = Color3.fromRGB(45, 25, 25),
+			SubTextColor = Color3.fromRGB(135, 100, 100), BorderColor = Color3.fromRGB(255, 212, 200) },
+		["Mint Fresh"] = { Primary = Color3.fromRGB(235, 255, 245), Secondary = Color3.fromRGB(240, 255, 250),
+			Accent = Color3.fromRGB(245, 255, 248), LogoAccent = Color3.fromRGB(15, 195, 130),
+			ActiveColor = Color3.fromRGB(25, 215, 140), TextColor = Color3.fromRGB(20, 45, 30),
+			SubTextColor = Color3.fromRGB(90, 125, 100), BorderColor = Color3.fromRGB(205, 250, 225) },
+		["Lavender Dream"] = { Primary = Color3.fromRGB(242, 235, 255), Secondary = Color3.fromRGB(232, 225, 250),
+			Accent = Color3.fromRGB(250, 240, 255), LogoAccent = Color3.fromRGB(170, 105, 255),
+			ActiveColor = Color3.fromRGB(185, 120, 255), TextColor = Color3.fromRGB(45, 30, 65),
+			SubTextColor = Color3.fromRGB(125, 105, 150), BorderColor = Color3.fromRGB(220, 200, 250) },
+		["Cherry Red"] = { Primary = Color3.fromRGB(255, 235, 238), Secondary = Color3.fromRGB(255, 225, 230),
+			Accent = Color3.fromRGB(255, 242, 245), LogoAccent = Color3.fromRGB(225, 35, 75),
+			ActiveColor = Color3.fromRGB(240, 55, 90), TextColor = Color3.fromRGB(65, 20, 30),
+			SubTextColor = Color3.fromRGB(145, 90, 105), BorderColor = Color3.fromRGB(250, 190, 200) },
+		["Cyber Blue"] = { Primary = Color3.fromRGB(225, 245, 255), Secondary = Color3.fromRGB(220, 235, 255),
+			Accent = Color3.fromRGB(235, 250, 255), LogoAccent = Color3.fromRGB(0, 145, 255),
+			ActiveColor = Color3.fromRGB(0, 175, 255), TextColor = Color3.fromRGB(15, 35, 65),
+			SubTextColor = Color3.fromRGB(80, 115, 155), BorderColor = Color3.fromRGB(170, 220, 255) },
+		["Golden Cream"] = { Primary = Color3.fromRGB(255, 248, 225), Secondary = Color3.fromRGB(255, 240, 205),
+			Accent = Color3.fromRGB(255, 252, 235), LogoAccent = Color3.fromRGB(235, 165, 25),
+			ActiveColor = Color3.fromRGB(245, 180, 35), TextColor = Color3.fromRGB(60, 45, 20),
+			SubTextColor = Color3.fromRGB(145, 120, 75), BorderColor = Color3.fromRGB(245, 215, 145) },
+		["Forest Calm"] = { Primary = Color3.fromRGB(230, 250, 235), Secondary = Color3.fromRGB(220, 245, 225),
+			Accent = Color3.fromRGB(240, 255, 242), LogoAccent = Color3.fromRGB(35, 155, 80),
+			ActiveColor = Color3.fromRGB(40, 180, 90), TextColor = Color3.fromRGB(20, 55, 30),
+			SubTextColor = Color3.fromRGB(85, 125, 95), BorderColor = Color3.fromRGB(175, 230, 185) },
+		["Rose Gold"] = { Primary = Color3.fromRGB(255, 238, 235), Secondary = Color3.fromRGB(250, 225, 220),
+			Accent = Color3.fromRGB(255, 245, 242), LogoAccent = Color3.fromRGB(205, 105, 115),
+			ActiveColor = Color3.fromRGB(225, 125, 135), TextColor = Color3.fromRGB(65, 30, 35),
+			SubTextColor = Color3.fromRGB(145, 100, 105), BorderColor = Color3.fromRGB(240, 195, 190) },
+	}
+	local PaletteNames = {
+		"Bubblegum", "Dark Pastel", "Ocean Mist", "Sunset Glow", "Mint Fresh",
+		"Lavender Dream", "Cherry Red", "Cyber Blue", "Golden Cream", "Forest Calm", "Rose Gold",
+	}
 
-local UiScreenGui = Instance.new("ScreenGui")
-UiScreenGui.Name = "BTRLinkUI"
-UiScreenGui.ResetOnSpawn = false
-UiScreenGui.DisplayOrder = 999999
-UiScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-UiScreenGui.IgnoreGuiInset = true
-pcall(function() UiScreenGui.Parent = CoreGuiSvc end)
-if not UiScreenGui.Parent then UiScreenGui.Parent = LP:WaitForChild("PlayerGui") end
-
-local activeDrag = nil
-UserInputService.InputChanged:Connect(function(input)
-	if activeDrag and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-		local delta = Vector2.new(input.Position.X, input.Position.Y) - activeDrag.startPos
-		activeDrag.frame.Position = UDim2.new(activeDrag.initialPos.X.Scale, activeDrag.initialPos.X.Offset + delta.X, activeDrag.initialPos.Y.Scale, activeDrag.initialPos.Y.Offset + delta.Y)
+	local function GeneratePalette(preset)
+		local p, s, a, white = preset.Primary, preset.Secondary, preset.Accent, Color3.fromRGB(255, 255, 255)
+		return {
+			p:Lerp(white, 0.2), p:Lerp(s, 0.15),
+			s:Lerp(white, 0.25), s:Lerp(a, 0.2), a:Lerp(white, 0.2),
+		}
 	end
-end)
-UserInputService.InputEnded:Connect(function(input)
-	if activeDrag and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
-		activeDrag = nil
+
+	local function ApplyPalette(selected)
+		local p = PalettePresets[selected]
+		if not p then return end
+		DynamicContext.CurrentPreset = p
+		DynamicContext.TargetPalette = GeneratePalette(p)
+		DynamicContext.TargetLogoColor = p.LogoAccent
+		DynamicContext.TargetActiveColor = p.ActiveColor
+		DynamicContext.TargetTextColor = p.TextColor
+		DynamicContext.TargetSubTextColor = p.SubTextColor
+		DynamicContext.TargetBorderColor = p.BorderColor
 	end
-end)
 
-local function MakeDraggable(dragHandle, targetFrame)
-	dragHandle.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			activeDrag = {
-				frame = targetFrame,
-				startPos = Vector2.new(input.Position.X, input.Position.Y),
-				initialPos = targetFrame.Position
-			}
-		end
-	end)
-end
+	local defaultPreset = PalettePresets["Bubblegum"]
+	DynamicContext.CurrentPreset = defaultPreset
+	DynamicContext.CurrentPalette = GeneratePalette(defaultPreset)
+	DynamicContext.TargetPalette = DynamicContext.CurrentPalette
+	DynamicContext.CurrentLogoColor = defaultPreset.LogoAccent
+	DynamicContext.TargetLogoColor = DynamicContext.CurrentLogoColor
+	DynamicContext.CurrentActiveColor = defaultPreset.ActiveColor
+	DynamicContext.TargetActiveColor = DynamicContext.CurrentActiveColor
+	DynamicContext.CurrentTextColor = defaultPreset.TextColor
+	DynamicContext.TargetTextColor = DynamicContext.CurrentTextColor
+	DynamicContext.CurrentSubTextColor = defaultPreset.SubTextColor
+	DynamicContext.TargetSubTextColor = DynamicContext.CurrentSubTextColor
+	DynamicContext.CurrentBorderColor = defaultPreset.BorderColor
+	DynamicContext.TargetBorderColor = DynamicContext.CurrentBorderColor
 
-local MainFrame = Instance.new("CanvasGroup")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 530, 0, 320)
-MainFrame.Position = UDim2.new(0.5, -265, 0.5, -160)
-MainFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-MainFrame.BorderSizePixel = 0
-MainFrame.ClipsDescendants = true
-MainFrame.GroupTransparency = 1
-MainFrame.ZIndex = 10
-MainFrame.Parent = UiScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 16)
+	local ScreenGui = Instance.new("ScreenGui")
+	ScreenGui.Name = "LinkCcUI"
+	ScreenGui.ResetOnSpawn = false
+	ScreenGui.DisplayOrder = 999999
+	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	ScreenGui.IgnoreGuiInset = true
+	pcall(function() ScreenGui.Parent = CoreGui end)
+	if not ScreenGui.Parent then ScreenGui.Parent = LP:WaitForChild("PlayerGui") end
+	DynamicContext.ScreenGui = ScreenGui
 
-local MainStroke = Instance.new("UIStroke")
-MainStroke.Thickness = 2
-MainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-MainStroke.Color = Color3.fromRGB(255, 255, 255)
-MainStroke.Parent = MainFrame
-
-local StrokeGradient = Instance.new("UIGradient")
-StrokeGradient.Color = ColorSequence.new({
-	ColorSequenceKeypoint.new(0.0, Color3.fromRGB(255, 255, 255)),
-	ColorSequenceKeypoint.new(0.25, Color3.fromRGB(210, 210, 210)),
-	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
-	ColorSequenceKeypoint.new(0.75, Color3.fromRGB(210, 210, 210)),
-	ColorSequenceKeypoint.new(1.0, Color3.fromRGB(255, 255, 255))
-})
-StrokeGradient.Parent = MainStroke
-
-local MainGradient = Instance.new("UIGradient")
-MainGradient.Parent = MainFrame
-
-local TopBar = Instance.new("Frame")
-TopBar.Name = "TopBar"
-TopBar.Size = UDim2.new(1, 0, 0, 42)
-TopBar.BackgroundTransparency = 1
-TopBar.Active = true
-TopBar.ZIndex = 11
-TopBar.Parent = MainFrame
-
-local LogoBtn = Instance.new("TextButton")
-LogoBtn.Size = UDim2.new(0, 150, 1, 0)
-LogoBtn.Position = UDim2.new(0.5, -75, 0, 0)
-LogoBtn.Font = Enum.Font.FredokaOne
-LogoBtn.Text = "Link.cc"
-LogoBtn.TextColor3 = DynamicContext.CurrentLogoColor
-LogoBtn.TextSize = 26
-LogoBtn.BackgroundTransparency = 1
-LogoBtn.ZIndex = 12
-LogoBtn.Parent = TopBar
-
-local StatusDot = Instance.new("Frame")
-StatusDot.Size = UDim2.new(0, 6, 0, 6)
-StatusDot.Position = UDim2.new(1, -150, 0.5, -3)
-StatusDot.BackgroundColor3 = Color3.fromRGB(60, 210, 100)
-StatusDot.ZIndex = 12
-StatusDot.Parent = TopBar
-Instance.new("UICorner", StatusDot).CornerRadius = UDim.new(1, 0)
-
-local StatusText = Instance.new("TextLabel")
-StatusText.Size = UDim2.new(0, 110, 1, 0)
-StatusText.Position = UDim2.new(1, -140, 0, 0)
-StatusText.Font = Enum.Font.GothamMedium
-StatusText.Text = "运行中"
-StatusText.TextColor3 = DynamicContext.CurrentSubTextColor
-StatusText.TextSize = 11
-StatusText.TextXAlignment = Enum.TextXAlignment.Left
-StatusText.BackgroundTransparency = 1
-StatusText.ZIndex = 12
-StatusText.Parent = TopBar
-table.insert(DynamicContext.TextElements, {Obj = StatusText, Type = "Sub"})
-
-MakeDraggable(TopBar, MainFrame)
-
-local ContentArea = Instance.new("Frame")
-ContentArea.Name = "ContentArea"
-ContentArea.Size = UDim2.new(1, -24, 1, -54)
-ContentArea.Position = UDim2.new(0, 12, 0, 42)
-ContentArea.BackgroundTransparency = 1
-ContentArea.ZIndex = 11
-ContentArea.Parent = MainFrame
-
-local NavCard = Instance.new("Frame")
-NavCard.Name = "NavCard"
-NavCard.Size = UDim2.new(0, 116, 1, 0)
-NavCard.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-NavCard.BackgroundTransparency = 0.15
-NavCard.ZIndex = 12
-NavCard.Parent = ContentArea
-Instance.new("UICorner", NavCard).CornerRadius = UDim.new(0, 12)
-local NavStroke = Instance.new("UIStroke", NavCard)
-NavStroke.Thickness = 1
-NavStroke.Transparency = 0.2
-NavStroke.Color = DynamicContext.CurrentBorderColor
-table.insert(DynamicContext.BorderElements, NavStroke)
-
-local MainConfigCard = Instance.new("Frame")
-MainConfigCard.Name = "MainConfigCard"
-MainConfigCard.Position = UDim2.new(0, 124, 0, 0)
-MainConfigCard.Size = UDim2.new(0, 232, 1, 0)
-MainConfigCard.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-MainConfigCard.BackgroundTransparency = 0.15
-MainConfigCard.ClipsDescendants = true
-MainConfigCard.ZIndex = 12
-MainConfigCard.Parent = ContentArea
-Instance.new("UICorner", MainConfigCard).CornerRadius = UDim.new(0, 12)
-local MainConfigStroke = Instance.new("UIStroke", MainConfigCard)
-MainConfigStroke.Thickness = 1
-MainConfigStroke.Transparency = 0.2
-MainConfigStroke.Color = DynamicContext.CurrentBorderColor
-table.insert(DynamicContext.BorderElements, MainConfigStroke)
-
-local SubMaskContainer = Instance.new("Frame")
-SubMaskContainer.Name = "SubMaskContainer"
-SubMaskContainer.Size = UDim2.new(0, 134, 1, 0)
-SubMaskContainer.Position = UDim2.new(0, 364, 0, 0)
-SubMaskContainer.BackgroundTransparency = 1
-SubMaskContainer.ZIndex = 12
-SubMaskContainer.Parent = ContentArea
-
-local SubConfigCard = Instance.new("Frame")
-SubConfigCard.Name = "SubConfigCard"
-SubConfigCard.Size = UDim2.new(1, 0, 1, 0)
-SubConfigCard.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-SubConfigCard.BackgroundTransparency = 0.15
-SubConfigCard.ClipsDescendants = true
-SubConfigCard.ZIndex = 12
-SubConfigCard.Parent = SubMaskContainer
-Instance.new("UICorner", SubConfigCard).CornerRadius = UDim.new(0, 12)
-local SubConfigStroke = Instance.new("UIStroke", SubConfigCard)
-SubConfigStroke.Thickness = 1
-SubConfigStroke.Transparency = 0.2
-SubConfigStroke.Color = DynamicContext.CurrentBorderColor
-table.insert(DynamicContext.BorderElements, SubConfigStroke)
-
-task.spawn(function()
-	MainFrame.Size = UDim2.new(0, 500, 0, 300)
-	MainFrame.Position = UDim2.new(0.5, -250, 0.5, -150)
-	MainFrame.GroupTransparency = 1
-	TweenService:Create(MainFrame, TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		Size = UDim2.new(0, 530, 0, 320),
-		Position = UDim2.new(0.5, -265, 0.5, -160),
-		GroupTransparency = 0
-	}):Play()
-end)
-
-local SIZE_MAIN_NORMAL = UDim2.new(0, 232, 1, 0)
-local SIZE_MAIN_EXPAND = UDim2.new(0, 374, 1, 0)
-
-local function AdjustLayoutMode(showSubCard)
-	if DynamicContext.IsSubCardActive == showSubCard then return end
-	DynamicContext.IsSubCardActive = showSubCard
-	local tweenInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-	if showSubCard then
-		SubMaskContainer.Visible = true
-		SubConfigCard.Visible = true
-		TweenService:Create(MainConfigCard, tweenInfo, {Size = SIZE_MAIN_NORMAL}):Play()
-		TweenService:Create(SubConfigCard, tweenInfo, {Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0.15}):Play()
-		TweenService:Create(SubConfigStroke, tweenInfo, {Transparency = 0.2}):Play()
-	else
-		TweenService:Create(MainConfigCard, tweenInfo, {Size = SIZE_MAIN_EXPAND}):Play()
-		local subTween = TweenService:Create(SubConfigCard, tweenInfo, {Position = UDim2.new(0, 30, 0, 0), BackgroundTransparency = 1})
-		TweenService:Create(SubConfigStroke, tweenInfo, {Transparency = 1}):Play()
-		subTween:Play()
-		subTween.Completed:Connect(function()
-			if not DynamicContext.IsSubCardActive then
-				SubMaskContainer.Visible = false
-				SubConfigCard.Visible = false
+	local function MakeDraggable(dragHandle, targetFrame)
+		local dragging, dragStart, startPos
+		dragHandle.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = Vector2.new(input.Position.X, input.Position.Y)
+				startPos = targetFrame.Position
+			end
+		end)
+		UIS.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+				local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+				targetFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+			end
+		end)
+		UIS.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = false
 			end
 		end)
 	end
-end
 
-local function CreateScrollList(parent, topOffset)
-	topOffset = topOffset or 68
-	local Scroll = Instance.new("ScrollingFrame")
-	Scroll.Size = UDim2.new(1, 0, 1, -topOffset)
-	Scroll.Position = UDim2.new(0, 0, 0, topOffset)
-	Scroll.BackgroundTransparency = 1
-	Scroll.BorderSizePixel = 0
-	Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-	Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	Scroll.ScrollBarThickness = 3
-	Scroll.ScrollBarImageColor3 = Color3.fromRGB(150, 160, 180)
-	Scroll.ScrollBarImageTransparency = 0.5
-	Scroll.ZIndex = 13
-	Scroll.Parent = parent
-	
-	local List = Instance.new("UIListLayout")
-	List.Padding = UDim.new(0, 8)
-	List.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	List.SortOrder = Enum.SortOrder.LayoutOrder
-	List.Parent = Scroll
-	
-	local UIPadding = Instance.new("UIPadding")
-	UIPadding.PaddingTop = UDim.new(0, 4)
-	UIPadding.PaddingBottom = UDim.new(0, 80) -- 留出底部空间，防止下拉菜单被切掉
-	UIPadding.Parent = Scroll
-	
-	local function updateScrollState()
-		if List.AbsoluteContentSize.Y + 80 > Scroll.AbsoluteSize.Y then
-			Scroll.ScrollingEnabled = true
-			Scroll.ScrollBarImageTransparency = 0.5
+	local MainFrame = Instance.new("CanvasGroup")
+	MainFrame.Name = "MainFrame"
+	MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+	MainFrame.Size = UDim2.new(0, 530, 0, 320)
+	MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	MainFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	MainFrame.BorderSizePixel = 0
+	MainFrame.ClipsDescendants = true
+	MainFrame.GroupTransparency = 1
+	MainFrame.ZIndex = 10
+	MainFrame.Parent = ScreenGui
+
+	local MainUIScale = Instance.new("UIScale", MainFrame)
+	MainUIScale.Scale = 1
+
+	local MainCorner = Instance.new("UICorner", MainFrame)
+	MainCorner.CornerRadius = UDim.new(0, 16)
+
+	local MainStroke = Instance.new("UIStroke", MainFrame)
+	MainStroke.Thickness = 2
+	MainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	MainStroke.Color = Color3.fromRGB(255, 255, 255)
+
+	local StrokeGradient = Instance.new("UIGradient", MainStroke)
+	StrokeGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.0, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(0.25, Color3.fromRGB(210, 210, 210)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(0.75, Color3.fromRGB(210, 210, 210)),
+		ColorSequenceKeypoint.new(1.0, Color3.fromRGB(255, 255, 255)),
+	})
+
+	local MainGradient = Instance.new("UIGradient", MainFrame)
+
+	local TopBar = Instance.new("Frame")
+	TopBar.Name = "TopBar"
+	TopBar.Size = UDim2.new(1, 0, 0, 42)
+	TopBar.BackgroundTransparency = 1
+	TopBar.Active = true
+	TopBar.ZIndex = 11
+	TopBar.Parent = MainFrame
+
+	local LogoBtn = Instance.new("TextButton")
+	LogoBtn.Size = UDim2.new(0, 180, 1, 0)
+	LogoBtn.Position = UDim2.new(0.5, -90, 0, 0)
+	LogoBtn.Font = Enum.Font.FredokaOne
+	LogoBtn.Text = "Link.cc"
+	LogoBtn.TextColor3 = DynamicContext.CurrentLogoColor
+	LogoBtn.TextSize = 24
+	LogoBtn.BackgroundTransparency = 1
+	LogoBtn.AutoButtonColor = false
+	LogoBtn.Selectable = false
+	LogoBtn.ZIndex = 12
+	LogoBtn.Parent = TopBar
+
+	local StatusDot = Instance.new("Frame")
+	StatusDot.Size = UDim2.new(0, 6, 0, 6)
+	StatusDot.Position = UDim2.new(1, -95, 0.5, -3)
+	StatusDot.BackgroundColor3 = Color3.fromRGB(60, 210, 100)
+	StatusDot.ZIndex = 12
+	StatusDot.Parent = TopBar
+	local DotCorner = Instance.new("UICorner", StatusDot)
+	DotCorner.CornerRadius = UDim.new(1, 0)
+
+	local StatusText = Instance.new("TextLabel")
+	StatusText.Size = UDim2.new(0, 80, 1, 0)
+	StatusText.Position = UDim2.new(1, -85, 0, 0)
+	StatusText.Font = Enum.Font.GothamMedium
+	StatusText.Text = "运行中"
+	StatusText.TextColor3 = DynamicContext.CurrentSubTextColor
+	StatusText.TextSize = 11
+	StatusText.TextXAlignment = Enum.TextXAlignment.Left
+	StatusText.BackgroundTransparency = 1
+	StatusText.ZIndex = 12
+	StatusText.Parent = TopBar
+	table.insert(DynamicContext.TextElements, { Obj = StatusText, Type = "Sub" })
+
+	MakeDraggable(TopBar, MainFrame)
+
+	local ContentArea = Instance.new("Frame")
+	ContentArea.Name = "ContentArea"
+	ContentArea.Size = UDim2.new(1, -24, 1, -54)
+	ContentArea.Position = UDim2.new(0, 12, 0, 42)
+	ContentArea.BackgroundTransparency = 1
+	ContentArea.ZIndex = 11
+	ContentArea.Parent = MainFrame
+
+	local NavCard = Instance.new("Frame")
+	NavCard.Name = "NavCard"
+	NavCard.Size = UDim2.new(0, 116, 1, 0)
+	NavCard.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	NavCard.BackgroundTransparency = 0.15
+	NavCard.ZIndex = 12
+	NavCard.Parent = ContentArea
+	Instance.new("UICorner", NavCard).CornerRadius = UDim.new(0, 12)
+	local NavStroke = Instance.new("UIStroke", NavCard)
+	NavStroke.Thickness = 1
+	NavStroke.Transparency = 0.2
+	NavStroke.Color = DynamicContext.CurrentBorderColor
+	table.insert(DynamicContext.BorderElements, NavStroke)
+
+	local MainConfigCard = Instance.new("Frame")
+	MainConfigCard.Name = "MainConfigCard"
+	MainConfigCard.Position = UDim2.new(0, 124, 0, 0)
+	MainConfigCard.Size = UDim2.new(0, 232, 1, 0)
+	MainConfigCard.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	MainConfigCard.BackgroundTransparency = 0.15
+	MainConfigCard.ClipsDescendants = true
+	MainConfigCard.ZIndex = 12
+	MainConfigCard.Parent = ContentArea
+	Instance.new("UICorner", MainConfigCard).CornerRadius = UDim.new(0, 12)
+	local MainConfigStroke = Instance.new("UIStroke", MainConfigCard)
+	MainConfigStroke.Thickness = 1
+	MainConfigStroke.Transparency = 0.2
+	MainConfigStroke.Color = DynamicContext.CurrentBorderColor
+	table.insert(DynamicContext.BorderElements, MainConfigStroke)
+
+	local SubMaskContainer = Instance.new("Frame")
+	SubMaskContainer.Name = "SubMaskContainer"
+	SubMaskContainer.Size = UDim2.new(0, 134, 1, 0)
+	SubMaskContainer.Position = UDim2.new(0, 364, 0, 0)
+	SubMaskContainer.BackgroundTransparency = 1
+	SubMaskContainer.ZIndex = 12
+	SubMaskContainer.Parent = ContentArea
+
+	local SubConfigCard = Instance.new("Frame")
+	SubConfigCard.Name = "SubConfigCard"
+	SubConfigCard.Size = UDim2.new(1, 0, 1, 0)
+	SubConfigCard.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	SubConfigCard.BackgroundTransparency = 0.15
+	SubConfigCard.ClipsDescendants = true
+	SubConfigCard.ZIndex = 12
+	SubConfigCard.Parent = SubMaskContainer
+	Instance.new("UICorner", SubConfigCard).CornerRadius = UDim.new(0, 12)
+	local SubConfigStroke = Instance.new("UIStroke", SubConfigCard)
+	SubConfigStroke.Thickness = 1
+	SubConfigStroke.Transparency = 0.2
+	SubConfigStroke.Color = DynamicContext.CurrentBorderColor
+	table.insert(DynamicContext.BorderElements, SubConfigStroke)
+
+	task.spawn(function()
+		MainFrame.Size = UDim2.new(0, 500, 0, 300)
+		MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+		MainFrame.GroupTransparency = 1
+		safeTween(MainFrame, TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = UDim2.new(0, 530, 0, 320),
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			GroupTransparency = 0,
+		})
+	end)
+
+	local SIZE_MAIN_NORMAL = UDim2.new(0, 232, 1, 0)
+	local SIZE_MAIN_EXPAND = UDim2.new(0, 374, 1, 0)
+
+	local function AdjustLayoutMode(showSubCard)
+		if DynamicContext.IsSubCardActive == showSubCard then return end
+		DynamicContext.IsSubCardActive = showSubCard
+		local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+		if showSubCard then
+			SubMaskContainer.Visible = true
+			SubConfigCard.Visible = true
+			safeTween(MainConfigCard, tweenInfo, { Size = SIZE_MAIN_NORMAL })
+			safeTween(SubConfigCard, tweenInfo, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0.15 })
+			safeTween(SubConfigStroke, tweenInfo, { Transparency = 0.2 })
 		else
-			Scroll.ScrollingEnabled = false
-			Scroll.ScrollBarImageTransparency = 1
+			safeTween(MainConfigCard, tweenInfo, { Size = SIZE_MAIN_EXPAND })
+			local subTween = safeTween(SubConfigCard, tweenInfo, { Position = UDim2.new(0, 30, 0, 0), BackgroundTransparency = 1 })
+			safeTween(SubConfigStroke, tweenInfo, { Transparency = 1 })
+			if subTween then
+				subTween.Completed:Connect(function()
+					if not DynamicContext.IsSubCardActive then
+						SubMaskContainer.Visible = false
+						SubConfigCard.Visible = false
+					end
+				end)
+			end
 		end
 	end
-	List:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateScrollState)
-	Scroll:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateScrollState)
-	return Scroll
-end
 
-local function ClearContainer(container)
-	if not container then return end
-	for _, child in ipairs(container:GetChildren()) do
-		if not child:IsA("UICorner") and not child:IsA("UIStroke") then
-			if child and child.Parent then child:Destroy() end
+	local function CreateScrollList(parent, topOffset)
+		topOffset = topOffset or 68
+		local Scroll = Instance.new("ScrollingFrame")
+		Scroll.Size = UDim2.new(1, 0, 1, -topOffset)
+		Scroll.Position = UDim2.new(0, 0, 0, topOffset)
+		Scroll.BackgroundTransparency = 1
+		Scroll.BorderSizePixel = 0
+		Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+		Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		Scroll.ScrollBarThickness = 3
+		Scroll.ScrollBarImageColor3 = Color3.fromRGB(150, 160, 180)
+		Scroll.ScrollBarImageTransparency = 0.5
+		Scroll.ZIndex = 13
+		Scroll.Parent = parent
+
+		local List = Instance.new("UIListLayout", Scroll)
+		List.Padding = UDim.new(0, 8)
+		List.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		List.SortOrder = Enum.SortOrder.LayoutOrder
+
+		local UIPadding = Instance.new("UIPadding", Scroll)
+		UIPadding.PaddingTop = UDim.new(0, 4)
+		UIPadding.PaddingBottom = UDim.new(0, 12)
+
+		return Scroll
+	end
+
+	local function ClearContainer(container)
+		if not container then return end
+		for _, child in ipairs(container:GetChildren()) do
+			if not child:IsA("UICorner") and not child:IsA("UIStroke") then
+				pcall(function() child:Destroy() end)
+			end
 		end
 	end
-end
 
-local function AddButton(parent, title, subText, callback)
-	local Frame = Instance.new("Frame")
-	Frame.Size = UDim2.new(1, -12, 0, 38)
-	Frame.BackgroundTransparency = 1
-	Frame.ZIndex = 14
-	Frame.Parent = parent
-	local Btn = Instance.new("TextButton")
-	Btn.AnchorPoint = Vector2.new(0.5, 0.5)
-	Btn.Position = UDim2.new(0.5, 0, 0.5, 0)
-	Btn.Size = UDim2.new(1, 0, 1, 0)
-	Btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	Btn.BackgroundTransparency = 0.6
-	Btn.Text = ""
-	Btn.ZIndex = 14
-	Btn.Parent = Frame
-	Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
-	local BtnStroke = Instance.new("UIStroke", Btn)
-	BtnStroke.Thickness = 1; BtnStroke.Transparency = 0.5; BtnStroke.Color = DynamicContext.CurrentBorderColor
-	table.insert(DynamicContext.BorderElements, BtnStroke)
-	local Label = Instance.new("TextLabel")
-	Label.Size = UDim2.new(1, -16, 0, 18); Label.Position = UDim2.new(0, 10, 0, 2)
-	Label.Text = title; Label.Font = Enum.Font.GothamMedium; Label.TextColor3 = DynamicContext.CurrentTextColor; Label.TextSize = 11
-	Label.TextXAlignment = Enum.TextXAlignment.Left; Label.BackgroundTransparency = 1; Label.ZIndex = 15; Label.Parent = Btn
-	table.insert(DynamicContext.TextElements, {Obj = Label, Type = "Main"})
-	if subText then
-		local SubLabel = Instance.new("TextLabel")
-		SubLabel.Size = UDim2.new(1, -16, 0, 12); SubLabel.Position = UDim2.new(0, 10, 0, 20)
-		SubLabel.Text = subText; SubLabel.Font = Enum.Font.Gotham; SubLabel.TextColor3 = DynamicContext.CurrentSubTextColor; SubLabel.TextSize = 8
-		SubLabel.TextXAlignment = Enum.TextXAlignment.Left; SubLabel.BackgroundTransparency = 1; SubLabel.ZIndex = 15; SubLabel.Parent = Btn
-		table.insert(DynamicContext.TextElements, {Obj = SubLabel, Type = "Sub"})
+	local function CreateTitle(parent, text)
+		local Title = Instance.new("TextLabel", parent)
+		Title.Size = UDim2.new(1, -20, 0, 25)
+		Title.Position = UDim2.new(0, 10, 0, 6)
+		Title.Text = text
+		Title.Font = Enum.Font.GothamBold
+		Title.TextColor3 = DynamicContext.CurrentTextColor
+		Title.TextSize = 13
+		Title.TextXAlignment = Enum.TextXAlignment.Left
+		Title.BackgroundTransparency = 1
+		Title.ZIndex = 13
+		table.insert(DynamicContext.TextElements, { Obj = Title, Type = "Main" })
+		return Title
 	end
-	
-	Btn.MouseButton1Down:Connect(function()
-		TweenService:Create(Btn, TweenInfo.new(0.1), {Size = UDim2.new(0.96, 0, 0.9, 0)}):Play()
-	end)
-	Btn.MouseButton1Up:Connect(function()
-		TweenService:Create(Btn, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 1, 0)}):Play()
-	end)
-	Btn.MouseLeave:Connect(function()
-		TweenService:Create(Btn, TweenInfo.new(0.15, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 1, 0)}):Play()
-	end)
-	
-	Btn.MouseButton1Click:Connect(function() if callback then callback() end end)
-	return Frame
-end
 
-local function AddToggle(parent, title, subText, default, callback)
-	local Frame = Instance.new("Frame")
-	Frame.Size = UDim2.new(1, -12, 0, 38)
-	Frame.BackgroundTransparency = 1
-	Frame.ZIndex = 14
-	Frame.Parent = parent
-	local Label = Instance.new("TextLabel")
-	Label.Size = UDim2.new(0.6, 0, 0, 18); Label.Position = UDim2.new(0, 0, 0, 2)
-	Label.Text = title; Label.Font = Enum.Font.GothamMedium; Label.TextColor3 = DynamicContext.CurrentTextColor; Label.TextSize = 11
-	Label.TextXAlignment = Enum.TextXAlignment.Left; Label.TextTruncate = Enum.TextTruncate.AtEnd; Label.BackgroundTransparency = 1; Label.ZIndex = 14; Label.Parent = Frame
-	table.insert(DynamicContext.TextElements, {Obj = Label, Type = "Main"})
-	if subText then
-		local SubLabel = Instance.new("TextLabel")
-		SubLabel.Size = UDim2.new(1, -45, 0, 12); SubLabel.Position = UDim2.new(0, 0, 0, 20)
-		SubLabel.Text = subText; SubLabel.Font = Enum.Font.Gotham; SubLabel.TextColor3 = DynamicContext.CurrentSubTextColor; SubLabel.TextSize = 8
-		SubLabel.TextXAlignment = Enum.TextXAlignment.Left; SubLabel.TextTruncate = Enum.TextTruncate.AtEnd; SubLabel.BackgroundTransparency = 1; SubLabel.ZIndex = 14; SubLabel.Parent = Frame
-		table.insert(DynamicContext.TextElements, {Obj = SubLabel, Type = "Sub"})
-	end
-	local Track = Instance.new("TextButton")
-	Track.Size = UDim2.new(0, 36, 0, 18); Track.Position = UDim2.new(1, -38, 0.5, -9)
-	Track.BackgroundColor3 = Color3.fromRGB(200, 205, 215); Track.Text = ""; Track.AutoButtonColor = false; Track.ZIndex = 15; Track.Parent = Frame
-	Instance.new("UICorner", Track).CornerRadius = UDim.new(1, 0)
-	local Knob = Instance.new("Frame")
-	Knob.Size = UDim2.new(0, 14, 0, 14); Knob.AnchorPoint = Vector2.new(0, 0.5); Knob.Position = UDim2.new(0, 2, 0.5, 0)
-	Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255); Knob.ZIndex = 16; Knob.Parent = Track
-	Instance.new("UICorner", Knob).CornerRadius = UDim.new(1, 0)
-	local toggled = default or false
-	local function setToggleState(state, animate)
-		toggled = state
-		local targetColor = toggled and DynamicContext.CurrentActiveColor or Color3.fromRGB(205, 210, 220)
-		local targetPos = toggled and UDim2.new(0, 20, 0.5, 0) or UDim2.new(0, 2, 0.5, 0)
-		if animate then
-			TweenService:Create(Track, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {BackgroundColor3 = targetColor}):Play()
-			TweenService:Create(Knob, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = targetPos}):Play()
-		else
-			Track.BackgroundColor3 = targetColor; Knob.Position = targetPos
+	local function AddButton(parent, title, subText, callback)
+		local Frame = Instance.new("CanvasGroup")
+		Frame.Size = UDim2.new(1, -12, 0, 38)
+		Frame.BackgroundTransparency = 1
+		Frame.ZIndex = 14
+		Frame.Parent = parent
+
+		local Btn = Instance.new("TextButton", Frame)
+		Btn.Size = UDim2.new(1, 0, 1, 0)
+		Btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		Btn.BackgroundTransparency = 0.6
+		Btn.Text = ""
+		Btn.AutoButtonColor = false
+		Btn.Selectable = false
+		Btn.ZIndex = 14
+		Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
+		local BtnStroke = Instance.new("UIStroke", Btn)
+		BtnStroke.Thickness = 1
+		BtnStroke.Transparency = 0.5
+		BtnStroke.Color = DynamicContext.CurrentBorderColor
+		table.insert(DynamicContext.BorderElements, BtnStroke)
+
+		local Label = Instance.new("TextLabel", Btn)
+		Label.Size = UDim2.new(1, -16, 0, subText and 16 or 30)
+		Label.Position = UDim2.new(0, 10, 0, subText and 2 or 0)
+		Label.Text = title
+		Label.Font = Enum.Font.GothamMedium
+		Label.TextColor3 = DynamicContext.CurrentTextColor
+		Label.TextSize = 11
+		Label.TextXAlignment = Enum.TextXAlignment.Left
+		Label.BackgroundTransparency = 1
+		Label.ZIndex = 15
+		table.insert(DynamicContext.TextElements, { Obj = Label, Type = "Main" })
+
+		if subText then
+			local SubLabel = Instance.new("TextLabel", Btn)
+			SubLabel.Size = UDim2.new(1, -16, 0, 12)
+			SubLabel.Position = UDim2.new(0, 10, 0, 20)
+			SubLabel.Text = subText
+			SubLabel.Font = Enum.Font.Gotham
+			SubLabel.TextColor3 = DynamicContext.CurrentSubTextColor
+			SubLabel.TextSize = 8
+			SubLabel.TextXAlignment = Enum.TextXAlignment.Left
+			SubLabel.BackgroundTransparency = 1
+			SubLabel.ZIndex = 15
+			table.insert(DynamicContext.TextElements, { Obj = SubLabel, Type = "Sub" })
 		end
-		if callback then callback(toggled) end
-	end
-	Track.MouseButton1Down:Connect(function()
-		TweenService:Create(Track, TweenInfo.new(0.1), {Size = UDim2.new(0, 34, 0, 16), Position = UDim2.new(1, -37, 0.5, -8)}):Play()
-	end)
-	Track.MouseButton1Up:Connect(function()
-		TweenService:Create(Track, TweenInfo.new(0.15, Enum.EasingStyle.Back), {Size = UDim2.new(0, 36, 0, 18), Position = UDim2.new(1, -38, 0.5, -9)}):Play()
-	end)
-	Track.MouseLeave:Connect(function()
-		TweenService:Create(Track, TweenInfo.new(0.15, Enum.EasingStyle.Quart), {Size = UDim2.new(0, 36, 0, 18), Position = UDim2.new(1, -38, 0.5, -9)}):Play()
-	end)
-	Track.MouseButton1Click:Connect(function() setToggleState(not toggled, true) end)
-	setToggleState(toggled, false)
-	table.insert(DynamicContext.ActiveToggles, { Update = function() 
-		if toggled and Track.BackgroundColor3 ~= DynamicContext.CurrentActiveColor then
-			Track.BackgroundColor3 = DynamicContext.CurrentActiveColor
-		end
-	end })
-	return Frame
-end
 
-local activeSlider = nil
-UserInputService.InputChanged:Connect(function(input)
-	if activeSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-		activeSlider.update(input)
-	end
-end)
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		if activeSlider then
-			activeSlider.onEnd()
-			activeSlider = nil
-		end
-	end
-end)
-
-local function AddSlider(parent, title, min, max, default, unit, callback)
-	local Frame = Instance.new("Frame")
-	Frame.Size = UDim2.new(1, -12, 0, 38)
-	Frame.BackgroundTransparency = 1
-	Frame.ZIndex = 14
-	Frame.Parent = parent
-	local Label = Instance.new("TextLabel")
-	Label.Size = UDim2.new(0.5, 0, 0, 16); Label.Position = UDim2.new(0, 0, 0, 0)
-	Label.Text = title; Label.Font = Enum.Font.GothamMedium; Label.TextColor3 = DynamicContext.CurrentTextColor; Label.TextSize = 11
-	Label.TextXAlignment = Enum.TextXAlignment.Left; Label.TextTruncate = Enum.TextTruncate.AtEnd; Label.BackgroundTransparency = 1; Label.ZIndex = 14; Label.Parent = Frame
-	table.insert(DynamicContext.TextElements, {Obj = Label, Type = "Main"})
-	local ValLabel = Instance.new("TextLabel")
-	ValLabel.Size = UDim2.new(0.5, 0, 0, 16); ValLabel.Position = UDim2.new(0.5, 0, 0, 0)
-	ValLabel.Text = tostring(default) .. (unit or ""); ValLabel.Font = Enum.Font.Gotham; ValLabel.TextColor3 = DynamicContext.CurrentSubTextColor; ValLabel.TextSize = 10
-	ValLabel.TextXAlignment = Enum.TextXAlignment.Right; ValLabel.BackgroundTransparency = 1; ValLabel.ZIndex = 14; ValLabel.Parent = Frame
-	table.insert(DynamicContext.TextElements, {Obj = ValLabel, Type = "Sub"})
-	local TrackBtn = Instance.new("TextButton")
-	TrackBtn.Size = UDim2.new(1, 0, 0, 14); TrackBtn.Position = UDim2.new(0, 0, 0, 18)
-	TrackBtn.BackgroundTransparency = 1; TrackBtn.Text = ""; TrackBtn.ZIndex = 15; TrackBtn.Parent = Frame
-	local SliderBg = Instance.new("Frame")
-	SliderBg.Size = UDim2.new(1, 0, 0, 5); SliderBg.Position = UDim2.new(0, 0, 0.5, -2)
-	SliderBg.BackgroundColor3 = Color3.fromRGB(215, 220, 230); SliderBg.ZIndex = 15; SliderBg.Parent = TrackBtn
-	Instance.new("UICorner", SliderBg).CornerRadius = UDim.new(1, 0)
-	local startRatio = math.clamp((default - min) / math.max(max - min, 1), 0, 1)
-	local SliderFill = Instance.new("Frame")
-	SliderFill.Size = UDim2.new(startRatio, 0, 1, 0); SliderFill.BackgroundColor3 = DynamicContext.CurrentActiveColor; SliderFill.ZIndex = 15; SliderFill.Parent = SliderBg
-	Instance.new("UICorner", SliderFill).CornerRadius = UDim.new(1, 0)
-	local Knob = Instance.new("Frame")
-	Knob.Size = UDim2.new(0, 10, 0, 10); Knob.Position = UDim2.new(1, -5, 0.5, -5)
-	Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255); Knob.ZIndex = 16; Knob.Parent = SliderFill
-	Instance.new("UICorner", Knob).CornerRadius = UDim.new(1, 0)
-	
-	local function update(input)
-		local posX = input.Position.X - SliderBg.AbsolutePosition.X
-		local ratio = math.clamp(posX / math.max(SliderBg.AbsoluteSize.X, 1), 0, 1)
-		local val = math.floor(min + (max - min) * ratio)
-		SliderFill.Size = UDim2.new(ratio, 0, 1, 0)
-		ValLabel.Text = tostring(val) .. (unit or "")
-		if callback then callback(val) end
-	end
-	
-	TrackBtn.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then 
-			TweenService:Create(Knob, TweenInfo.new(0.1), {Size = UDim2.new(0, 12, 0, 12), Position = UDim2.new(1, -6, 0.5, -6)}):Play()
-			update(input)
-			activeSlider = {
-				update = update,
-				onEnd = function()
-					TweenService:Create(Knob, TweenInfo.new(0.15, Enum.EasingStyle.Quart), {Size = UDim2.new(0, 10, 0, 10), Position = UDim2.new(1, -5, 0.5, -5)}):Play()
-				end
-			}
-		end
-	end)
-	
-	table.insert(DynamicContext.ActiveSliders, { Update = function() 
-		if SliderFill.BackgroundColor3 ~= DynamicContext.CurrentActiveColor then
-			SliderFill.BackgroundColor3 = DynamicContext.CurrentActiveColor
-		end
-	end })
-	return Frame
-end
-
-local function AddColorRow(parent, title, getColor, setColor)
-	local Frame = Instance.new("Frame")
-	Frame.Size = UDim2.new(1, -12, 0, 38); Frame.BackgroundTransparency = 1; Frame.ZIndex = 14; Frame.Parent = parent
-	local Label = Instance.new("TextLabel")
-	Label.Size = UDim2.new(1, -60, 1, 0); Label.Text = title; Label.Font = Enum.Font.GothamMedium; Label.TextColor3 = DynamicContext.CurrentTextColor; Label.TextSize = 11
-	Label.TextXAlignment = Enum.TextXAlignment.Left; Label.BackgroundTransparency = 1; Label.ZIndex = 14; Label.Parent = Frame
-	table.insert(DynamicContext.TextElements, {Obj = Label, Type = "Main"})
-	local ColorBtn = Instance.new("TextButton")
-	ColorBtn.Size = UDim2.new(0, 50, 0, 22); ColorBtn.Position = UDim2.new(1, -50, 0.5, -11); ColorBtn.BackgroundColor3 = getColor(); ColorBtn.Text = ""; ColorBtn.AutoButtonColor = false; ColorBtn.ZIndex = 15; ColorBtn.Parent = Frame
-	Instance.new("UICorner", ColorBtn).CornerRadius = UDim.new(0, 6)
-	local currentIdx = 1
-	for i, c in ipairs(PALETTE) do if c == getColor() then currentIdx = i; break end end
-	
-	ColorBtn.MouseButton1Down:Connect(function()
-		TweenService:Create(ColorBtn, TweenInfo.new(0.1), {Size = UDim2.new(0, 46, 0, 20), Position = UDim2.new(1, -48, 0.5, -10)}):Play()
-	end)
-	ColorBtn.MouseButton1Up:Connect(function()
-		TweenService:Create(ColorBtn, TweenInfo.new(0.15, Enum.EasingStyle.Back), {Size = UDim2.new(0, 50, 0, 22), Position = UDim2.new(1, -50, 0.5, -11)}):Play()
-	end)
-	ColorBtn.MouseLeave:Connect(function()
-		TweenService:Create(ColorBtn, TweenInfo.new(0.15, Enum.EasingStyle.Quart), {Size = UDim2.new(0, 50, 0, 22), Position = UDim2.new(1, -50, 0.5, -11)}):Play()
-	end)
-	
-	ColorBtn.MouseButton1Click:Connect(function()
-		currentIdx = currentIdx % #PALETTE + 1
-		local newColor = PALETTE[currentIdx]
-		setColor(newColor)
-		ColorBtn.BackgroundColor3 = newColor
-	end)
-	return Frame
-end
-
-local function AddDropdown(parent, title, options, defaultIndex, callback)
-	local DropFrame = Instance.new("Frame")
-	DropFrame.Size = UDim2.new(1, -12, 0, 32); DropFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255); DropFrame.BackgroundTransparency = 0.5; DropFrame.ClipsDescendants = true; DropFrame.ZIndex = 20; DropFrame.Parent = parent
-	Instance.new("UICorner", DropFrame).CornerRadius = UDim.new(0, 6)
-	local DropStroke = Instance.new("UIStroke", DropFrame); DropStroke.Thickness = 1; DropStroke.Transparency = 0.5; DropStroke.Color = DynamicContext.CurrentBorderColor; table.insert(DynamicContext.BorderElements, DropStroke)
-	local HeaderBtn = Instance.new("TextButton"); HeaderBtn.Size = UDim2.new(1, 0, 0, 32); HeaderBtn.BackgroundTransparency = 1; HeaderBtn.Text = ""; HeaderBtn.ZIndex = 21; HeaderBtn.Parent = DropFrame
-	local TitleLabel = Instance.new("TextLabel"); TitleLabel.Size = UDim2.new(0.48, 0, 1, 0); TitleLabel.Position = UDim2.new(0, 8, 0, 0); TitleLabel.Text = title; TitleLabel.Font = Enum.Font.GothamMedium; TitleLabel.TextColor3 = DynamicContext.CurrentTextColor; TitleLabel.TextSize = 10; TitleLabel.TextXAlignment = Enum.TextXAlignment.Left; TitleLabel.BackgroundTransparency = 1; TitleLabel.ZIndex = 21; TitleLabel.Parent = HeaderBtn; table.insert(DynamicContext.TextElements, {Obj = TitleLabel, Type = "Main"})
-	local SelectedLabel = Instance.new("TextLabel"); SelectedLabel.Size = UDim2.new(0.42, -10, 1, 0); SelectedLabel.Position = UDim2.new(0.48, 0, 0, 0); SelectedLabel.Text = options[defaultIndex or 1] or "选择..."; SelectedLabel.Font = Enum.Font.Gotham; SelectedLabel.TextColor3 = DynamicContext.CurrentSubTextColor; SelectedLabel.TextSize = 9; SelectedLabel.TextXAlignment = Enum.TextXAlignment.Right; SelectedLabel.BackgroundTransparency = 1; SelectedLabel.ZIndex = 21; SelectedLabel.Parent = HeaderBtn; table.insert(DynamicContext.TextElements, {Obj = SelectedLabel, Type = "Sub"})
-	local ArrowLabel = Instance.new("TextLabel"); ArrowLabel.Size = UDim2.new(0, 14, 1, 0); ArrowLabel.Position = UDim2.new(1, -16, 0, 0); ArrowLabel.Text = "▼"; ArrowLabel.Font = Enum.Font.GothamBold; ArrowLabel.TextColor3 = DynamicContext.CurrentSubTextColor; ArrowLabel.TextSize = 8; ArrowLabel.BackgroundTransparency = 1; ArrowLabel.ZIndex = 21; ArrowLabel.Parent = HeaderBtn; table.insert(DynamicContext.TextElements, {Obj = ArrowLabel, Type = "Sub"})
-	local OptionContainer = Instance.new("Frame"); OptionContainer.Size = UDim2.new(1, -10, 0, 0); OptionContainer.Position = UDim2.new(0, 5, 0, 30); OptionContainer.BackgroundTransparency = 1; OptionContainer.ClipsDescendants = true; OptionContainer.ZIndex = 21; OptionContainer.Parent = DropFrame
-	local OptionList = Instance.new("UIListLayout"); OptionList.Padding = UDim.new(0, 3); OptionList.SortOrder = Enum.SortOrder.LayoutOrder; OptionList.Parent = OptionContainer
-	local isExpanded = false; local optionHeight = 22; local expandedHeight = 34 + (#options * 25)
-	for i, optionText in ipairs(options) do
-		local OptBtn = Instance.new("TextButton"); OptBtn.Size = UDim2.new(1, 0, 0, optionHeight); OptBtn.BackgroundColor3 = Color3.fromRGB(245, 248, 255); OptBtn.BackgroundTransparency = (i == (defaultIndex or 1)) and 0.2 or 0.7; OptBtn.Text = optionText; OptBtn.Font = Enum.Font.Gotham; OptBtn.TextColor3 = DynamicContext.CurrentTextColor; OptBtn.TextSize = 9; OptBtn.TextTruncate = Enum.TextTruncate.AtEnd; OptBtn.ZIndex = 22; OptBtn.Parent = OptionContainer; table.insert(DynamicContext.TextElements, {Obj = OptBtn, Type = "Main"}); Instance.new("UICorner", OptBtn).CornerRadius = UDim.new(0, 4)
-		OptBtn.MouseButton1Click:Connect(function()
-			SelectedLabel.Text = optionText
-			for _, child in ipairs(OptionContainer:GetChildren()) do if child:IsA("TextButton") then TweenService:Create(child, TweenInfo.new(0.2), {BackgroundTransparency = (child == OptBtn) and 0.2 or 0.7}):Play() end end
-			isExpanded = false
-			local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-			TweenService:Create(DropFrame, tweenInfo, {Size = UDim2.new(1, -12, 0, 32)}):Play()
-			TweenService:Create(OptionContainer, tweenInfo, {Size = UDim2.new(1, -10, 0, 0)}):Play()
-			TweenService:Create(ArrowLabel, tweenInfo, {Rotation = 0}):Play()
-			if callback then callback(optionText, i) end
-		end)
-	end
-	HeaderBtn.MouseButton1Click:Connect(function()
-		isExpanded = not isExpanded
-		local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-		if isExpanded then
-			TweenService:Create(DropFrame, tweenInfo, {Size = UDim2.new(1, -12, 0, expandedHeight)}):Play()
-			TweenService:Create(OptionContainer, tweenInfo, {Size = UDim2.new(1, -10, 0, #options * 25)}):Play()
-			TweenService:Create(ArrowLabel, tweenInfo, {Rotation = 180}):Play()
-		else
-			TweenService:Create(DropFrame, tweenInfo, {Size = UDim2.new(1, -12, 0, 32)}):Play()
-			TweenService:Create(OptionContainer, tweenInfo, {Size = UDim2.new(1, -10, 0, 0)}):Play()
-			TweenService:Create(ArrowLabel, tweenInfo, {Rotation = 0}):Play()
-		end
-	end)
-	return DropFrame
-end
-
-local function CreateSubSegmentNav(parent, segments, onSegmentChanged)
-	local SegmentFrame = Instance.new("Frame"); SegmentFrame.Size = UDim2.new(1, -16, 0, 26); SegmentFrame.Position = UDim2.new(0, 8, 0, 32); SegmentFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255); SegmentFrame.BackgroundTransparency = 0.4; SegmentFrame.BorderSizePixel = 0; SegmentFrame.ZIndex = 15; SegmentFrame.Parent = parent
-	Instance.new("UICorner", SegmentFrame).CornerRadius = UDim.new(0, 13)
-	local SegStroke = Instance.new("UIStroke", SegmentFrame); SegStroke.Thickness = 1; SegStroke.Transparency = 0.5; SegStroke.Color = DynamicContext.CurrentBorderColor; table.insert(DynamicContext.BorderElements, SegStroke)
-	local Indicator = Instance.new("Frame"); Indicator.Size = UDim2.new(1 / #segments, -4, 1, -4); Indicator.Position = UDim2.new(0, 2, 0, 2); Indicator.BackgroundColor3 = Color3.fromRGB(255, 255, 255); Indicator.BackgroundTransparency = 0.1; Indicator.ZIndex = 16; Indicator.Parent = SegmentFrame
-	Instance.new("UICorner", Indicator).CornerRadius = UDim.new(0, 11)
-	local Buttons = {}
-	local currentActiveIndex = 1
-	for i, segName in ipairs(segments) do
-		local Btn = Instance.new("TextButton"); Btn.Size = UDim2.new(1 / #segments, 0, 1, 0); Btn.Position = UDim2.new((i - 1) * (1 / #segments), 0, 0, 0); Btn.BackgroundTransparency = 1; Btn.Text = segName; Btn.Font = Enum.Font.GothamBold; Btn.TextColor3 = (i == 1) and DynamicContext.CurrentTextColor or DynamicContext.CurrentSubTextColor; Btn.TextSize = 9; Btn.ZIndex = 17; Btn.Parent = SegmentFrame
 		Btn.MouseButton1Click:Connect(function()
-			if i == currentActiveIndex then return end
-			currentActiveIndex = i
-			for _, b in ipairs(Buttons) do b.TextColor3 = DynamicContext.CurrentSubTextColor end
-			Btn.TextColor3 = DynamicContext.CurrentTextColor
-			TweenService:Create(Indicator, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = UDim2.new((i - 1) * (1 / #segments), 2, 0, 2)}):Play()
-			if onSegmentChanged then onSegmentChanged(segName, i) end
+			if callback then callback() end
 		end)
-		table.insert(Buttons, Btn)
+		return Frame
 	end
-	return SegmentFrame
-end
 
-local Island = Instance.new("CanvasGroup"); Island.Name = "DynamicIsland"; Island.Size = UDim2.new(0, 200, 0, 36); Island.Position = UDim2.new(0.5, -100, 0, 15); Island.BackgroundColor3 = Color3.fromRGB(255, 255, 255); Island.GroupTransparency = 1; Island.Visible = false; Island.ZIndex = 200; Island.Parent = UiScreenGui
-local IslandCorner = Instance.new("UICorner", Island); IslandCorner.CornerRadius = UDim.new(0, 18)
-local IslandStroke = Instance.new("UIStroke", Island); IslandStroke.Thickness = 2; IslandStroke.Color = Color3.fromRGB(255, 255, 255)
-local IslandGradient = Instance.new("UIGradient", Island); local IslandStrokeGradient = Instance.new("UIGradient", IslandStroke); IslandStrokeGradient.Color = StrokeGradient.Color
-local IslandLightOverlay = Instance.new("Frame", Island); IslandLightOverlay.Size = UDim2.new(1, 0, 1, 0); IslandLightOverlay.BackgroundColor3 = Color3.fromRGB(255, 255, 255); IslandLightOverlay.BackgroundTransparency = 0.35; IslandLightOverlay.ZIndex = 200
-local IslandContent = Instance.new("Frame", Island); IslandContent.Size = UDim2.new(1, 0, 1, 0); IslandContent.BackgroundTransparency = 1; IslandContent.ZIndex = 201
+	local function AddToggle(parent, title, subText, default, callback)
+		local Frame = Instance.new("CanvasGroup")
+		Frame.Size = UDim2.new(1, -12, 0, 38)
+		Frame.BackgroundTransparency = 1
+		Frame.ZIndex = 14
+		Frame.Parent = parent
 
-local IslandInfoFrame = Instance.new("Frame", IslandContent)
-IslandInfoFrame.Size = UDim2.new(0, 140, 1, 0)
-IslandInfoFrame.Position = UDim2.new(0, 12, 0, 0)
-IslandInfoFrame.BackgroundTransparency = 1
-IslandInfoFrame.ZIndex = 202
+		local Label = Instance.new("TextLabel", Frame)
+		Label.Size = UDim2.new(0.62, 0, 0, 16)
+		Label.Position = UDim2.new(0, 0, 0, 2)
+		Label.Text = title
+		Label.Font = Enum.Font.GothamMedium
+		Label.TextColor3 = DynamicContext.CurrentTextColor
+		Label.TextSize = 11
+		Label.TextXAlignment = Enum.TextXAlignment.Left
+		Label.TextTruncate = Enum.TextTruncate.AtEnd
+		Label.BackgroundTransparency = 1
+		Label.ZIndex = 14
+		table.insert(DynamicContext.TextElements, { Obj = Label, Type = "Main" })
 
-local InfoLayout = Instance.new("UIListLayout", IslandInfoFrame)
-InfoLayout.FillDirection = Enum.FillDirection.Horizontal
-InfoLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-InfoLayout.SortOrder = Enum.SortOrder.LayoutOrder
-InfoLayout.Padding = UDim.new(0, 6)
+		if subText then
+			local SubLabel = Instance.new("TextLabel", Frame)
+			SubLabel.Size = UDim2.new(1, -45, 0, 12)
+			SubLabel.Position = UDim2.new(0, 0, 0, 20)
+			SubLabel.Text = subText
+			SubLabel.Font = Enum.Font.Gotham
+			SubLabel.TextColor3 = DynamicContext.CurrentSubTextColor
+			SubLabel.TextSize = 8
+			SubLabel.TextXAlignment = Enum.TextXAlignment.Left
+			SubLabel.TextTruncate = Enum.TextTruncate.AtEnd
+			SubLabel.BackgroundTransparency = 1
+			SubLabel.ZIndex = 14
+			table.insert(DynamicContext.TextElements, { Obj = SubLabel, Type = "Sub" })
+		end
 
-local IslandLogo = Instance.new("TextLabel", IslandInfoFrame)
-IslandLogo.Size = UDim2.new(0, 55, 1, 0)
-IslandLogo.Font = Enum.Font.FredokaOne
-IslandLogo.Text = "Link.cc"
-IslandLogo.TextColor3 = DynamicContext.CurrentLogoColor
-IslandLogo.TextSize = 15
-IslandLogo.TextXAlignment = Enum.TextXAlignment.Left
-IslandLogo.BackgroundTransparency = 1
-IslandLogo.ZIndex = 202
-IslandLogo.LayoutOrder = 1
-IslandLogo.TextTruncate = Enum.TextTruncate.AtEnd
+		local Track = Instance.new("TextButton", Frame)
+		Track.Size = UDim2.new(0, 36, 0, 18)
+		Track.Position = UDim2.new(1, -38, 0.5, -9)
+		Track.BackgroundColor3 = Color3.fromRGB(200, 205, 215)
+		Track.Text = ""
+		Track.AutoButtonColor = false
+		Track.Selectable = false
+		Track.ZIndex = 15
+		Instance.new("UICorner", Track).CornerRadius = UDim.new(1, 0)
 
-local IslandStatus = Instance.new("TextLabel", IslandInfoFrame)
-IslandStatus.Size = UDim2.new(0, 50, 1, 0)
-IslandStatus.Font = Enum.Font.GothamMedium
-IslandStatus.Text = "运行中"
-IslandStatus.TextColor3 = DynamicContext.CurrentSubTextColor
-IslandStatus.TextSize = 10
-IslandStatus.TextXAlignment = Enum.TextXAlignment.Left
-IslandStatus.BackgroundTransparency = 1
-IslandStatus.ZIndex = 202
-IslandStatus.LayoutOrder = 2
-IslandStatus.TextTruncate = Enum.TextTruncate.AtEnd
-table.insert(DynamicContext.TextElements, {Obj = IslandStatus, Type = "Sub"})
+		local Knob = Instance.new("Frame", Track)
+		Knob.Size = UDim2.new(0, 14, 0, 14)
+		Knob.AnchorPoint = Vector2.new(0, 0.5)
+		Knob.Position = UDim2.new(0, 2, 0.5, 0)
+		Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		Knob.ZIndex = 16
+		Instance.new("UICorner", Knob).CornerRadius = UDim.new(1, 0)
 
-local ExpandBtn = Instance.new("TextButton", IslandContent); ExpandBtn.Size = UDim2.new(0, 50, 0, 22); ExpandBtn.Position = UDim2.new(1, -58, 0.5, -11); ExpandBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255); ExpandBtn.BackgroundTransparency = 0.2; ExpandBtn.Text = "打开"; ExpandBtn.Font = Enum.Font.GothamBold; ExpandBtn.TextColor3 = DynamicContext.CurrentTextColor; ExpandBtn.TextSize = 10; ExpandBtn.ZIndex = 203; Instance.new("UICorner", ExpandBtn).CornerRadius = UDim.new(0, 11); table.insert(DynamicContext.TextElements, {Obj = ExpandBtn, Type = "Main"})
+		local toggled = default or false
+		local lastColor = Track.BackgroundColor3
+		
+		local function setToggleState(state, animate)
+			toggled = state
+			local targetColor = toggled and DynamicContext.CurrentActiveColor or Color3.fromRGB(205, 210, 220)
+			local targetPos = toggled and UDim2.new(0, 20, 0.5, 0) or UDim2.new(0, 2, 0.5, 0)
+			if animate then
+				safeTween(Track, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { BackgroundColor3 = targetColor })
+				safeTween(Knob, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = targetPos })
+			else
+				Track.BackgroundColor3 = targetColor
+				Knob.Position = targetPos
+			end
+			lastColor = targetColor
+			if callback then callback(toggled) end
+		end
+		
+		Track.MouseButton1Click:Connect(function() setToggleState(not toggled, true) end)
+		setToggleState(toggled, false)
+		
+		table.insert(DynamicContext.ActiveToggles, {
+			Update = function()
+				local targetColor = toggled and DynamicContext.CurrentActiveColor or Color3.fromRGB(205, 210, 220)
+				if targetColor ~= lastColor then
+					lastColor = targetColor
+					safeTween(Track, TweenInfo.new(0.3), { BackgroundColor3 = targetColor })
+				end
+			end,
+		})
+		return Frame
+	end
 
-local function AnimateSubPageTransition(container, buildContentFunc)
-	local oldPage = container:FindFirstChild("SubContentPage")
-	if oldPage then oldPage:Destroy() end
-	
-	local newPage = Instance.new("CanvasGroup")
-	newPage.Name = "SubContentPage"; newPage.Size = UDim2.new(1, 0, 1, -68); newPage.Position = UDim2.new(0, 0, 0, 50); newPage.BackgroundTransparency = 1; newPage.GroupTransparency = 1; newPage.ZIndex = 14; newPage.Parent = container
-	local Scroll = CreateScrollList(newPage, 0)
-	buildContentFunc(Scroll)
-	TweenService:Create(newPage, TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = UDim2.new(0, 0, 0, 68), GroupTransparency = 0}):Play()
-end
+	local function AddSlider(parent, title, min, max, default, unit, callback)
+		local Frame = Instance.new("CanvasGroup")
+		Frame.Size = UDim2.new(1, -12, 0, 38)
+		Frame.BackgroundTransparency = 1
+		Frame.ZIndex = 14
+		Frame.Parent = parent
 
-local TabData = {
-	["自瞄"] = {
-		hasSub = true,
-		render = function()
-			ClearContainer(MainConfigCard); ClearContainer(SubConfigCard)
-			DynamicContext.ActiveToggles = {}; DynamicContext.ActiveSliders = {}; DynamicContext.TextElements = {}; DynamicContext.BorderElements = {}
-			local Title = Instance.new("TextLabel", MainConfigCard); Title.Size = UDim2.new(1, -20, 0, 25); Title.Position = UDim2.new(0, 10, 0, 6); Title.Text = "自瞄系统"; Title.Font = Enum.Font.GothamBold; Title.TextColor3 = DynamicContext.CurrentTextColor; Title.TextSize = 13; Title.TextXAlignment = Enum.TextXAlignment.Left; Title.BackgroundTransparency = 1; Title.ZIndex = 13; table.insert(DynamicContext.TextElements, {Obj = Title, Type = "Main"})
-			CreateSubSegmentNav(MainConfigCard, {"基础设置", "高级参数", "静默开火"}, function(seg)
-				AnimateSubPageTransition(MainConfigCard, function(scroll)
-					if seg == "基础设置" then
-						AddToggle(scroll, "启用自瞄", "开启自瞄系统", CFG.aimbot, function(v) CFG.aimbot = v; if not v then Aim.point = nil end end)
-						AddToggle(scroll, "静默模式", "视角不转动", CFG.silent, function(v) CFG.silent = v end)
-						AddToggle(scroll, "自动开火", "锁定后自动射击", CFG.autoFire, function(v) CFG.autoFire = v; if not v then forceRelease() end end)
-						AddToggle(scroll, "瞄准怪物", "锁定目标包含怪物", CFG.aimMonsters, function(v) CFG.aimMonsters = v end)
-						AddToggle(scroll, "瞄准玩家", "锁定目标包含玩家", CFG.aimPlayers, function(v) CFG.aimPlayers = v end)
-						AddToggle(scroll, "360° 锁敌", "无视屏幕范围锁定", CFG.aim360, function(v) CFG.aim360 = v end)
-						AddSlider(scroll, "角度上限", 5, 180, CFG.fovAngle, "°", function(v) CFG.fovAngle = v end)
-						AddSlider(scroll, "FOV 半径", 40, 1600, CFG.fov, "", function(v) CFG.fov = v end)
-						AddDropdown(scroll, "瞄准部位", {"头部", "躯干"}, (CFG.aimPart == "Head") and 1 or 2, function(selected, idx)
-							CFG.aimPart = (idx == 1) and "Head" or "Torso"
-						end)
-					elseif seg == "高级参数" then
-						AddToggle(scroll, "伪装摄像机", "服务端视角同步", CFG.spoofCam, function(v) CFG.spoofCam = v end)
-						AddToggle(scroll, "只打可见目标", "无遮挡才锁定", CFG.visibleOnly, function(v) CFG.visibleOnly = v end)
-						AddToggle(scroll, "智能部位", "自动选取露出部位", CFG.aimSmartPart, function(v) CFG.aimSmartPart = v end)
-						AddToggle(scroll, "弹道补偿", "补偿子弹下坠", CFG.dropComp, function(v) CFG.dropComp = v end)
-						AddToggle(scroll, "枪口偏移", "绕过掩体", CFG.muzzleOffset, function(v) CFG.muzzleOffset = v end)
-						AddSlider(scroll, "偏移搜索半径", 1, 5, math.floor(CFG.muzzleRadius), "", function(v) CFG.muzzleRadius = v end)
-						AddSlider(scroll, "偏移步长", 1, 5, math.floor(CFG.muzzleStep), "", function(v) CFG.muzzleStep = v end)
-						AddToggle(scroll, "无视盾牌", "过滤敌方盾牌", CFG.noShield, function(v) CFG.noShield = v end)
-					elseif seg == "静默开火" then
-						AddToggle(scroll, "静默自动射击", "真实开火但有特效", CFG.packetMode, function(v) CFG.packetMode = v end)
-						AddToggle(scroll, "完全静默", "仅发包无特效", CFG.silentPacket, function(v) CFG.silentPacket = v end)
+		local Label = Instance.new("TextLabel", Frame)
+		Label.Size = UDim2.new(0.5, 0, 0, 16)
+		Label.Position = UDim2.new(0, 0, 0, 0)
+		Label.Text = title
+		Label.Font = Enum.Font.GothamMedium
+		Label.TextColor3 = DynamicContext.CurrentTextColor
+		Label.TextSize = 11
+		Label.TextXAlignment = Enum.TextXAlignment.Left
+		Label.TextTruncate = Enum.TextTruncate.AtEnd
+		Label.BackgroundTransparency = 1
+		Label.ZIndex = 14
+		table.insert(DynamicContext.TextElements, { Obj = Label, Type = "Main" })
+
+		local ValLabel = Instance.new("TextLabel", Frame)
+		ValLabel.Size = UDim2.new(0.5, 0, 0, 16)
+		ValLabel.Position = UDim2.new(0.5, 0, 0, 0)
+		ValLabel.Text = tostring(default) .. (unit or "")
+		ValLabel.Font = Enum.Font.Gotham
+		ValLabel.TextColor3 = DynamicContext.CurrentSubTextColor
+		ValLabel.TextSize = 10
+		ValLabel.TextXAlignment = Enum.TextXAlignment.Right
+		ValLabel.BackgroundTransparency = 1
+		ValLabel.ZIndex = 14
+		table.insert(DynamicContext.TextElements, { Obj = ValLabel, Type = "Sub" })
+
+		local TrackBtn = Instance.new("TextButton", Frame)
+		TrackBtn.Size = UDim2.new(1, 0, 0, 14)
+		TrackBtn.Position = UDim2.new(0, 0, 0, 18)
+		TrackBtn.BackgroundTransparency = 1
+		TrackBtn.Text = ""
+		TrackBtn.AutoButtonColor = false
+		TrackBtn.Selectable = false
+		TrackBtn.ZIndex = 15
+
+		local SliderBg = Instance.new("Frame", TrackBtn)
+		SliderBg.Size = UDim2.new(1, 0, 0, 5)
+		SliderBg.Position = UDim2.new(0, 0, 0.5, -2)
+		SliderBg.BackgroundColor3 = Color3.fromRGB(215, 220, 230)
+		SliderBg.ZIndex = 15
+		Instance.new("UICorner", SliderBg).CornerRadius = UDim.new(1, 0)
+
+		local startRatio = math.clamp((default - min) / (max - min), 0, 1)
+		local SliderFill = Instance.new("Frame", SliderBg)
+		SliderFill.Size = UDim2.new(startRatio, 0, 1, 0)
+		SliderFill.BackgroundColor3 = DynamicContext.CurrentActiveColor
+		SliderFill.ZIndex = 15
+		Instance.new("UICorner", SliderFill).CornerRadius = UDim.new(1, 0)
+
+		local Knob = Instance.new("Frame", SliderFill)
+		Knob.Size = UDim2.new(0, 10, 0, 10)
+		Knob.Position = UDim2.new(1, -5, 0.5, -5)
+		Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		Knob.ZIndex = 16
+		Instance.new("UICorner", Knob).CornerRadius = UDim.new(1, 0)
+
+		local lastFillColor = SliderFill.BackgroundColor3
+		local slidingConn, endConn
+		
+		local function update(input)
+			local posX = input.Position.X - SliderBg.AbsolutePosition.X
+			local ratio = math.clamp(posX / SliderBg.AbsoluteSize.X, 0, 1)
+			local raw = min + (max - min) * ratio
+			local val = raw
+			if max - min > 5 then
+				val = math.floor(raw)
+			else
+				val = math.floor(raw * 10 + 0.5) / 10
+			end
+			SliderFill.Size = UDim2.new(ratio, 0, 1, 0)
+			ValLabel.Text = tostring(val) .. (unit or "")
+			if callback then callback(val) end
+		end
+
+		TrackBtn.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				update(input)
+				if slidingConn then slidingConn:Disconnect() end
+				if endConn then endConn:Disconnect() end
+				slidingConn = UIS.InputChanged:Connect(function(moveInput)
+					if moveInput.UserInputType == Enum.UserInputType.MouseMovement or moveInput.UserInputType == Enum.UserInputType.Touch then
+						update(moveInput)
 					end
 				end)
-			end)
-			AnimateSubPageTransition(MainConfigCard, function(scroll)
-				AddToggle(scroll, "启用自瞄", "开启自瞄系统", CFG.aimbot, function(v) CFG.aimbot = v; if not v then Aim.point = nil end end)
-				AddToggle(scroll, "静默模式", "视角不转动", CFG.silent, function(v) CFG.silent = v end)
-				AddToggle(scroll, "自动开火", "锁定后自动射击", CFG.autoFire, function(v) CFG.autoFire = v; if not v then forceRelease() end end)
-				AddToggle(scroll, "瞄准怪物", "锁定目标包含怪物", CFG.aimMonsters, function(v) CFG.aimMonsters = v end)
-				AddToggle(scroll, "瞄准玩家", "锁定目标包含玩家", CFG.aimPlayers, function(v) CFG.aimPlayers = v end)
-				AddSlider(scroll, "FOV 半径", 40, 1600, CFG.fov, "", function(v) CFG.fov = v end)
-				AddDropdown(scroll, "瞄准部位", {"头部", "躯干"}, (CFG.aimPart == "Head") and 1 or 2, function(selected, idx)
-					CFG.aimPart = (idx == 1) and "Head" or "Torso"
-				end)
-			end)
-			
-			local SubTitle = Instance.new("TextLabel", SubConfigCard); SubTitle.Size = UDim2.new(1, -16, 0, 25); SubTitle.Position = UDim2.new(0, 8, 0, 6); SubTitle.Text = "快捷面板"; SubTitle.Font = Enum.Font.GothamBold; SubTitle.TextColor3 = DynamicContext.CurrentTextColor; SubTitle.TextSize = 13; SubTitle.TextXAlignment = Enum.TextXAlignment.Left; SubTitle.BackgroundTransparency = 1; SubTitle.ZIndex = 13; table.insert(DynamicContext.TextElements, {Obj = SubTitle, Type = "Main"})
-			local SubScroll = CreateScrollList(SubConfigCard, 35)
-			AddToggle(SubScroll, "启用", "快捷开关", CFG.aimbot, function(v) CFG.aimbot = v end)
-			AddToggle(SubScroll, "静默", "隐藏视角转动", CFG.silent, function(v) CFG.silent = v end)
-			AddToggle(SubScroll, "自动", "自动开火", CFG.autoFire, function(v) CFG.autoFire = v end)
-			AddSlider(SubScroll, "FOV", 40, 1600, CFG.fov, "", function(v) CFG.fov = v end)
-		end
-	},
-	["透视"] = {
-		hasSub = false,
-		render = function()
-			ClearContainer(MainConfigCard); ClearContainer(SubConfigCard)
-			DynamicContext.ActiveToggles = {}; DynamicContext.ActiveSliders = {}; DynamicContext.TextElements = {}; DynamicContext.BorderElements = {}
-			local Title = Instance.new("TextLabel", MainConfigCard); Title.Size = UDim2.new(1, -20, 0, 25); Title.Position = UDim2.new(0, 10, 0, 6); Title.Text = "ESP 透视"; Title.Font = Enum.Font.GothamBold; Title.TextColor3 = DynamicContext.CurrentTextColor; Title.TextSize = 13; Title.TextXAlignment = Enum.TextXAlignment.Left; Title.BackgroundTransparency = 1; Title.ZIndex = 13; table.insert(DynamicContext.TextElements, {Obj = Title, Type = "Main"})
-			CreateSubSegmentNav(MainConfigCard, {"绘制开关", "显示元素", "目标颜色"}, function(seg)
-				AnimateSubPageTransition(MainConfigCard, function(scroll)
-					if seg == "绘制开关" then
-						AddToggle(scroll, "玩家 ESP", "显示玩家方框", CFG.espPlayers, function(v) CFG.espPlayers = v end)
-						AddToggle(scroll, "怪物 ESP", "显示怪物方框", CFG.espMonsters, function(v) CFG.espMonsters = v end)
-						AddToggle(scroll, "物品 ESP", "显示物品", CFG.espItems, function(v) CFG.espItems = v end)
-						AddToggle(scroll, "弹药 ESP", "显示弹药补给点", CFG.espAmmo, function(v) CFG.espAmmo = v end)
-						AddToggle(scroll, "好友 ESP", "独立标记好友", CFG.espFriends, function(v) CFG.espFriends = v end)
-						AddToggle(scroll, "显示自己", "在 ESP 中显示自身", CFG.showSelf, function(v) CFG.showSelf = v end)
-					elseif seg == "显示元素" then
-						AddToggle(scroll, "方框", "绘制目标方框", CFG.box, function(v) CFG.box = v end)
-						AddToggle(scroll, "名字", "显示目标名称", CFG.name, function(v) CFG.name = v end)
-						AddToggle(scroll, "血量", "显示目标血量", CFG.health, function(v) CFG.health = v end)
-						AddToggle(scroll, "距离", "显示距离数值", CFG.distance, function(v) CFG.distance = v end)
-						AddToggle(scroll, "屏幕连线", "从屏幕底部画线", CFG.tracer, function(v) CFG.tracer = v end)
-						AddSlider(scroll, "最大距离", 50, 2000, CFG.maxDist, "米", function(v) CFG.maxDist = v end)
-					elseif seg == "目标颜色" then
-						AddColorRow(scroll, "玩家颜色", function() return CFG.colorPlayer end, function(v) CFG.colorPlayer = v end)
-						AddColorRow(scroll, "好友颜色", function() return CFG.colorFriend end, function(v) CFG.colorFriend = v end)
-						AddColorRow(scroll, "怪物颜色", function() return CFG.colorMonster end, function(v) CFG.colorMonster = v end)
-						AddColorRow(scroll, "Boss 颜色", function() return CFG.colorBoss end, function(v) CFG.colorBoss = v end)
-						AddColorRow(scroll, "物品颜色", function() return CFG.colorItem end, function(v) CFG.colorItem = v end)
-						AddColorRow(scroll, "弹药颜色", function() return CFG.colorAmmo end, function(v) CFG.colorAmmo = v end)
+				endConn = UIS.InputEnded:Connect(function(endInput)
+					if endInput.UserInputType == Enum.UserInputType.MouseButton1 or endInput.UserInputType == Enum.UserInputType.Touch then
+						if slidingConn then slidingConn:Disconnect() end
+						if endConn then endConn:Disconnect() end
 					end
 				end)
-			end)
-			AnimateSubPageTransition(MainConfigCard, function(scroll)
-				AddToggle(scroll, "玩家 ESP", "显示玩家方框", CFG.espPlayers, function(v) CFG.espPlayers = v end)
-				AddToggle(scroll, "怪物 ESP", "显示怪物方框", CFG.espMonsters, function(v) CFG.espMonsters = v end)
-				AddToggle(scroll, "物品 ESP", "显示物品", CFG.espItems, function(v) CFG.espItems = v end)
-				AddToggle(scroll, "弹药 ESP", "显示弹药补给点", CFG.espAmmo, function(v) CFG.espAmmo = v end)
-				AddToggle(scroll, "好友 ESP", "独立标记好友", CFG.espFriends, function(v) CFG.espFriends = v end)
-				AddToggle(scroll, "显示自己", "在 ESP 中显示自身", CFG.showSelf, function(v) CFG.showSelf = v end)
-			end)
-		end
-	},
-	["角色"] = {
-		hasSub = false,
-		render = function()
-			ClearContainer(MainConfigCard); ClearContainer(SubConfigCard)
-			DynamicContext.ActiveToggles = {}; DynamicContext.ActiveSliders = {}; DynamicContext.TextElements = {}; DynamicContext.BorderElements = {}
-			local Title = Instance.new("TextLabel", MainConfigCard); Title.Size = UDim2.new(1, -20, 0, 25); Title.Position = UDim2.new(0, 10, 0, 6); Title.Text = "角色属性"; Title.Font = Enum.Font.GothamBold; Title.TextColor3 = DynamicContext.CurrentTextColor; Title.TextSize = 13; Title.TextXAlignment = Enum.TextXAlignment.Left; Title.BackgroundTransparency = 1; Title.ZIndex = 13; table.insert(DynamicContext.TextElements, {Obj = Title, Type = "Main"})
-			local Scroll = CreateScrollList(MainConfigCard, 35)
-			AddToggle(Scroll, "无限体力", "不会疲劳耗尽体力", CFG.infStamina, function(v) CFG.infStamina = v end)
-			AddToggle(Scroll, "修改移动速度", "覆盖默认移速", CFG.changeSpeed, function(v) CFG.changeSpeed = v end)
-			AddSlider(Scroll, "移动速度", 16, 120, CFG.walkSpeed, "", function(v) CFG.walkSpeed = v end)
-			AddToggle(Scroll, "修改跳跃力", "覆盖默认跳跃力", CFG.changeJump, function(v) CFG.changeJump = v end)
-			AddSlider(Scroll, "跳跃力", 50, 200, CFG.jumpPower, "", function(v) CFG.jumpPower = v end)
-			AddToggle(Scroll, "无坠落伤害", "安全下落", CFG.noFall, function(v) CFG.noFall = v end)
-			AddSlider(Scroll, "安全下落速度", 20, 200, CFG.fallSpeed, "", function(v) CFG.fallSpeed = v end)
-		end
-	},
-	["视觉"] = {
-		hasSub = false,
-		render = function()
-			ClearContainer(MainConfigCard); ClearContainer(SubConfigCard)
-			DynamicContext.ActiveToggles = {}; DynamicContext.ActiveSliders = {}; DynamicContext.TextElements = {}; DynamicContext.BorderElements = {}
-			local Title = Instance.new("TextLabel", MainConfigCard); Title.Size = UDim2.new(1, -20, 0, 25); Title.Position = UDim2.new(0, 10, 0, 6); Title.Text = "视觉特效"; Title.Font = Enum.Font.GothamBold; Title.TextColor3 = DynamicContext.CurrentTextColor; Title.TextSize = 13; Title.TextXAlignment = Enum.TextXAlignment.Left; Title.BackgroundTransparency = 1; Title.ZIndex = 13; table.insert(DynamicContext.TextElements, {Obj = Title, Type = "Main"})
-			CreateSubSegmentNav(MainConfigCard, {"子弹轨迹", "环境修改"}, function(seg)
-				AnimateSubPageTransition(MainConfigCard, function(scroll)
-					if seg == "子弹轨迹" then
-						AddToggle(scroll, "子弹轨迹", "显示子弹飞行轨迹", CFG.trail, function(v) CFG.trail = v end)
-						AddToggle(scroll, "枪口特效", "显示开火闪光", CFG.muzzleTrail, function(v) CFG.muzzleTrail = v end)
-						AddSlider(scroll, "轨迹持续时间", 1, 10, CFG.trailTime, "秒", function(v) CFG.trailTime = v end)
-						AddToggle(scroll, "他人弹道", "显示队友或怪物轨迹", CFG.otherTrails, function(v) CFG.otherTrails = v end)
-						AddColorRow(scroll, "轨迹颜色", function() return CFG.trailColor end, function(v) CFG.trailColor = v end)
-						AddColorRow(scroll, "队友颜色", function() return CFG.colorTeamTrail end, function(v) CFG.colorTeamTrail = v end)
-						AddColorRow(scroll, "怪物颜色", function() return CFG.colorEnemyTrail end, function(v) CFG.colorEnemyTrail = v end)
-					else
-						AddToggle(scroll, "除雾", "移除场景雾气", CFG.noFog, function(v) CFG.noFog = v; applyWorld() end)
-						AddToggle(scroll, "地图高亮", "提高场景亮度", CFG.mapGlow, function(v) CFG.mapGlow = v; applyWorld() end)
+			end
+		end)
+		
+		table.insert(DynamicContext.ActiveSliders, {
+			Update = function()
+				if DynamicContext.CurrentActiveColor ~= lastFillColor then
+					lastFillColor = DynamicContext.CurrentActiveColor
+					safeTween(SliderFill, TweenInfo.new(0.3), { BackgroundColor3 = lastFillColor })
+				end
+			end,
+		})
+		return Frame
+	end
+
+	local function AddDropdown(parent, title, options, defaultIndex, callback)
+		local DropFrame = Instance.new("CanvasGroup")
+		DropFrame.Size = UDim2.new(1, -12, 0, 32)
+		-- 【修复1】将 DropFrame 自身背景完全透明，解决其作为 CanvasGroup 渲染时产生的边缘绿光 Bug
+		DropFrame.BackgroundTransparency = 1
+		DropFrame.ClipsDescendants = true
+		DropFrame.ZIndex = 20
+		DropFrame.Parent = parent
+		
+		local DropBg = Instance.new("Frame", DropFrame)
+		DropBg.Size = UDim2.new(1, 0, 1, 0)
+		DropBg.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		DropBg.BackgroundTransparency = 0
+		DropBg.ZIndex = 20
+		Instance.new("UICorner", DropBg).CornerRadius = UDim.new(0, 6)
+		
+		-- 【修复2】添加固定中性色描边，恢复默认控件配色
+		local DropStroke = Instance.new("UIStroke", DropBg)
+		DropStroke.Thickness = 1
+		DropStroke.Transparency = 0.4
+		DropStroke.Color = Color3.fromRGB(200, 200, 200)
+		
+		local HeaderBtn = Instance.new("TextButton", DropBg)
+		HeaderBtn.Size = UDim2.new(1, 0, 0, 32)
+		HeaderBtn.BackgroundTransparency = 1
+		HeaderBtn.Text = ""
+		HeaderBtn.AutoButtonColor = false
+		HeaderBtn.Selectable = false
+		HeaderBtn.ZIndex = 21
+
+		local TitleLabel = Instance.new("TextLabel", HeaderBtn)
+		TitleLabel.Size = UDim2.new(0.48, 0, 1, 0)
+		TitleLabel.Position = UDim2.new(0, 8, 0, 0)
+		TitleLabel.Text = title
+		TitleLabel.Font = Enum.Font.GothamMedium
+		TitleLabel.TextColor3 = DynamicContext.CurrentTextColor
+		TitleLabel.TextSize = 10
+		TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+		TitleLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		TitleLabel.BackgroundTransparency = 1
+		TitleLabel.ZIndex = 21
+		table.insert(DynamicContext.TextElements, { Obj = TitleLabel, Type = "Main" })
+
+		local SelectedLabel = Instance.new("TextLabel", HeaderBtn)
+		SelectedLabel.Size = UDim2.new(0.42, -10, 1, 0)
+		SelectedLabel.Position = UDim2.new(0.48, 0, 0, 0)
+		SelectedLabel.Text = options[defaultIndex or 1] or "选择..."
+		SelectedLabel.Font = Enum.Font.Gotham
+		SelectedLabel.TextColor3 = DynamicContext.CurrentSubTextColor
+		SelectedLabel.TextSize = 9
+		SelectedLabel.TextXAlignment = Enum.TextXAlignment.Right
+		SelectedLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		SelectedLabel.BackgroundTransparency = 1
+		SelectedLabel.ZIndex = 21
+		table.insert(DynamicContext.TextElements, { Obj = SelectedLabel, Type = "Sub" })
+
+		local ArrowLabel = Instance.new("TextLabel", HeaderBtn)
+		ArrowLabel.Size = UDim2.new(0, 14, 1, 0)
+		ArrowLabel.Position = UDim2.new(1, -16, 0, 0)
+		ArrowLabel.Text = "▼"
+		ArrowLabel.Font = Enum.Font.GothamBold
+		ArrowLabel.TextColor3 = DynamicContext.CurrentSubTextColor
+		ArrowLabel.TextSize = 8
+		ArrowLabel.BackgroundTransparency = 1
+		ArrowLabel.ZIndex = 21
+		table.insert(DynamicContext.TextElements, { Obj = ArrowLabel, Type = "Sub" })
+
+		local OptionContainer = Instance.new("Frame", DropBg)
+		OptionContainer.Size = UDim2.new(1, -10, 0, 0)
+		OptionContainer.Position = UDim2.new(0, 5, 0, 30)
+		OptionContainer.BackgroundTransparency = 1
+		OptionContainer.ClipsDescendants = true
+		OptionContainer.ZIndex = 21
+		local OptionList = Instance.new("UIListLayout", OptionContainer)
+		OptionList.Padding = UDim.new(0, 3)
+		OptionList.SortOrder = Enum.SortOrder.LayoutOrder
+
+		local isExpanded = false
+		local optionHeight, expandedHeight = 22, 34 + (#options * 25)
+		for i, optionText in ipairs(options) do
+			local OptBtn = Instance.new("TextButton", OptionContainer)
+			OptBtn.Size = UDim2.new(1, 0, 0, optionHeight)
+			-- 【修复3】使用默认纯净的浅灰背景色，不受主题色影响
+			OptBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
+			OptBtn.BackgroundTransparency = (i == (defaultIndex or 1)) and 0.1 or 0.4
+			OptBtn.Text = optionText
+			OptBtn.Font = Enum.Font.Gotham
+			-- 【修复4】使用固定深灰色字体，恢复默认控件配色
+			OptBtn.TextColor3 = Color3.fromRGB(60, 60, 60)
+			OptBtn.TextSize = 9
+			OptBtn.TextTruncate = Enum.TextTruncate.AtEnd
+			OptBtn.AutoButtonColor = false
+			OptBtn.Selectable = false
+			OptBtn.ZIndex = 22
+			Instance.new("UICorner", OptBtn).CornerRadius = UDim.new(0, 4)
+
+			OptBtn.MouseButton1Click:Connect(function()
+				SelectedLabel.Text = optionText
+				for _, child in ipairs(OptionContainer:GetChildren()) do
+					if child:IsA("TextButton") then
+						safeTween(child, TweenInfo.new(0.2), { BackgroundTransparency = (child == OptBtn) and 0.1 or 0.4 })
 					end
-				end)
-			end)
-			AnimateSubPageTransition(MainConfigCard, function(scroll)
-				AddToggle(scroll, "子弹轨迹", "显示子弹飞行轨迹", CFG.trail, function(v) CFG.trail = v end)
-				AddToggle(scroll, "枪口特效", "显示开火闪光", CFG.muzzleTrail, function(v) CFG.muzzleTrail = v end)
-				AddSlider(scroll, "轨迹持续时间", 1, 10, CFG.trailTime, "秒", function(v) CFG.trailTime = v end)
-				AddToggle(scroll, "他人弹道", "显示队友或怪物轨迹", CFG.otherTrails, function(v) CFG.otherTrails = v end)
-			end)
-		end
-	},
-	["系统"] = {
-		hasSub = false,
-		render = function()
-			ClearContainer(MainConfigCard); ClearContainer(SubConfigCard)
-			DynamicContext.ActiveToggles = {}; DynamicContext.ActiveSliders = {}; DynamicContext.TextElements = {}; DynamicContext.BorderElements = {}
-			local Title = Instance.new("TextLabel", MainConfigCard); Title.Size = UDim2.new(1, -20, 0, 25); Title.Position = UDim2.new(0, 10, 0, 6); Title.Text = "系统与调试"; Title.Font = Enum.Font.GothamBold; Title.TextColor3 = DynamicContext.CurrentTextColor; Title.TextSize = 13; Title.TextXAlignment = Enum.TextXAlignment.Left; Title.BackgroundTransparency = 1; Title.ZIndex = 13; table.insert(DynamicContext.TextElements, {Obj = Title, Type = "Main"})
-			CreateSubSegmentNav(MainConfigCard, {"调试工具", "界面配置"}, function(seg)
-				AnimateSubPageTransition(MainConfigCard, function(scroll)
-					if seg == "调试工具" then
-						AddButton(scroll, "清除轨迹", "移除所有生成的轨迹", function()
-							for _, v in ipairs(workspace.Terrain:GetChildren()) do
-								if v.Name == "__btrTrail" or v.Name == "__btrMuzzle" or v.Name == "__btrImpact" then v:Destroy() end
-							end
-						end)
-						AddButton(scroll, "重新连接网络", "重新装载钩子", function()
-							Network = nil; installNetHooks(); installRayHooks()
-							if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
-						end)
-					else
-						AddDropdown(scroll, "界面主题", PaletteNames, 3, function(selected) 
-							local keys = {}
-							for k in pairs(PalettePresets) do table.insert(keys, k) end
-							ApplyPalette(keys[table.find(PaletteNames, selected) or 1]) 
-						end)
-					end
-				end)
-			end)
-			AnimateSubPageTransition(MainConfigCard, function(scroll)
-				AddButton(scroll, "清除轨迹", "移除所有生成的轨迹", function()
-					for _, v in ipairs(workspace.Terrain:GetChildren()) do
-						if v.Name == "__btrTrail" or v.Name == "__btrMuzzle" or v.Name == "__btrImpact" then v:Destroy() end
-					end
-				end)
-				AddButton(scroll, "重新连接网络", "重新装载钩子", function()
-					Network = nil; installNetHooks(); installRayHooks()
-					if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
-				end)
-				-- 补充默认渲染的界面主题下拉框，防止切回来不显示
-				AddDropdown(scroll, "界面主题", PaletteNames, 3, function(selected) 
-					local keys = {}
-					for k in pairs(PalettePresets) do table.insert(keys, k) end
-					ApplyPalette(keys[table.find(PaletteNames, selected) or 1]) 
-				end)
+				end
+				isExpanded = false
+				local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+				safeTween(DropFrame, tweenInfo, { Size = UDim2.new(1, -12, 0, 32) })
+				safeTween(OptionContainer, tweenInfo, { Size = UDim2.new(1, -10, 0, 0) })
+				safeTween(ArrowLabel, tweenInfo, { Rotation = 0 })
+				if callback then callback(optionText, i) end
 			end)
 		end
-	},
-	["关于"] = {
-		hasSub = false,
-		render = function()
-			ClearContainer(MainConfigCard); ClearContainer(SubConfigCard)
-			DynamicContext.ActiveToggles = {}; DynamicContext.ActiveSliders = {}; DynamicContext.TextElements = {}; DynamicContext.BorderElements = {}
-			local Title = Instance.new("TextLabel", MainConfigCard); Title.Size = UDim2.new(1, -20, 0, 25); Title.Position = UDim2.new(0, 10, 0, 6); Title.Text = "关于与帮助"; Title.Font = Enum.Font.GothamBold; Title.TextColor3 = DynamicContext.CurrentTextColor; Title.TextSize = 13; Title.TextXAlignment = Enum.TextXAlignment.Left; Title.BackgroundTransparency = 1; Title.ZIndex = 13; table.insert(DynamicContext.TextElements, {Obj = Title, Type = "Main"})
-			CreateSubSegmentNav(MainConfigCard, {"更新公告", "快捷键"}, function(seg)
-				AnimateSubPageTransition(MainConfigCard, function(scroll)
-					if seg == "更新公告" then
-						local infoFrame = Instance.new("Frame")
-						infoFrame.Size = UDim2.new(1, -12, 0, 160)
-						infoFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-						infoFrame.BackgroundTransparency = 0.7
-						infoFrame.ZIndex = 14
-						infoFrame.Parent = scroll
-						Instance.new("UICorner", infoFrame).CornerRadius = UDim.new(0, 8)
-						
-						local infoTxt = Instance.new("TextLabel")
-						infoTxt.Size = UDim2.new(1, -20, 1, -20)
-						infoTxt.Position = UDim2.new(0, 10, 0, 10)
-						infoTxt.BackgroundTransparency = 1
-						infoTxt.TextColor3 = DynamicContext.CurrentTextColor
-						infoTxt.Font = Enum.Font.Gotham
-						infoTxt.TextSize = 11
-						infoTxt.TextXAlignment = Enum.TextXAlignment.Left
-						infoTxt.TextYAlignment = Enum.TextYAlignment.Top
-						infoTxt.TextWrapped = true
-						infoTxt.Text = "【更新公告】\n- 修复下拉菜单消失问题\n- 补齐了默认页漏掉的控件\n- 增加下拉菜单展开空间"
-						infoTxt.ZIndex = 15
-						infoTxt.Parent = infoFrame
-						table.insert(DynamicContext.TextElements, {Obj = infoTxt, Type = "Main"})
-					else
-						AddButton(scroll, "按 RightShift", "显示 / 隐藏 UI", function() end)
-						AddButton(scroll, "点击 Logo", "收起为悬浮小岛", function() end)
-						AddButton(scroll, "双击悬浮小岛", "展开 / 收起", function() end)
-					end
-				end)
-			end)
-			AnimateSubPageTransition(MainConfigCard, function(scroll)
-				local infoFrame = Instance.new("Frame")
-				infoFrame.Size = UDim2.new(1, -12, 0, 160)
-				infoFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-				infoFrame.BackgroundTransparency = 0.7
-				infoFrame.ZIndex = 14
-				infoFrame.Parent = scroll
-				Instance.new("UICorner", infoFrame).CornerRadius = UDim.new(0, 8)
-				
-				local infoTxt = Instance.new("TextLabel")
-				infoTxt.Size = UDim2.new(1, -20, 1, -20)
-				infoTxt.Position = UDim2.new(0, 10, 0, 10)
-				infoTxt.BackgroundTransparency = 1
-				infoTxt.TextColor3 = DynamicContext.CurrentTextColor
-				infoTxt.Font = Enum.Font.Gotham
-				infoTxt.TextSize = 11
-				infoTxt.TextXAlignment = Enum.TextXAlignment.Left
-				infoTxt.TextYAlignment = Enum.TextYAlignment.Top
-				infoTxt.TextWrapped = true
-				infoTxt.Text = "【更新公告】\n- 修复下拉菜单消失问题\n- 补齐了默认页漏掉的控件\n- 增加下拉菜单展开空间"
-				infoTxt.ZIndex = 15
-				infoTxt.Parent = infoFrame
-				table.insert(DynamicContext.TextElements, {Obj = infoTxt, Type = "Main"})
-			end)
-		end
+		
+		HeaderBtn.MouseButton1Click:Connect(function()
+			isExpanded = not isExpanded
+			local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+			if isExpanded then
+				safeTween(DropFrame, tweenInfo, { Size = UDim2.new(1, -12, 0, expandedHeight) })
+				safeTween(OptionContainer, tweenInfo, { Size = UDim2.new(1, -10, 0, #options * 25) })
+				safeTween(ArrowLabel, tweenInfo, { Rotation = 180 })
+			else
+				safeTween(DropFrame, tweenInfo, { Size = UDim2.new(1, -12, 0, 32) })
+				safeTween(OptionContainer, tweenInfo, { Size = UDim2.new(1, -10, 0, 0) })
+				safeTween(ArrowLabel, tweenInfo, { Rotation = 0 })
+			end
+		end)
+		return DropFrame
+	end
+
+	local COLOR_CYCLE = {
+		Color3.fromRGB(70, 255, 110), Color3.fromRGB(255, 105, 180), Color3.fromRGB(255, 60, 60),
+		Color3.fromRGB(200, 80, 255), Color3.fromRGB(255, 220, 0), Color3.fromRGB(0, 230, 255),
+		Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 140, 0),
 	}
-}
+	local function AddColor(parent, title, get, set)
+		local Frame = Instance.new("CanvasGroup")
+		Frame.Size = UDim2.new(1, -12, 0, 30)
+		Frame.BackgroundTransparency = 1
+		Frame.ZIndex = 14
+		Frame.Parent = parent
 
-local NavLayout = Instance.new("UIListLayout", NavCard); NavLayout.Padding = UDim.new(0, 4); NavLayout.SortOrder = Enum.SortOrder.LayoutOrder
-local NavPadding = Instance.new("UIPadding", NavCard); NavPadding.PaddingTop = UDim.new(0, 8); NavPadding.PaddingLeft = UDim.new(0, 8); NavPadding.PaddingRight = UDim.new(0, 8)
-local Buttons = {}
-local Tabs = {"自瞄", "透视", "角色", "视觉", "系统", "关于"}
+		local Label = Instance.new("TextLabel", Frame)
+		Label.Size = UDim2.new(1, -60, 1, 0)
+		Label.Position = UDim2.new(0, 0, 0, 0)
+		Label.Text = title
+		Label.Font = Enum.Font.GothamMedium
+		Label.TextColor3 = DynamicContext.CurrentTextColor
+		Label.TextSize = 11
+		Label.TextXAlignment = Enum.TextXAlignment.Left
+		Label.BackgroundTransparency = 1
+		Label.ZIndex = 14
+		table.insert(DynamicContext.TextElements, { Obj = Label, Type = "Main" })
 
-local function SwitchTabWithAnimation(tabName)
-	if DynamicContext.CurrentTab == tabName then return end
-	DynamicContext.CurrentTab = tabName
-	for name, btnObj in pairs(Buttons) do
-		if name == tabName then
-			TweenService:Create(btnObj, TweenInfo.new(0.2), {BackgroundTransparency = 0.25}):Play()
-			btnObj.TextColor3 = DynamicContext.CurrentTextColor
-		else
-			TweenService:Create(btnObj, TweenInfo.new(0.2), {BackgroundTransparency = 0.85}):Play()
-			btnObj.TextColor3 = DynamicContext.CurrentSubTextColor
-		end
+		local Swatch = Instance.new("TextButton", Frame)
+		Swatch.Size = UDim2.new(0, 36, 0, 18)
+		Swatch.Position = UDim2.new(1, -38, 0.5, -9)
+		Swatch.BackgroundColor3 = get()
+		Swatch.Text = ""
+		Swatch.AutoButtonColor = false
+		Swatch.Selectable = false
+		Swatch.ZIndex = 15
+		Instance.new("UICorner", Swatch).CornerRadius = UDim.new(0, 4)
+
+		Swatch.MouseButton1Click:Connect(function()
+			local cur = get()
+			local idx = 1
+			for i, c in ipairs(COLOR_CYCLE) do
+				if c == cur then idx = i; break end
+			end
+			idx = idx % #COLOR_CYCLE + 1
+			set(COLOR_CYCLE[idx])
+			Swatch.BackgroundColor3 = COLOR_CYCLE[idx]
+		end)
+		return Frame
 	end
-	if DynamicContext.TabSwitchThread then task.cancel(DynamicContext.TabSwitchThread) end
-	DynamicContext.TabSwitchThread = task.spawn(function()
+
+	local function CreateSubSegmentNav(parent, segments, onSegmentChanged)
+		local SegmentFrame = Instance.new("Frame")
+		SegmentFrame.Size = UDim2.new(1, -16, 0, 26)
+		SegmentFrame.Position = UDim2.new(0, 8, 0, 32)
+		SegmentFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		SegmentFrame.BackgroundTransparency = 0.4
+		SegmentFrame.BorderSizePixel = 0
+		SegmentFrame.ZIndex = 15
+		SegmentFrame.Parent = parent
+		Instance.new("UICorner", SegmentFrame).CornerRadius = UDim.new(0, 13)
+		local SegStroke = Instance.new("UIStroke", SegmentFrame)
+		SegStroke.Thickness = 1
+		SegStroke.Transparency = 0.5
+		SegStroke.Color = DynamicContext.CurrentBorderColor
+		table.insert(DynamicContext.BorderElements, SegStroke)
+
+		local Indicator = Instance.new("Frame", SegmentFrame)
+		Indicator.Size = UDim2.new(1 / #segments, -4, 1, -4)
+		Indicator.Position = UDim2.new(0, 2, 0, 2)
+		Indicator.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		Indicator.BackgroundTransparency = 0.1
+		Indicator.ZIndex = 16
+		Instance.new("UICorner", Indicator).CornerRadius = UDim.new(0, 11)
+
+		local currentIdx = 0
+		local Buttons = {}
+
+		local function selectSegment(index, animate)
+			if currentIdx == index then return end
+			currentIdx = index
+			for j, b in ipairs(Buttons) do
+				b.TextColor3 = (j == index) and DynamicContext.CurrentTextColor or DynamicContext.CurrentSubTextColor
+			end
+			if animate then
+				safeTween(Indicator, TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+					Position = UDim2.new((index - 1) * (1 / #segments), 2, 0, 2),
+				})
+			else
+				Indicator.Position = UDim2.new((index - 1) * (1 / #segments), 2, 0, 2)
+			end
+			if onSegmentChanged then onSegmentChanged(segments[index], index) end
+		end
+
+		for i, segName in ipairs(segments) do
+			local Btn = Instance.new("TextButton", SegmentFrame)
+			Btn.Size = UDim2.new(1 / #segments, 0, 1, 0)
+			Btn.Position = UDim2.new((i - 1) * (1 / #segments), 0, 0, 0)
+			Btn.BackgroundTransparency = 1
+			Btn.Text = segName
+			Btn.Font = Enum.Font.GothamBold
+			Btn.TextColor3 = (i == 1) and DynamicContext.CurrentTextColor or DynamicContext.CurrentSubTextColor
+			Btn.TextSize = 9
+			Btn.AutoButtonColor = false
+			Btn.Selectable = false
+			Btn.ZIndex = 17
+			Btn.MouseButton1Click:Connect(function()
+				selectSegment(i, true)
+			end)
+			table.insert(Buttons, Btn)
+		end
+		selectSegment(1, false)
+		return SegmentFrame
+	end
+
+	local function AnimateSubPageTransition(container, buildContentFunc)
+		for _, child in ipairs(container:GetChildren()) do
+			if child.Name == "SubContentPage" then
+				child.Parent = nil
+				child:Destroy()
+			end
+		end
+
+		local newPage = Instance.new("CanvasGroup")
+		newPage.Name = "SubContentPage"
+		newPage.Size = UDim2.new(1, 0, 1, -68)
+		newPage.Position = UDim2.new(0, 0, 0, 78)
+		newPage.BackgroundTransparency = 1
+		newPage.GroupTransparency = 1
+		newPage.ZIndex = 14
+		newPage.Parent = container
+
+		local Scroll = CreateScrollList(newPage, 0)
+		buildContentFunc(Scroll)
+
+		local children = {}
+		for _, c in ipairs(Scroll:GetChildren()) do
+			if c:IsA("GuiObject") then
+				table.insert(children, c)
+			end
+		end
+
+		for i, c in ipairs(children) do
+			local origPos = c.Position
+			c.Position = UDim2.new(origPos.X.Scale, origPos.X.Offset, origPos.Y.Scale, origPos.Y.Offset + 15)
+			c.GroupTransparency = 1
+			task.delay((i - 1) * 0.04, function()
+				if c.Parent and c.Parent.Parent == newPage then
+					safeTween(c, TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+						Position = origPos,
+						GroupTransparency = 0,
+					})
+				end
+			end)
+		end
+
+		safeTween(newPage, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Position = UDim2.new(0, 0, 0, 68),
+			GroupTransparency = 0,
+		})
+	end
+
+	local function renderStatusPanel(parent)
+		ClearContainer(parent)
+		CreateTitle(parent, "实时状态")
+		local StatusLabel = Instance.new("TextLabel", parent)
+		StatusLabel.Size = UDim2.new(1, -16, 0, 64)
+		StatusLabel.Position = UDim2.new(0, 8, 0, 34)
+		StatusLabel.Text = "等待数据..."
+		StatusLabel.Font = Enum.Font.Gotham
+		StatusLabel.TextColor3 = DynamicContext.CurrentSubTextColor
+		StatusLabel.TextSize = 9
+		StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+		StatusLabel.TextYAlignment = Enum.TextYAlignment.Top
+		StatusLabel.TextWrapped = true
+		StatusLabel.BackgroundTransparency = 1
+		StatusLabel.ZIndex = 13
+		table.insert(DynamicContext.TextElements, { Obj = StatusLabel, Type = "Sub" })
+		DynamicContext.StatusLabel = StatusLabel
+
+		local SubScroll = CreateScrollList(parent, 104)
+		AddToggle(SubScroll, "启用自瞄", "视角完全不动", CFG.aimbot, function(v)
+			CFG.aimbot = v
+			if not v then removeAimHook(); Aim.point = nil end
+		end)
+		AddToggle(SubScroll, "自动开火", "瞄准到目标自动射击", CFG.autoFire, function(v)
+			CFG.autoFire = v
+			if not v then forceRelease() end
+		end)
+		AddToggle(SubScroll, "Ragebot", "直接发包·无特效", CFG.silentPacket, function(v)
+			CFG.silentPacket = v
+		end)
+	end
+
+	local function createColorRow(parent, title, get, set)
+		return AddColor(parent, title, get, set)
+	end
+
+	local Island = Instance.new("CanvasGroup")
+	Island.Name = "DynamicIsland"
+	Island.Size = UDim2.new(0, 200, 0, 36)
+	Island.Position = UDim2.new(0.5, -100, 0, 15)
+	Island.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	Island.GroupTransparency = 1
+	Island.Visible = false
+	Island.ZIndex = 200
+	Island.Parent = ScreenGui
+	local IslandCorner = Instance.new("UICorner", Island)
+	IslandCorner.CornerRadius = UDim.new(0, 18)
+	local IslandStroke = Instance.new("UIStroke", Island)
+	IslandStroke.Thickness = 2
+	IslandStroke.Color = Color3.fromRGB(255, 255, 255)
+	local IslandGradient = Instance.new("UIGradient", Island)
+	local IslandStrokeGradient = Instance.new("UIGradient", IslandStroke)
+	IslandStrokeGradient.Color = StrokeGradient.Color
+
+	local IslandLightOverlay = Instance.new("Frame", Island)
+	IslandLightOverlay.Size = UDim2.new(1, 0, 1, 0)
+	IslandLightOverlay.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	IslandLightOverlay.BackgroundTransparency = 0.35
+	IslandLightOverlay.ZIndex = 200
+
+	local IslandContent = Instance.new("Frame", Island)
+	IslandContent.Size = UDim2.new(1, 0, 1, 0)
+	IslandContent.BackgroundTransparency = 1
+	IslandContent.ZIndex = 201
+
+	local IslandLogo = Instance.new("TextLabel", IslandContent)
+	IslandLogo.Size = UDim2.new(1, -80, 1, 0)
+	IslandLogo.Position = UDim2.new(0, 20, 0, 0)
+	IslandLogo.Font = Enum.Font.FredokaOne
+	IslandLogo.Text = "Link.cc"
+	IslandLogo.TextColor3 = DynamicContext.CurrentLogoColor
+	IslandLogo.TextSize = 16
+	IslandLogo.TextXAlignment = Enum.TextXAlignment.Left
+	IslandLogo.TextYAlignment = Enum.TextYAlignment.Center
+	IslandLogo.BackgroundTransparency = 1
+	IslandLogo.ZIndex = 202
+
+	local IslandBall = Instance.new("TextLabel", IslandContent)
+	IslandBall.Size = UDim2.new(1, 0, 1, 0)
+	IslandBall.Font = Enum.Font.FredokaOne
+	IslandBall.Text = "L"
+	IslandBall.TextColor3 = DynamicContext.CurrentLogoColor
+	IslandBall.TextSize = 18
+	IslandBall.BackgroundTransparency = 1
+	IslandBall.Visible = false
+	IslandBall.ZIndex = 204
+
+	local ExpandBtn = Instance.new("TextButton", IslandContent)
+	ExpandBtn.Size = UDim2.new(0, 50, 0, 22)
+	ExpandBtn.Position = UDim2.new(1, -58, 0.5, -11)
+	ExpandBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	ExpandBtn.BackgroundTransparency = 0.2
+	ExpandBtn.Text = "打开"
+	ExpandBtn.Font = Enum.Font.GothamBold
+	ExpandBtn.TextColor3 = DynamicContext.CurrentTextColor
+	ExpandBtn.TextSize = 10
+	ExpandBtn.AutoButtonColor = false
+	ExpandBtn.Selectable = false
+	ExpandBtn.ZIndex = 203
+	Instance.new("UICorner", ExpandBtn).CornerRadius = UDim.new(0, 11)
+	table.insert(DynamicContext.TextElements, { Obj = ExpandBtn, Type = "Main" })
+
+	local WaveBarsContainer = Instance.new("Frame", IslandContent)
+	WaveBarsContainer.Size = UDim2.new(0, 120, 1, 0)
+	WaveBarsContainer.Position = UDim2.new(0, 18, 0, 0)
+	WaveBarsContainer.BackgroundTransparency = 1
+	WaveBarsContainer.Visible = false
+	WaveBarsContainer.ZIndex = 202
+
+	local waveBars = {}
+	for i = 1, 7 do
+		local bar = Instance.new("Frame", WaveBarsContainer)
+		bar.Size = UDim2.new(0, 5, 0, 6)
+		bar.Position = UDim2.new(0, (i - 1) * 14, 0.5, -3)
+		bar.BackgroundColor3 = DynamicContext.CurrentLogoColor
+		bar.BorderSizePixel = 0
+		bar.ZIndex = 203
+		Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+		bar:SetAttribute("PhaseOffset", math.random() * 50)
+		bar:SetAttribute("SpeedMultiplier", 0.8 + math.random() * 0.5)
+		table.insert(waveBars, bar)
+	end
+
+	local AudioIslandModal = Instance.new("CanvasGroup")
+	AudioIslandModal.Name = "AudioIslandModal"
+	AudioIslandModal.Size = UDim2.new(0, 280, 0, 140)
+	AudioIslandModal.Position = UDim2.new(0.5, -140, 0.5, -70)
+	AudioIslandModal.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	AudioIslandModal.GroupTransparency = 1
+	AudioIslandModal.Visible = false
+	AudioIslandModal.ZIndex = 300
+	AudioIslandModal.Parent = ScreenGui
+	Instance.new("UICorner", AudioIslandModal).CornerRadius = UDim.new(0, 22)
+	local AudioModalStroke = Instance.new("UIStroke", AudioIslandModal)
+	AudioModalStroke.Thickness = 2
+	AudioModalStroke.Color = Color3.fromRGB(255, 255, 255)
+	local AudioModalStrokeGradient = Instance.new("UIGradient", AudioModalStroke)
+	AudioModalStrokeGradient.Color = StrokeGradient.Color
+	local AudioModalGradient = Instance.new("UIGradient", AudioIslandModal)
+	local AudioModalLightOverlay = Instance.new("Frame", AudioIslandModal)
+	AudioModalLightOverlay.Size = UDim2.new(1, 0, 1, 0)
+	AudioModalLightOverlay.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	AudioModalLightOverlay.BackgroundTransparency = 0.35
+	AudioModalLightOverlay.ZIndex = 300
+
+	local InputContainer = Instance.new("Frame", AudioIslandModal)
+	InputContainer.Size = UDim2.new(1, -24, 0, 32)
+	InputContainer.Position = UDim2.new(0, 12, 0, 12)
+	InputContainer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	InputContainer.BackgroundTransparency = 0.3
+	InputContainer.ZIndex = 301
+	Instance.new("UICorner", InputContainer).CornerRadius = UDim.new(0, 16)
+	local InputStroke = Instance.new("UIStroke", InputContainer)
+	InputStroke.Thickness = 1.5
+	InputStroke.Color = Color3.fromRGB(255, 255, 255)
+	local InputStrokeGradient = Instance.new("UIGradient", InputStroke)
+	InputStrokeGradient.Color = StrokeGradient.Color
+
+	local AudioTextBox = Instance.new("TextBox", InputContainer)
+	AudioTextBox.Size = UDim2.new(1, -16, 1, 0)
+	AudioTextBox.Position = UDim2.new(0, 8, 0, 0)
+	AudioTextBox.BackgroundTransparency = 1
+	AudioTextBox.Font = Enum.Font.GothamMedium
+	AudioTextBox.PlaceholderText = "输入 Roblox 音频 ID..."
+	AudioTextBox.PlaceholderColor3 = DynamicContext.CurrentSubTextColor
+	AudioTextBox.Text = ""
+	AudioTextBox.TextColor3 = DynamicContext.CurrentTextColor
+	AudioTextBox.TextSize = 11
+	AudioTextBox.ClearTextOnFocus = false
+	AudioTextBox.Selectable = false
+	AudioTextBox.ZIndex = 302
+	table.insert(DynamicContext.TextElements, { Obj = AudioTextBox, Type = "Main" })
+	AudioTextBox:GetPropertyChangedSignal("Text"):Connect(function()
+		AudioTextBox.Text = AudioTextBox.Text:gsub("%D+", "")
+	end)
+
+	local ModalVolumeFrame = Instance.new("Frame", AudioIslandModal)
+	ModalVolumeFrame.Size = UDim2.new(1, -24, 0, 32)
+	ModalVolumeFrame.Position = UDim2.new(0, 12, 0, 50)
+	ModalVolumeFrame.BackgroundTransparency = 1
+	ModalVolumeFrame.ZIndex = 301
+	AddSlider(ModalVolumeFrame, "音量", 0, 5, 2, "", function(val)
+		DynamicContext.CurrentVolume = val
+		if DynamicContext.GlobalAudio then DynamicContext.GlobalAudio.Volume = val end
+	end)
+
+	local ControlIsland = Instance.new("Frame", AudioIslandModal)
+	ControlIsland.Size = UDim2.new(1, -24, 0, 32)
+	ControlIsland.Position = UDim2.new(0, 12, 0, 94)
+	ControlIsland.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	ControlIsland.BackgroundTransparency = 0.25
+	ControlIsland.ZIndex = 301
+	Instance.new("UICorner", ControlIsland).CornerRadius = UDim.new(0, 16)
+	local ControlStroke = Instance.new("UIStroke", ControlIsland)
+	ControlStroke.Thickness = 1
+	ControlStroke.Color = DynamicContext.CurrentBorderColor
+	table.insert(DynamicContext.BorderElements, ControlStroke)
+
+	local ConfirmBtn = Instance.new("TextButton", ControlIsland)
+	ConfirmBtn.Size = UDim2.new(0.6, -2, 1, -4)
+	ConfirmBtn.Position = UDim2.new(0, 2, 0, 2)
+	ConfirmBtn.BackgroundColor3 = DynamicContext.CurrentActiveColor
+	ConfirmBtn.Text = "确认"
+	ConfirmBtn.Font = Enum.Font.GothamBold
+	ConfirmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	ConfirmBtn.TextSize = 11
+	ConfirmBtn.AutoButtonColor = false
+	ConfirmBtn.Selectable = false
+	ConfirmBtn.ZIndex = 302
+	Instance.new("UICorner", ConfirmBtn).CornerRadius = UDim.new(0, 14)
+
+	local CancelBtn = Instance.new("TextButton", ControlIsland)
+	CancelBtn.Size = UDim2.new(0.4, -4, 1, -4)
+	CancelBtn.Position = UDim2.new(0.6, 2, 0, 2)
+	CancelBtn.BackgroundTransparency = 1
+	CancelBtn.Text = "取消"
+	CancelBtn.Font = Enum.Font.GothamMedium
+	CancelBtn.TextColor3 = DynamicContext.CurrentSubTextColor
+	CancelBtn.TextSize = 10
+	CancelBtn.AutoButtonColor = false
+	CancelBtn.Selectable = false
+	CancelBtn.ZIndex = 302
+	table.insert(DynamicContext.TextElements, { Obj = CancelBtn, Type = "Sub" })
+
+	local function PlayAntiOverrideAudio(soundId)
+		if soundId == "" then return end
+		if DynamicContext.GlobalAudio then
+			DynamicContext.GlobalAudio:Stop()
+			DynamicContext.GlobalAudio:Destroy()
+			DynamicContext.GlobalAudio = nil
+		end
+		local sound = Instance.new("Sound")
+		sound.Name = "LinkCcAudioPlayer"
+		sound.SoundId = "rbxassetid://" .. tostring(soundId)
+		sound.Volume = DynamicContext.CurrentVolume
+		sound.Looped = false
+		sound.Parent = SoundService
+		sound.Ended:Connect(function()
+			if DynamicContext.GlobalAudio == sound then
+				sound:Destroy()
+				DynamicContext.GlobalAudio = nil
+			end
+		end)
+		sound:Play()
+		DynamicContext.GlobalAudio = sound
+	end
+
+	local function ShowAudioModal()
+		AudioIslandModal.Visible = true
+		AudioIslandModal.GroupTransparency = 1
+		AudioIslandModal.Size = UDim2.new(0, 220, 0, 110)
+		AudioIslandModal.Position = UDim2.new(0.5, -110, 0.5, -55)
+		safeTween(AudioIslandModal, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			GroupTransparency = 0,
+			Size = UDim2.new(0, 280, 0, 140),
+			Position = UDim2.new(0.5, -140, 0.5, -70),
+		})
+		AudioTextBox:CaptureFocus()
+	end
+
+	local function HideAudioModal(isConfirm)
+		local closeTween = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+		local tSize = isConfirm and UDim2.new(0, 300, 0, 150) or UDim2.new(0, 240, 0, 120)
+		local tPos = isConfirm and UDim2.new(0.5, -150, 0.5, -75) or UDim2.new(0.5, -120, 0.5, -60)
+		safeTween(AudioIslandModal, closeTween, { GroupTransparency = 1, Size = tSize, Position = tPos })
+		task.delay(0.28, function()
+			AudioIslandModal.Visible = false
+			if isConfirm then PlayAntiOverrideAudio(AudioTextBox.Text) end
+		end)
+	end
+
+	ConfirmBtn.MouseButton1Click:Connect(function() HideAudioModal(true) end)
+	CancelBtn.MouseButton1Click:Connect(function() HideAudioModal(false) end)
+	AudioTextBox.FocusLost:Connect(function(enterPressed)
+		if enterPressed then HideAudioModal(true) end
+	end)
+
+	local TabData = {
+		["General"] = {
+			hasSub = true,
+			render = function()
+				CreateTitle(MainConfigCard, "通用功能")
+				CreateSubSegmentNav(MainConfigCard, { "世界", "移动", "其它" }, function(seg)
+					AnimateSubPageTransition(MainConfigCard, function(scroll)
+						if seg == "世界" then
+							AddToggle(scroll, "除雾", "清除场景雾效", CFG.noFog, function(v) CFG.noFog = v; applyWorld() end)
+							AddToggle(scroll, "地图高亮", "增强场景亮度", CFG.mapGlow, function(v) CFG.mapGlow = v; applyWorld() end)
+						elseif seg == "移动" then
+							AddToggle(scroll, "无限体力", "体力条满/不消耗", CFG.infStamina, function(v) CFG.infStamina = v end)
+							AddToggle(scroll, "自定义移动速度", "强制覆盖游戏设定", CFG.customWalkSpeed, function(v) CFG.customWalkSpeed = v end)
+							AddSlider(scroll, "移动速度", 16, 120, CFG.walkSpeed, "", function(v) CFG.walkSpeed = v end)
+							AddToggle(scroll, "自定义跳跃力", "强制覆盖游戏设定", CFG.customJumpPower, function(v) CFG.customJumpPower = v end)
+							AddSlider(scroll, "跳跃力", 50, 200, CFG.jumpPower, "", function(v) CFG.jumpPower = v end)
+							AddToggle(scroll, "无落地伤害", "限速缓降", CFG.noFall, function(v) CFG.noFall = v end)
+							AddSlider(scroll, "安全下落速度", 20, 200, CFG.fallSpeed, "", function(v) CFG.fallSpeed = v end)
+						else
+							AddButton(scroll, "清除所有轨迹", "移除场景中的弹道线", function()
+								for _, v in ipairs(workspace.Terrain:GetChildren()) do
+									if v.Name == "__btrTrail" or v.Name == "__btrMuzzle" or v.Name == "__btrImpact" then
+										v:Destroy()
+									end
+								end
+							end)
+							AddButton(scroll, "重新连接网络层", "修复发包问题", function()
+								Network = nil
+								installNetHooks()
+								installRayHooks()
+								if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
+							end)
+						end
+					end)
+				end)
+				renderStatusPanel(SubConfigCard)
+			end,
+		},
+		["Combat"] = {
+			hasSub = true,
+			render = function()
+				CreateTitle(MainConfigCard, "战斗功能")
+				CreateSubSegmentNav(MainConfigCard, { "自瞄", "偏移" }, function(seg)
+					AnimateSubPageTransition(MainConfigCard, function(scroll)
+						if seg == "自瞄" then
+							AddToggle(scroll, "启用自瞄", "视角完全不动", CFG.aimbot, function(v) CFG.aimbot = v; if not v then removeAimHook() end end)
+							AddToggle(scroll, "静默模式", "不转视角", CFG.silent, function(v) CFG.silent = v end)
+							AddToggle(scroll, "伪装摄像机", "上报朝向对齐目标", CFG.spoofCam, function(v) CFG.spoofCam = v end)
+							AddToggle(scroll, "自动开火", "瞄准到目标自动射击", CFG.autoFire, function(v) CFG.autoFire = v; if not v then forceRelease() end end)
+							AddToggle(scroll, "只打可见目标", "仅普通自瞄", CFG.visibleOnly, function(v) CFG.visibleOnly = v end)
+							AddToggle(scroll, "360° 锁敌", "不看屏幕", CFG.aim360, function(v) CFG.aim360 = v end)
+							AddSlider(scroll, "角度上限", 5, 180, CFG.fovAngle, "°", function(v) CFG.fovAngle = v end)
+							AddToggle(scroll, "瞄准怪物", nil, CFG.aimMonsters, function(v) CFG.aimMonsters = v end)
+							AddToggle(scroll, "瞄准玩家", nil, CFG.aimPlayers, function(v) CFG.aimPlayers = v end)
+							AddToggle(scroll, "智能部位", "打露出的部位", CFG.aimSmartPart, function(v) CFG.aimSmartPart = v end)
+							AddToggle(scroll, "弹道下坠/预判", "补偿落点", CFG.dropComp, function(v) CFG.dropComp = v end)
+							AddToggle(scroll, "枪口偏移", "绕掩体", CFG.muzzleOffset, function(v) CFG.muzzleOffset = v end)
+							AddToggle(scroll, "无视盾牌", nil, CFG.noShield, function(v) CFG.noShield = v end)
+							AddSlider(scroll, "FOV 半径", 40, 1600, CFG.fov, "", function(v) CFG.fov = v end)
+							local aimParts = {"头部", "躯干", "根部"}
+							local curIdx = 1
+							if CFG.aimPart == "Torso" then curIdx = 2
+							elseif CFG.aimPart == "HumanoidRootPart" then curIdx = 3 end
+							AddDropdown(scroll, "瞄准部位", aimParts, curIdx, function(selected, idx)
+								if idx == 1 then CFG.aimPart = "Head"
+								elseif idx == 2 then CFG.aimPart = "Torso"
+								elseif idx == 3 then CFG.aimPart = "HumanoidRootPart" end
+							end)
+						else
+							AddSlider(scroll, "普通自瞄搜索半径", 0.5, 4, CFG.muzzleRadius, "", function(v) CFG.muzzleRadius = v end)
+							AddSlider(scroll, "静默·隔墙最大偏移", 1, 4, CFG.silentWallOffset, "", function(v)
+								CFG.silentWallOffset = v; HUB.silentWallCap = v
+							end)
+							AddSlider(scroll, "静默·绕障碍最大偏移", 1, 6, CFG.silentObsOffset, "", function(v)
+								CFG.silentObsOffset = v; HUB.silentObsCap = v
+							end)
+							AddSlider(scroll, "偏移步长", 0.3, 2, CFG.muzzleStep, "", function(v) CFG.muzzleStep = v end)
+						end
+					end)
+				end)
+				renderStatusPanel(SubConfigCard)
+			end,
+		},
+		["Ragebot"] = {
+			hasSub = true,
+			render = function()
+				CreateTitle(MainConfigCard, "Ragebot 设置")
+				CreateSubSegmentNav(MainConfigCard, { "核心", "辅助" }, function(seg)
+					AnimateSubPageTransition(MainConfigCard, function(scroll)
+						if seg == "核心" then
+							AddToggle(scroll, "Ragebot", "直接发包·无特效", CFG.silentPacket, function(v) CFG.silentPacket = v end)
+							AddToggle(scroll, "真实Ragebot", "会扣子弹·默认发包", CFG.silentReal, function(v) CFG.silentReal = v end)
+							-- 已删除静默自动射击
+						else
+							AddSlider(scroll, "静默·隔墙最大偏移", 1, 4, CFG.silentWallOffset, "", function(v)
+								CFG.silentWallOffset = v; HUB.silentWallCap = v
+							end)
+							AddSlider(scroll, "静默·绕障碍最大偏移", 1, 6, CFG.silentObsOffset, "", function(v)
+								CFG.silentObsOffset = v; HUB.silentObsCap = v
+							end)
+							AddSlider(scroll, "偏移步长", 0.3, 2, CFG.muzzleStep, "", function(v) CFG.muzzleStep = v end)
+						end
+					end)
+				end)
+				renderStatusPanel(SubConfigCard)
+			end,
+		},
+		["Visuals"] = {
+			hasSub = true,
+			render = function()
+				CreateTitle(MainConfigCard, "视觉增强")
+				CreateSubSegmentNav(MainConfigCard, { "ESP", "颜色", "轨迹" }, function(seg)
+					AnimateSubPageTransition(MainConfigCard, function(scroll)
+						if seg == "ESP" then
+							AddToggle(scroll, "玩家 ESP", nil, CFG.espPlayers, function(v) CFG.espPlayers = v end)
+							AddToggle(scroll, "怪物 ESP", nil, CFG.espMonsters, function(v) CFG.espMonsters = v end)
+							AddToggle(scroll, "物品 ESP", nil, CFG.espItems, function(v) CFG.espItems = v end)
+							AddToggle(scroll, "弹药补给点", nil, CFG.espAmmo, function(v) CFG.espAmmo = v end)
+							AddToggle(scroll, "好友独立 ESP", nil, CFG.espFriends, function(v) CFG.espFriends = v end)
+							AddToggle(scroll, "方框", nil, CFG.box, function(v) CFG.box = v end)
+							AddToggle(scroll, "名字", nil, CFG.name, function(v) CFG.name = v end)
+							AddToggle(scroll, "血量", nil, CFG.health, function(v) CFG.health = v end)
+							AddToggle(scroll, "距离", nil, CFG.distance, function(v) CFG.distance = v end)
+							AddToggle(scroll, "屏幕连线", nil, CFG.tracer, function(v) CFG.tracer = v end)
+							AddToggle(scroll, "显示自己", nil, CFG.showSelf, function(v) CFG.showSelf = v end)
+							AddSlider(scroll, "最大距离", 50, 2000, CFG.maxDist, "m", function(v) CFG.maxDist = v end)
+						elseif seg == "颜色" then
+							createColorRow(scroll, "玩家（绿）", function() return CFG.colorPlayer end, function(v) CFG.colorPlayer = v end)
+							createColorRow(scroll, "好友（粉）", function() return CFG.colorFriend end, function(v) CFG.colorFriend = v end)
+							createColorRow(scroll, "怪物", function() return CFG.colorMonster end, function(v) CFG.colorMonster = v end)
+							createColorRow(scroll, "Boss", function() return CFG.colorBoss end, function(v) CFG.colorBoss = v end)
+							createColorRow(scroll, "物品", function() return CFG.colorItem end, function(v) CFG.colorItem = v end)
+							createColorRow(scroll, "弹药点", function() return CFG.colorAmmo end, function(v) CFG.colorAmmo = v end)
+						else
+							AddToggle(scroll, "生成轨迹", nil, CFG.trail, function(v) CFG.trail = v end)
+							AddToggle(scroll, "枪口轨迹", nil, CFG.muzzleTrail, function(v) CFG.muzzleTrail = v end)
+							AddSlider(scroll, "轨迹持续", 1, 10, CFG.trailTime, "s", function(v) CFG.trailTime = v end)
+							createColorRow(scroll, "轨迹颜色", function() return CFG.trailColor end, function(v) CFG.trailColor = v end)
+							AddToggle(scroll, "他人弹道", nil, CFG.otherTrails, function(v) CFG.otherTrails = v end)
+							createColorRow(scroll, "队友弹道", function() return CFG.colorTeamTrail end, function(v) CFG.colorTeamTrail = v end)
+							createColorRow(scroll, "怪物弹道", function() return CFG.colorEnemyTrail end, function(v) CFG.colorEnemyTrail = v end)
+						end
+					end)
+				end)
+				renderStatusPanel(SubConfigCard)
+			end,
+		},
+		["Settings"] = {
+			hasSub = true,
+			render = function()
+				CreateTitle(MainConfigCard, "应用设置")
+				CreateSubSegmentNav(MainConfigCard, { "主题", "音频", "UI" }, function(seg)
+					AnimateSubPageTransition(MainConfigCard, function(scroll)
+						if seg == "主题" then
+							local curIdx = 1
+							for i, n in ipairs(PaletteNames) do
+								if PalettePresets[n] == DynamicContext.CurrentPreset then curIdx = i end
+							end
+							AddDropdown(scroll, "调色板", PaletteNames, curIdx, function(selected)
+								ApplyPalette(selected)
+							end)
+							AddToggle(scroll, "自动运行", "启动时生效", true, function() end)
+						elseif seg == "音频" then
+							AddButton(scroll, "Roblox 音乐播放器", "播放自定义音频", ShowAudioModal)
+						else
+							AddToggle(scroll, "紧凑模式", "更小的内边距", false, function() end)
+							AddSlider(scroll, "UI 缩放", 50, 150, math.floor(MainUIScale.Scale * 100), "%", function(v)
+								MainUIScale.Scale = v / 100
+							end)
+						end
+					end)
+				end)
+				renderStatusPanel(SubConfigCard)
+			end,
+		},
+		["Updates"] = {
+			hasSub = false,
+			render = function()
+				CreateTitle(MainConfigCard, "更新日志")
+				local SubScroll = CreateScrollList(MainConfigCard, 35)
+				local lbl = Instance.new("TextLabel", SubScroll)
+				lbl.Size = UDim2.new(1, -12, 0, 260)
+				lbl.BackgroundTransparency = 1
+				lbl.TextWrapped = true
+				lbl.TextXAlignment = Enum.TextXAlignment.Left
+				lbl.TextYAlignment = Enum.TextYAlignment.Top
+				lbl.Font = Enum.Font.Gotham
+				lbl.TextSize = 10
+				lbl.TextColor3 = DynamicContext.CurrentSubTextColor
+				lbl.Text = "v2.1 更新:\n• 修复 UI 缩放 (Settings -> UI)\n• 新增独立加速与跳跃控制\n• 修复功能区点击循环加载\n• 优化动态岛和背景动画\n• 修复 UI 框架内存泄漏\n\n历史版本:\n• 整合 Link UI V2"
+				table.insert(DynamicContext.TextElements, { Obj = lbl, Type = "Sub" })
+			end,
+		},
+		["Advanced"] = {
+			hasSub = true,
+			render = function()
+				CreateTitle(MainConfigCard, "高级 / 调试")
+				CreateSubSegmentNav(MainConfigCard, { "调试", "上限" }, function(seg)
+					AnimateSubPageTransition(MainConfigCard, function(scroll)
+						if seg == "调试" then
+							AddToggle(scroll, "调试日志", "输出详细日志", true, function() end)
+							AddDropdown(scroll, "性能档", { "默认", "均衡", "性能" }, 1, function() end)
+							AddButton(scroll, "重载网络层", nil, function()
+								Network = nil
+								installNetHooks()
+								installRayHooks()
+								if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
+							end)
+							AddButton(scroll, "重载射线层", nil, function() installRayHooks() end)
+						else
+							AddSlider(scroll, "限流", 0, 100, 25, "%", function() end)
+							AddButton(scroll, "模拟复活", "调试用", function()
+								if HUB.api and HUB.api.simulateRespawn then HUB.api.simulateRespawn() end
+							end)
+							AddButton(scroll, "静默探测", "调试用", function()
+								if HUB.api and HUB.api.silentProbe then
+									local a, b, c, d = HUB.api.silentProbe()
+									toast(string.format("%s / %s / %s / %.1f", tostring(a), tostring(b), tostring(c), d or 0), 3)
+								end
+							end)
+						end
+					end)
+				end)
+				renderStatusPanel(SubConfigCard)
+			end,
+		},
+		["Help"] = {
+			hasSub = false,
+			render = function()
+				CreateTitle(MainConfigCard, "帮助")
+				CreateSubSegmentNav(MainConfigCard, { "说明", "按键" }, function(seg)
+					AnimateSubPageTransition(MainConfigCard, function(scroll)
+						if seg == "说明" then
+							AddToggle(scroll, "RightShift 呼出", "显示 / 隐藏面板", true, function() end)
+							AddToggle(scroll, "双击 Logo 收缩", "变为灵动岛小球", true, function() end)
+						else
+							AddToggle(scroll, "单击灵动岛", "展开面板", true, function() end)
+							AddToggle(scroll, "长按灵动岛拖动", "移动到任意位置", true, function() end)
+						end
+					end)
+				end)
+				renderStatusPanel(SubConfigCard)
+			end,
+		},
+	}
+
+	local function SwitchTabWithAnimation(tabName)
+		if DynamicContext.CurrentTab == tabName then return end
+		DynamicContext.CurrentTab = tabName
+
+		for name, btnObj in pairs(DynamicContext.TabButtons) do
+			if btnObj and btnObj.Parent then
+				if name == tabName then
+					safeTween(btnObj, TweenInfo.new(0.2), { BackgroundTransparency = 0.25 })
+					btnObj.TextColor3 = DynamicContext.CurrentTextColor
+				else
+					safeTween(btnObj, TweenInfo.new(0.2), { BackgroundTransparency = 0.85 })
+					btnObj.TextColor3 = DynamicContext.CurrentSubTextColor
+				end
+			end
+		end
+
+		if DynamicContext.TabSwitchThread then
+			task.cancel(DynamicContext.TabSwitchThread)
+			DynamicContext.TabSwitchThread = nil
+		end
+		
+		DynamicContext.ActiveToggles = {}
+		DynamicContext.ActiveSliders = {}
+		DynamicContext.TextElements = {}
+		DynamicContext.BorderElements = {}
+		
+		ClearContainer(MainConfigCard)
+		ClearContainer(SubConfigCard)
+		
 		local tabInfo = TabData[tabName]
 		if tabInfo then
 			AdjustLayoutMode(tabInfo.hasSub)
 			tabInfo.render()
 		end
-	end)
-end
-
-for _, name in ipairs(Tabs) do
-	local Btn = Instance.new("TextButton", NavCard)
-	Btn.Size = UDim2.new(1, 0, 0, 28)
-	Btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	Btn.BackgroundTransparency = 0.85
-	Btn.Text = name
-	Btn.TextColor3 = DynamicContext.CurrentSubTextColor
-	Btn.Font = Enum.Font.GothamMedium
-	Btn.TextSize = 12
-	Btn.ZIndex = 13
-	Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
-	Buttons[name] = Btn
-	Btn.MouseButton1Click:Connect(function() SwitchTabWithAnimation(name) end)
-end
-
-task.spawn(function()
-	while task.wait(0.016) do
-		DynamicContext.StrokeRotation = (DynamicContext.StrokeRotation + 2.5) % 360
-		StrokeGradient.Rotation = DynamicContext.StrokeRotation
-		IslandStrokeGradient.Rotation = DynamicContext.StrokeRotation
 	end
-end)
+	DynamicContext.SwitchTab = SwitchTabWithAnimation
 
-RunService.RenderStepped:Connect(function(dt)
-	local lerpSpeed = math.clamp(dt * 3.5, 0, 1)
-	for i = 1, 5 do DynamicContext.CurrentPalette[i] = DynamicContext.CurrentPalette[i]:Lerp(DynamicContext.TargetPalette[i], lerpSpeed) end
-	DynamicContext.CurrentLogoColor = DynamicContext.CurrentLogoColor:Lerp(DynamicContext.TargetLogoColor, lerpSpeed)
-	DynamicContext.CurrentActiveColor = DynamicContext.CurrentActiveColor:Lerp(DynamicContext.TargetActiveColor, lerpSpeed)
-	DynamicContext.CurrentTextColor = DynamicContext.CurrentTextColor:Lerp(DynamicContext.TargetTextColor, lerpSpeed)
-	DynamicContext.CurrentSubTextColor = DynamicContext.CurrentSubTextColor:Lerp(DynamicContext.TargetSubTextColor, lerpSpeed)
-	DynamicContext.CurrentBorderColor = DynamicContext.CurrentBorderColor:Lerp(DynamicContext.TargetBorderColor, lerpSpeed)
-	
-	LogoBtn.TextColor3 = DynamicContext.CurrentLogoColor
-	IslandLogo.TextColor3 = DynamicContext.CurrentLogoColor
-	
-	for _, item in ipairs(DynamicContext.TextElements) do
-		if item.Obj and item.Obj.Parent then
-			if item.Type == "Main" then
-				if Buttons[item.Obj.Text] and item.Obj.Text == DynamicContext.CurrentTab then
-					item.Obj.TextColor3 = DynamicContext.CurrentTextColor
-				elseif Buttons[item.Obj.Text] then
-					item.Obj.TextColor3 = DynamicContext.CurrentSubTextColor
-				else
-					item.Obj.TextColor3 = DynamicContext.CurrentTextColor
-				end
-			elseif item.Type == "Sub" then
-				item.Obj.TextColor3 = DynamicContext.CurrentSubTextColor
-			end
-		end
-	end
-	
-	for _, stroke in ipairs(DynamicContext.BorderElements) do
-		if stroke and stroke.Parent then stroke.Color = DynamicContext.CurrentBorderColor end
-	end
-	
-	for _, tog in ipairs(DynamicContext.ActiveToggles) do tog.Update() end
-	for _, sld in ipairs(DynamicContext.ActiveSliders) do sld.Update() end
-	
-	DynamicContext.BgPhase = DynamicContext.BgPhase + dt * 0.25
-	local wave1 = (math.sin(DynamicContext.BgPhase) + 1) / 2
-	local wave2 = (math.sin(DynamicContext.BgPhase * 1.3 + 1.2) + 1) / 2
-	local c1 = DynamicContext.CurrentPalette[1]:Lerp(DynamicContext.CurrentPalette[2], wave1)
-	local c2 = DynamicContext.CurrentPalette[2]:Lerp(DynamicContext.CurrentPalette[4], wave2)
-	local c3 = DynamicContext.CurrentPalette[3]:Lerp(DynamicContext.CurrentPalette[5], wave1)
-	local newSeq = ColorSequence.new({
-		ColorSequenceKeypoint.new(0.0, c1),
-		ColorSequenceKeypoint.new(0.5, c2),
-		ColorSequenceKeypoint.new(1.0, c3)
-	})
-	MainGradient.Color = newSeq
-	MainGradient.Rotation = (MainGradient.Rotation + dt * 8) % 360
-	IslandGradient.Color = newSeq
-	IslandGradient.Rotation = MainGradient.Rotation
-end)
+	local NavLayout = Instance.new("UIListLayout", NavCard)
+	NavLayout.Padding = UDim.new(0, 4)
+	NavLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	local NavPadding = Instance.new("UIPadding", NavCard)
+	NavPadding.PaddingTop = UDim.new(0, 8)
+	NavPadding.PaddingLeft = UDim.new(0, 8)
+	NavPadding.PaddingRight = UDim.new(0, 8)
 
-local isBallMode, autoBallTask = false, nil
-local function SmoothToBall()
-	if isBallMode then return end
-	isBallMode = true
-	local tweenInfo = TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-	IslandLogo.Visible = false; IslandStatus.Visible = false; ExpandBtn.Visible = false
-	local targetOffset = (Island.Position.X.Offset + (Island.Size.X.Offset / 2)) - 18
-	TweenService:Create(Island, tweenInfo, {Size = UDim2.new(0, 36, 0, 36), Position = UDim2.new(Island.Position.X.Scale, targetOffset, Island.Position.Y.Scale, Island.Position.Y.Offset)}):Play()
-	TweenService:Create(IslandCorner, tweenInfo, {CornerRadius = UDim.new(1, 0)}):Play()
-end
+	local Buttons = {}
+	DynamicContext.TabButtons = Buttons
+	local Tabs = { "General", "Combat", "Ragebot", "Visuals", "Settings", "Updates", "Advanced", "Help" }
+	local TabLabels = { General = "通用", Combat = "战斗", Ragebot = "Ragebot", Visuals = "视觉", Settings = "设置", Updates = "日志", Advanced = "高级", Help = "帮助" }
 
-local function SmoothToRectangle()
-	if not isBallMode then return end
-	isBallMode = false
-	local tweenInfo = TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-	local targetOffset = (Island.Position.X.Offset + (Island.Size.X.Offset / 2)) - 100
-	TweenService:Create(Island, tweenInfo, {Size = UDim2.new(0, 200, 0, 36), Position = UDim2.new(Island.Position.X.Scale, targetOffset, Island.Position.Y.Scale, Island.Position.Y.Offset)}):Play()
-	TweenService:Create(IslandCorner, tweenInfo, {CornerRadius = UDim.new(0, 18)}):Play()
-	task.delay(0.2, function()
-		IslandLogo.Visible = true; IslandStatus.Visible = true; ExpandBtn.Visible = true
-	end)
-	if autoBallTask then task.cancel(autoBallTask) end
-	autoBallTask = task.delay(3.5, SmoothToBall)
-end
-
-local lastClickTime = 0
-local longPressTime = 0.6
-local islandDragging, islandDragStart, islandStartPos, pressStartTime, isPressing, longPressTask = false, Vector2.new(), UDim2.new(), 0, false, nil
-
-Island.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		isPressing = true; pressStartTime = os.clock(); islandDragStart = Vector2.new(input.Position.X, input.Position.Y); islandStartPos = Island.Position
-		if longPressTask then task.cancel(longPressTask) end
-		longPressTask = task.delay(longPressTime, function()
-			if isPressing and not islandDragging then
-				islandDragging = true
-				TweenService:Create(IslandStroke, TweenInfo.new(0.2), {Thickness = 4}):Play()
-			end
+	for _, name in ipairs(Tabs) do
+		local Btn = Instance.new("TextButton", NavCard)
+		Btn.Size = UDim2.new(1, 0, 0, 28)
+		Btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		Btn.BackgroundTransparency = 0.85
+		Btn.Text = TabLabels[name] or name
+		Btn.TextColor3 = DynamicContext.CurrentSubTextColor
+		Btn.Font = Enum.Font.GothamMedium
+		Btn.TextSize = 12
+		Btn.AutoButtonColor = false
+		Btn.Selectable = false
+		Btn.ZIndex = 13
+		Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
+		Btn:SetAttribute("TabKey", name)
+		Buttons[name] = Btn
+		Btn.MouseButton1Click:Connect(function()
+			SwitchTabWithAnimation(name)
 		end)
 	end
-end)
 
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		if isPressing then
-			local duration = os.clock() - pressStartTime
-			isPressing = false
-			if longPressTask then task.cancel(longPressTask) end
-			if islandDragging then
-				islandDragging = false
-				TweenService:Create(IslandStroke, TweenInfo.new(0.2), {Thickness = 2}):Play()
-			elseif duration < longPressTime then
-				local currentTime = os.clock()
-				if (currentTime - lastClickTime) < 0.35 then
-					lastClickTime = 0
-					if isBallMode then SmoothToRectangle() else SmoothToBall() end
-				else
-					lastClickTime = currentTime
-					task.delay(0.36, function() if lastClickTime == currentTime then if isBallMode then SmoothToRectangle() end end end)
+	task.spawn(function()
+		while task.wait(0.016) do
+			DynamicContext.StrokeRotation = (DynamicContext.StrokeRotation + 2.5) % 360
+			StrokeGradient.Rotation = DynamicContext.StrokeRotation
+			IslandStrokeGradient.Rotation = DynamicContext.StrokeRotation
+			AudioModalStrokeGradient.Rotation = DynamicContext.StrokeRotation
+			InputStrokeGradient.Rotation = DynamicContext.StrokeRotation
+		end
+	end)
+
+	local audioPlayStateLast = false
+	table.insert(HUB.conns, Run.RenderStepped:Connect(function(dt)
+		local lerpSpeed = math.clamp(dt * 3.5, 0, 1)
+		for i = 1, 5 do
+			DynamicContext.CurrentPalette[i] = DynamicContext.CurrentPalette[i]:Lerp(DynamicContext.TargetPalette[i], lerpSpeed)
+		end
+		DynamicContext.CurrentLogoColor = DynamicContext.CurrentLogoColor:Lerp(DynamicContext.TargetLogoColor, lerpSpeed)
+		DynamicContext.CurrentActiveColor = DynamicContext.CurrentActiveColor:Lerp(DynamicContext.TargetActiveColor, lerpSpeed)
+		DynamicContext.CurrentTextColor = DynamicContext.CurrentTextColor:Lerp(DynamicContext.TargetTextColor, lerpSpeed)
+		DynamicContext.CurrentSubTextColor = DynamicContext.CurrentSubTextColor:Lerp(DynamicContext.TargetSubTextColor, lerpSpeed)
+		DynamicContext.CurrentBorderColor = DynamicContext.CurrentBorderColor:Lerp(DynamicContext.TargetBorderColor, lerpSpeed)
+
+		LogoBtn.TextColor3 = DynamicContext.CurrentLogoColor
+		IslandLogo.TextColor3 = DynamicContext.CurrentLogoColor
+		IslandBall.TextColor3 = DynamicContext.CurrentLogoColor
+		ConfirmBtn.BackgroundColor3 = DynamicContext.CurrentActiveColor
+
+		for _, item in ipairs(DynamicContext.TextElements) do
+			if item.Obj and item.Obj.Parent then
+				if item.Type == "Main" then
+					item.Obj.TextColor3 = DynamicContext.CurrentTextColor
+				elseif item.Type == "Sub" then
+					item.Obj.TextColor3 = DynamicContext.CurrentSubTextColor
 				end
 			end
 		end
-	end
-end)
+		for _, stroke in ipairs(DynamicContext.BorderElements) do
+			if stroke and stroke.Parent then stroke.Color = DynamicContext.CurrentBorderColor end
+		end
+		for _, tog in ipairs(DynamicContext.ActiveToggles) do tog.Update() end
+		for _, sld in ipairs(DynamicContext.ActiveSliders) do sld.Update() end
 
-UserInputService.InputChanged:Connect(function(input)
-	if islandDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-		local delta = Vector2.new(input.Position.X, input.Position.Y) - islandDragStart
-		Island.Position = UDim2.new(islandStartPos.X.Scale, islandStartPos.X.Offset + delta.X, islandStartPos.Y.Scale, islandStartPos.Y.Offset + delta.Y)
-	end
-end)
+		if DynamicContext.StatusLabel and DynamicContext.StatusLabel.Parent then
+			DynamicContext.StatusLabel.Text = string.format(
+				"目标: %s\n开火: %d   命中: %d/%d\n发包: %d/%d\n枪口: %s %.1f\nFPS: %d",
+				STATS.target, STATS.fires, STATS.hits, STATS.hitCalls or 0,
+				HUB.packetOK or 0, HUB.packetTries or 0,
+				tostring(Aim.offsetKind or (Aim.shotOK and "muzzle" or "none")), Aim.offsetUsed or 0,
+				math.floor(HUB.fps or 0))
+		end
+		StatusText.Text = string.format("FPS %d", math.floor(HUB.fps or 0))
 
-local function HideMainAndShowIsland()
-	local shrinkTweenInfo = TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-	TweenService:Create(MainFrame, shrinkTweenInfo, {GroupTransparency = 1, Size = UDim2.new(0, 480, 0, 290), Position = UDim2.new(0.5, -240, 0.5, -145)}):Play()
-	task.delay(0.25, function()
-		MainFrame.Visible = false
-		MainFrame.Size = UDim2.new(0, 530, 0, 320)
-		MainFrame.Position = UDim2.new(0.5, -265, 0.5, -160)
-		
-		Island.Visible = true; Island.GroupTransparency = 1; Island.Size = UDim2.new(0, 140, 0, 30)
-		
-		IslandCorner.CornerRadius = UDim.new(0, 15); isBallMode = false
-		IslandLogo.Visible = true; IslandStatus.Visible = true; ExpandBtn.Visible = true
-		local islandShowTween = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-		TweenService:Create(Island, islandShowTween, {GroupTransparency = 0, Size = UDim2.new(0, 200, 0, 36), Position = UDim2.new(Island.Position.X.Scale, Island.Position.X.Offset, Island.Position.Y.Scale, Island.Position.Y.Offset)}):Play()
-		TweenService:Create(IslandCorner, islandShowTween, {CornerRadius = UDim.new(0, 18)}):Play()
-		if autoBallTask then task.cancel(autoBallTask) end
-		autoBallTask = task.delay(3, SmoothToBall)
-	end)
-end
+		DynamicContext.BgPhase = DynamicContext.BgPhase + dt * 0.25
+		local wave1 = (math.sin(DynamicContext.BgPhase) + 1) / 2
+		local wave2 = (math.sin(DynamicContext.BgPhase * 1.3 + 1.2) + 1) / 2
+		local c1 = DynamicContext.CurrentPalette[1]:Lerp(DynamicContext.CurrentPalette[2], wave1)
+		local c2 = DynamicContext.CurrentPalette[2]:Lerp(DynamicContext.CurrentPalette[4], wave2)
+		local c3 = DynamicContext.CurrentPalette[3]:Lerp(DynamicContext.CurrentPalette[5], wave1)
+		local newSeq = ColorSequence.new({
+			ColorSequenceKeypoint.new(0.0, c1),
+			ColorSequenceKeypoint.new(0.5, c2),
+			ColorSequenceKeypoint.new(1.0, c3),
+		})
+		MainGradient.Color = newSeq
+		MainGradient.Rotation = (MainGradient.Rotation + dt * 8) % 360
+		IslandGradient.Color = newSeq
+		IslandGradient.Rotation = MainGradient.Rotation
+		AudioModalGradient.Color = newSeq
+		AudioModalGradient.Rotation = MainGradient.Rotation
 
-local function HideIslandAndShowMain()
-	if autoBallTask then task.cancel(autoBallTask) end
-	local hideIslandTween = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
-	TweenService:Create(Island, hideIslandTween, {GroupTransparency = 1, Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(Island.Position.X.Scale, Island.Position.X.Offset, Island.Position.Y.Scale, Island.Position.Y.Offset)}):Play()
-	task.delay(0.2, function()
-		Island.Visible = false
-		MainFrame.Visible = true; MainFrame.GroupTransparency = 1; MainFrame.Size = UDim2.new(0, 490, 0, 296); MainFrame.Position = UDim2.new(0.5, -245, 0.5, -148)
-		TweenService:Create(MainFrame, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-			GroupTransparency = 0, Size = UDim2.new(0, 530, 0, 320), Position = UDim2.new(0.5, -265, 0.5, -160)
-		}):Play()
-	end)
-end
+		local isPlayingMusic = (DynamicContext.GlobalAudio ~= nil and DynamicContext.GlobalAudio.IsPlaying)
+		if isPlayingMusic then
+			local soundObj = DynamicContext.GlobalAudio
+			local currentVolume = soundObj.Volume or 1
+			local progressFactor = 1.0
+			if soundObj.TimeLength and soundObj.TimeLength > 0 then
+				local remainingTime = soundObj.TimeLength - soundObj.TimePosition
+				if remainingTime < 2.0 then
+					progressFactor = math.clamp(remainingTime / 2.0, 0.05, 1.0)
+				end
+			end
+			local globalTime = tick()
+			local isDJMode = (currentVolume > 1.2)
+			local speedScale = isDJMode and 14.0 or 6.0
+			local amplitudeMultiplier = (isDJMode and 24.0 or 12.0) * progressFactor
+			for idx, bar in ipairs(waveBars) do
+				bar.BackgroundColor3 = DynamicContext.CurrentLogoColor
+				local phase = bar:GetAttribute("PhaseOffset") or 0
+				local speedMult = bar:GetAttribute("SpeedMultiplier") or 1.0
+				local t = globalTime * speedScale * speedMult + phase
+				local heightFactor = math.abs(math.sin(t)) * 0.7 + math.abs(math.cos(t * 0.7)) * 0.3
+				local targetHeight = math.max(4, math.floor(heightFactor * amplitudeMultiplier * (currentVolume / 2) + 4))
+				bar.Size = UDim2.new(0, 5, 0, targetHeight)
+				bar.Position = UDim2.new(0, (idx - 1) * 14, 0.5, -targetHeight / 2)
+			end
+			if not audioPlayStateLast then
+				audioPlayStateLast = true
+				IslandLogo.Visible = false
+				WaveBarsContainer.Visible = true
+			end
+		else
+			if audioPlayStateLast then
+				audioPlayStateLast = false
+				WaveBarsContainer.Visible = false
+				IslandLogo.Visible = true
+			end
+		end
+	end))
 
-LogoBtn.MouseButton1Click:Connect(HideMainAndShowIsland)
-ExpandBtn.MouseButton1Click:Connect(HideIslandAndShowMain)
+	local isBallMode, autoBallTask = false, nil
 
-MainFrame.Visible = true
-MainFrame.Position = UDim2.new(0.5, -265, 0.5, -160)
-MainFrame.GroupTransparency = 1
-SwitchTabWithAnimation("自瞄")
-TweenService:Create(MainFrame, TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {GroupTransparency = 0}):Play()
-
-UserInputService.InputBegan:Connect(function(input, gpe)
-	if gpe then return end
-	if input.KeyCode == Enum.KeyCode.RightShift then
-		UiScreenGui.Enabled = not UiScreenGui.Enabled
-		if UiScreenGui.Enabled and not MainFrame.Visible and not Island.Visible then
-			MainFrame.Visible = true; MainFrame.GroupTransparency = 0
+	local function cancelAutoBall()
+		if autoBallTask then
+			task.cancel(autoBallTask)
+			autoBallTask = nil
 		end
 	end
+
+	local function scheduleAutoBall()
+		cancelAutoBall()
+		if not isBallMode then
+			autoBallTask = task.delay(3.5, function()
+				if not isIslandDragging then doSmoothToBall() end
+			end)
+		end
+	end
+
+	local function doSmoothToBall()
+		if isBallMode then return end
+		isBallMode = true
+		cancelAutoBall()
+		local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local centerX = Island.Position.X.Offset + (Island.Size.X.Offset / 2)
+		local targetOffset = centerX - 18
+		safeTween(Island, tweenInfo, {
+			Size = UDim2.new(0, 36, 0, 36),
+			Position = UDim2.new(Island.Position.X.Scale, targetOffset, Island.Position.Y.Scale, Island.Position.Y.Offset),
+		})
+		safeTween(IslandCorner, tweenInfo, { CornerRadius = UDim.new(1, 0) })
+		IslandLogo.Visible = false
+		WaveBarsContainer.Visible = false
+		ExpandBtn.Visible = false
+		IslandBall.Visible = true
+	end
+
+	local function doSmoothToRect()
+		if not isBallMode then return end
+		isBallMode = false
+		cancelAutoBall()
+		local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local centerX = Island.Position.X.Offset + (Island.Size.X.Offset / 2)
+		local targetOffset = centerX - 100
+		local isPlayingMusic = (DynamicContext.GlobalAudio ~= nil and DynamicContext.GlobalAudio.IsPlaying)
+		safeTween(Island, tweenInfo, {
+			Size = UDim2.new(0, 200, 0, 36),
+			Position = UDim2.new(Island.Position.X.Scale, targetOffset, Island.Position.Y.Scale, Island.Position.Y.Offset),
+		})
+		safeTween(IslandCorner, tweenInfo, { CornerRadius = UDim.new(0, 18) })
+		IslandBall.Visible = false
+		task.delay(0.2, function()
+			if isPlayingMusic then
+				WaveBarsContainer.Visible = true
+				IslandLogo.Visible = false
+			else
+				WaveBarsContainer.Visible = false
+				IslandLogo.Visible = true
+			end
+			ExpandBtn.Visible = true
+		end)
+		if not isPlayingMusic then scheduleAutoBall() end
+	end
+
+	local lastClickTime = 0
+	local longPressTime = 0.6
+	local isIslandDragging = false
+	local islandDragStartVec = Vector2.new()
+	local islandStartPosUDim = UDim2.new()
+	local pressStartTime = 0
+	local isPressing = false
+	local longPressTask = nil
+
+	Island.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			isPressing = true
+			pressStartTime = os.clock()
+			islandDragStartVec = Vector2.new(input.Position.X, input.Position.Y)
+			islandStartPosUDim = Island.Position
+			cancelAutoBall()
+			if longPressTask then task.cancel(longPressTask) end
+			longPressTask = task.delay(longPressTime, function()
+				if isPressing and not isIslandDragging then
+					isIslandDragging = true
+					safeTween(IslandStroke, TweenInfo.new(0.2), { Thickness = 4 })
+				end
+			end)
+		end
+	end)
+
+	UIS.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			if isPressing then
+				local duration = os.clock() - pressStartTime
+				isPressing = false
+				if longPressTask then task.cancel(longPressTask) end
+				if isIslandDragging then
+					isIslandDragging = false
+					safeTween(IslandStroke, TweenInfo.new(0.2), { Thickness = 2 })
+					if not isBallMode then scheduleAutoBall() end
+				elseif duration < longPressTime then
+					local currentTime = os.clock()
+					if (currentTime - lastClickTime) < 0.35 then
+						lastClickTime = 0
+						if isBallMode then doSmoothToRect() else doSmoothToBall() end
+					else
+						lastClickTime = currentTime
+						task.delay(0.36, function()
+							if lastClickTime == currentTime then
+								if isBallMode then doSmoothToRect() end
+							end
+						end)
+					end
+				end
+			end
+		end
+	end)
+
+	UIS.InputChanged:Connect(function(input)
+		if isIslandDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = Vector2.new(input.Position.X, input.Position.Y) - islandDragStartVec
+			Island.Position = UDim2.new(islandStartPosUDim.X.Scale, islandStartPosUDim.X.Offset + delta.X,
+				islandStartPosUDim.Y.Scale, islandStartPosUDim.Y.Offset + delta.Y)
+		end
+	end)
+
+	local function HideMainAndShowIsland()
+		local shrinkTweenInfo = TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+		safeTween(MainFrame, shrinkTweenInfo, {
+			GroupTransparency = 1,
+			Size = UDim2.new(0, 480, 0, 290),
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+		})
+		task.delay(0.25, function()
+			MainFrame.Visible = false
+			MainFrame.Size = UDim2.new(0, 530, 0, 320)
+			MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+			local isPlayingMusic = (DynamicContext.GlobalAudio ~= nil and DynamicContext.GlobalAudio.IsPlaying)
+			Island.Visible = true
+			Island.GroupTransparency = 1
+			Island.Size = UDim2.new(0, 140, 0, 30)
+			Island.Position = UDim2.new(0.5, -70, 0, 15)
+			IslandCorner.CornerRadius = UDim.new(0, 15)
+			isBallMode = false
+			IslandBall.Visible = false
+			if isPlayingMusic then
+				WaveBarsContainer.Visible = true
+				IslandLogo.Visible = false
+			else
+				WaveBarsContainer.Visible = false
+				IslandLogo.Visible = true
+			end
+			ExpandBtn.Visible = true
+			local islandShowTween = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+			safeTween(Island, islandShowTween, {
+				GroupTransparency = 0,
+				Size = UDim2.new(0, 200, 0, 36),
+				Position = UDim2.new(0.5, -100, 0, 15),
+			})
+			safeTween(IslandCorner, islandShowTween, { CornerRadius = UDim.new(0, 18) })
+			if not isPlayingMusic then scheduleAutoBall() end
+		end)
+	end
+
+	local function HideIslandAndShowMain()
+		cancelAutoBall()
+		local hideIslandTween = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+		safeTween(Island, hideIslandTween, {
+			GroupTransparency = 1,
+			Size = UDim2.new(0, 150, 0, 30),
+			Position = UDim2.new(0.5, -75, 0, 15),
+		})
+		task.delay(0.2, function()
+			Island.Visible = false
+			MainFrame.Visible = true
+			MainFrame.GroupTransparency = 1
+			MainFrame.Size = UDim2.new(0, 490, 0, 296)
+			MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+			safeTween(MainFrame, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				GroupTransparency = 0,
+				Size = UDim2.new(0, 530, 0, 320),
+				Position = UDim2.new(0.5, 0, 0.5, 0),
+			})
+		end)
+	end
+
+	LogoBtn.MouseButton1Click:Connect(HideMainAndShowIsland)
+	ExpandBtn.MouseButton1Click:Connect(HideIslandAndShowMain)
+
+	MainFrame.Visible = true
+	MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	MainFrame.GroupTransparency = 1
+	SwitchTabWithAnimation("General")
+	safeTween(MainFrame, TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 })
+
+	UIS.InputBegan:Connect(function(input, gpe)
+		if not gpe and input.KeyCode == Enum.KeyCode.RightShift then
+			if MainFrame.Visible then HideMainAndShowIsland() else HideIslandAndShowMain() end
+		end
+	end)
 end)
+
+if not UISuccess then
+	warn("[BTR-HUB][Link UI] 加载错误: " .. tostring(UIErr))
+end
 
 installNetHooks()
 installRayHooks()
-if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
+if NB then
+	NB.onFire = onFirePacket
+	NB.onHit = onHitPacket
+end
 if CFG.noFog or CFG.mapGlow then applyWorld() end
 
 task.spawn(function()
@@ -2621,26 +4320,167 @@ task.spawn(function()
 	HUB.ammoCount = #ammoCache
 end)
 
-table.insert(HUB.conns, LP.CharacterAdded:Connect(function()
-	Aim.point = nil; Aim.target = nil; Aim.part = nil; Aim.occluded = false; Aim.gunCfg = nil
+local function onRespawn()
+	Aim.point = nil; Aim.target = nil; Aim.part = nil; Aim.occluded = false
+	Aim.gunCfg = nil; Aim.origin = nil; Aim.muzzle = nil; Aim.offsetUsed = nil
+	Aim.offsetKind = nil; Aim.muzzleBlocked = false; Aim.hadOrigin = false
+	Aim.shotOK = false; Aim.shotDist = 0; Aim.lastOffset = nil
+	Aim.packetMuzzle = nil; Aim.packetTarget = nil
 	gunCfgCache = {}
 	staminaGui.bar = nil; staminaGui.vig = nil; staminaGui.last = 0
 	forceRelease()
-end))
+
+	HUB.silentAmmo = nil
+	HUB.silentAcc = 0
+	HUB.silentIdle, HUB.silentIdleAt = 0, 0
+	HUB.silentFallbackReal = false
+	HUB.packetRetryAt = 0
+	HUB.ourCasts = 0
+	HUB.packetOK, HUB.packetTries = 0, 0
+	HUB.silentBypassHits = 0
+	HUB.packetWarned = false
+	HUB.reloadNotified, HUB.reloadAt = false, 0
+	HUB.reloadBusy = false
+	HUB.noDamage, HUB.aimPartCycle = 0, 0
+	HUB.silentWallCap = CFG.silentWallOffset or 4
+	HUB.silentObsCap = CFG.silentObsOffset or 6
+	HUB.maxOffsetOK = CFG.muzzleRadius or 4
+	shotCache.inst, shotCache.ok, shotCache.at = nil, false, 0
+	silentScan.at, silentScan.t, silentScan.part = 0, nil, nil
+	silentFailAt = {}
+	dmgWatch.inst, dmgWatch.hp, dmgWatch.t = nil, nil, 0
+	Aim.muzzleAt = 0
+
+	task.delay(0.8, function()
+		Network = nil
+		NB = nil
+		genv.__BTRHUB_NET = nil
+		installNetHooks()
+		installRayHooks()
+		if NB then NB.onFire = onFirePacket; NB.onHit = onHitPacket end
+		gunCfgCache = {}
+	end)
+end
+
+table.insert(HUB.conns, LP.CharacterAdded:Connect(function() pcall(onRespawn) end))
 
 HUB.cfg = CFG
 HUB.stats = STATS
+HUB.api = {
+	mouseDown = function() mouseDown() end,
+	mouseUp = function() mouseUp() end,
+	forceRelease = function() forceRelease() end,
+	removeAimHook = function() removeAimHook() end,
+	installAimHook = function() installAimHook() end,
+	getGun = getEquippedGun,
+	getGunConfig = getGunConfig,
+	spawnTrail = function(a, b, d) return spawnTrail(a, b, d) end,
+	reinstallRay = function() installRayHooks() end,
+	rayStats = function() return RAY.casts or 0, RAY.hits or 0, RAY.ready == true end,
+	aimInfo = function()
+		return Aim.point, Aim.occluded, Aim.origin, Aim.muzzle,
+			Aim.part and Aim.part.Name, Aim.offsetUsed, Aim.muzzleBlocked
+	end,
+	debugInfo = function()
+		return Aim.shotOK == true, tostring(Aim.offsetKind or "none"), Aim.shotDist or 0,
+			HUB.noDamage or 0, HUB.aimPartCycle or 0, HUB.silentBypassHits or 0,
+			HUB.packetOK or 0, HUB.silentWallCap or 4, HUB.silentObsCap or 6,
+			HUB.silentPacketShots or 0
+	end,
+	pellets = function() return HUB.lastPellets or 1 end,
+	simulateRespawn = function()
+		local ok, err = pcall(onRespawn)
+		return ok, tostring(err)
+	end,
+	silentProbe = function()
+		local gun = getEquippedGun()
+		local cfg = gun and getGunConfig(gun)
+		local sa = gun and ensureSilentAmmo(gun)
+		local pT, pPart, pOrigin, pDist, pKind = silentTarget(320)
+		local m = getRealMuzzle()
+		return tostring(pT and pT.label or "nil"), tostring(pPart and pPart.Name or "nil"),
+			tostring(pKind), pDist or 0, tostring(cfg ~= nil),
+			sa and (sa.clip or -1) or -1,
+			typeof(m) == "Vector3" and "muzzleOK" or "noMuzzle",
+			typeof(pOrigin) == "Vector3" and string.format("%.2f", m and (pOrigin - m).Magnitude or -1) or "-"
+	end,
+	offsetProbe = function(fromPos, targetPos, targetInst)
+		local p, d, k = findSilentOffset(fromPos, targetPos, targetInst)
+		return p, d, k
+	end,
+	classifyPart = function(p)
+		if not p then return "nil" end
+		return isWallPart(p) and "wall" or "obstacle"
+	end,
+	setOrigin = function(p) Aim.forceOrigin = p end,
+	clearOrigin = function() Aim.forceOrigin = nil; Aim.origin = nil end,
+	offsetStats = function() return HUB.maxOffsetOK or 0, HUB.offsetAccepted or 0, HUB.offsetRejected or 0 end,
+	packetStats = function()
+		return HUB.packetOK or 0, HUB.packetTries or 0, HUB.packetStrat or 1,
+			HUB.packetStratFail or 0, HUB.packetStratOK, HUB.packetGaveUp == true
+	end,
+	badDirs = function() return HUB.badDirs or 0 end,
+	packetShots = function() return HUB.silentPacketShots or 0 end,
+	silentMode = function()
+		return (CFG.silentReal == true) or (HUB.silentFallbackReal == true),
+			HUB.packetOK or 0, HUB.packetTries or 0
+	end,
+	silentAmmo = function()
+		local sa = HUB.silentAmmo
+		if not sa then return 0, 0, 0 end
+		return sa.clip, sa.reserve, 0
+	end,
+	reserveOK = function() return HUB.reserveOK == true end,
+	silentStats = function() return HUB.packetShots or 0, HUB.reloadNotified == true, HUB.silentIdle or 0 end,
+	espVisible = function()
+		local total, vis = 0, 0
+		for _, e in pairs(pool) do
+			total = total + 1
+			if e.box.Visible then vis = vis + 1 end
+		end
+		return total, vis
+	end,
+	targets = function() return buildTargets() end,
+	switchTab = function(name) if DynamicContext.SwitchTab then DynamicContext.SwitchTab(name) end end,
+}
+
 HUB.destroy = function()
-	pcall(removeSpeedHook); pcall(forceRelease)
-	if lightBackup then CFG.noFog = false; CFG.mapGlow = false; pcall(applyWorld) end
+	pcall(removeAimHook)
+	pcall(removeSpeedHook)
+	pcall(forceRelease)
+	local ORIG = genv.__BTRHUB_NET_ORIG
+	if ORIG and ORIG.net then
+		pcall(function() ORIG.net.FireServer = ORIG.FireServer end)
+		pcall(function() ORIG.net.InvokeServer = ORIG.InvokeServer end)
+	end
+	genv.__BTRHUB_NET = nil
+	genv.__BTRHUB_NET_ORIG = nil
+	NB = nil
+	if lightBackup then
+		CFG.noFog = false
+		CFG.mapGlow = false
+		pcall(applyWorld)
+	end
 	for _, c in ipairs(HUB.conns) do pcall(function() c:Disconnect() end) end
 	if hasDrawing then
-		for _, e in pairs(pool) do for _, d in pairs(e) do pcall(function() d:Remove() end) end end
+		for _, e in pairs(pool) do
+			for _, d in pairs(e) do pcall(function() d:Remove() end) end
+		end
 		if fovCircle then pcall(function() fovCircle:Remove() end) end
 	end
-	if toastGui and toastGui.Parent then pcall(function() toastGui:Destroy() end) end
-	pcall(function() UiScreenGui:Destroy() end)
+	pcall(function()
+		if DynamicContext.ScreenGui then DynamicContext.ScreenGui:Destroy() end
+	end)
+	pcall(function()
+		for _, cont in ipairs({ CoreGui, LP:FindFirstChildOfClass("PlayerGui") }) do
+			if cont then
+				for _, child in ipairs(cont:GetChildren()) do
+					if child:IsA("ScreenGui") and (string.sub(child.Name, 1, 5) == "__btr" or child.Name == "LinkCcUI") then
+						child:Destroy()
+					end
+				end
+			end
+		end
+	end)
 	genv.__BTRHUB = nil
 end
-
-print("[Link.cc] UI 完整版 已加载 OK   RightShift 显示/隐藏")
